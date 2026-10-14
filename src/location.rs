@@ -192,6 +192,11 @@ impl Location {
             return None;
         };
         let path = normalize(&path);
+        // On a share that stopped answering every look at the path hangs: take it as a
+        // folder, and the folder view reports that the share does not respond.
+        if crate::ops::gvfs::check(&path, std::time::Duration::from_secs(2)).is_err_and(|e| crate::ops::gvfs::not_responding_share(&e).is_some()) {
+            return Some(Location::Dir(path));
+        }
         if path.is_dir() {
             return Some(Location::Dir(path));
         }

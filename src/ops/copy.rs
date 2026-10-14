@@ -186,6 +186,11 @@ fn resolve_conflict(ctx: &JobCtx, src: &Path, src_meta: &fs::Metadata, dst: &Pat
 /// Copies or moves `sources` into `dest_dir`. Returns the top-level destinations written.
 pub fn transfer(ctx: &JobCtx, sources: &[PathBuf], dest_dir: &Path, mode: Mode, opts: &Options) -> io::Result<Vec<PathBuf>> {
     ctx.set_phase(Phase::Preparing);
+    // A share that stopped answering would hang the whole job (and Cancel with it).
+    super::gvfs::check(dest_dir, super::gvfs::TIMEOUT)?;
+    if let Some(dir) = sources.first().and_then(|s| s.parent()) {
+        super::gvfs::check(dir, super::gvfs::TIMEOUT)?;
+    }
     let dest_meta = fs::metadata(dest_dir)?;
     let dest_class = classify(dest_dir);
     let via_gio = is_gvfs_path(dest_dir);
@@ -560,45 +565,106 @@ fn write_file(ctx: &JobCtx, t: &FileTask, dst: &Path, throttle: bool, buf: &mut 
     result
 }
 
-/// Whether `p` lies on a GVfs share exposed by gvfsd-fuse.
-pub fn is_gvfs_path(p: &Path) -> bool {
-    let fuse = gtk::glib::user_runtime_dir().join("gvfs");
-    p.starts_with(&fuse) || p.starts_with(gtk::glib::home_dir().join(".gvfs"))
-}
+pub use super::gvfs::is_gvfs_path;
 
 /// Copies one file onto a GVfs share through GIO, which talks to the share's backend
 /// directly instead of through gvfsd-fuse. Keeps the modification time.
+///
+/// The copy runs on a thread of its own: GIO waits for a backend that stopped answering even
+/// after it was cancelled. A cancelled job then returns after a moment and leaves that thread
+/// to end by itself (it removes the partial file when the share answers again), and a copy
+/// that moves no data for a minute ends with a "not responding" error.
 fn write_file_gio(ctx: &JobCtx, t: &FileTask, dst: &Path, counted: &mut u64) -> io::Result<()> {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::time::{Duration, Instant};
+    const STALL: Duration = Duration::from_secs(60);
+    const GIVE_UP_AFTER_CANCEL: Duration = Duration::from_secs(2);
+    enum Msg {
+        Progress(u64),
+        Done(Result<(), gtk::glib::Error>),
+    }
+
     let (src, out) = (gio::File::for_path(&t.src), gio::File::for_path(dst));
     let cancel = gio::Cancellable::new();
-    let mut seen = 0u64;
-    let mut progress = |done: i64, _total: i64| {
-        let done = done.max(0) as u64;
-        if done > seen {
-            ctx.add_bytes(done - seen);
-            *counted += done - seen;
-            seen = done;
-        }
-        ctx.wait_while_paused();
-        if ctx.is_cancelled() {
-            cancel.cancel();
-        }
-    };
-    let flags = gio::FileCopyFlags::NOFOLLOW_SYMLINKS | gio::FileCopyFlags::TARGET_DEFAULT_PERMS;
-    let result = src.copy(&out, flags, Some(&cancel), Some(&mut progress));
-    // Empty files report no progress; count what is left either way.
-    if result.is_ok() && t.size > seen {
-        ctx.add_bytes(t.size - seen);
-        *counted += t.size - seen;
+    let paused = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    {
+        let (cancel, paused) = (cancel.clone(), paused.clone());
+        std::thread::Builder::new()
+            .name("fb-gio-copy".into())
+            .spawn(move || {
+                let progress_tx = tx.clone();
+                let mut progress = |done: i64, _total: i64| {
+                    let _ = progress_tx.send(Msg::Progress(done.max(0) as u64));
+                    while paused.load(Ordering::Relaxed) && !cancel.is_cancelled() {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                };
+                let flags = gio::FileCopyFlags::NOFOLLOW_SYMLINKS | gio::FileCopyFlags::TARGET_DEFAULT_PERMS;
+                let r = src.copy(&out, flags, Some(&cancel), Some(&mut progress));
+                if let Err(e) = &r {
+                    // Someone else's file stays; a partial copy goes.
+                    if !e.matches(gio::IOErrorEnum::Exists) {
+                        let _ = out.delete(gio::Cancellable::NONE);
+                    }
+                }
+                let _ = tx.send(Msg::Done(r));
+            })
+            .map_err(io::Error::other)?;
     }
-    result.map_err(|e| {
-        if e.matches(gio::IOErrorEnum::Exists) {
-            // Someone else's file: leave it alone.
-            return io::Error::new(io::ErrorKind::AlreadyExists, e.to_string());
+
+    let mut seen = 0u64;
+    let mut last_data = Instant::now();
+    let mut cancelled_at: Option<Instant> = None;
+    loop {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Msg::Progress(done)) => {
+                if done > seen {
+                    ctx.add_bytes(done - seen);
+                    *counted += done - seen;
+                    seen = done;
+                    last_data = Instant::now();
+                }
+            }
+            Ok(Msg::Done(result)) => {
+                // Empty files report no progress; count what is left either way.
+                if result.is_ok() && t.size > seen {
+                    ctx.add_bytes(t.size - seen);
+                    *counted += t.size - seen;
+                }
+                return result.map_err(|e| {
+                    if e.matches(gio::IOErrorEnum::Exists) {
+                        io::Error::new(io::ErrorKind::AlreadyExists, e.to_string())
+                    } else if e.matches(gio::IOErrorEnum::Cancelled) {
+                        fastcopy::cancelled()
+                    } else {
+                        io::Error::other(e.to_string())
+                    }
+                });
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return Err(io::Error::other("the copy ended without a result")),
         }
-        let _ = out.delete(gio::Cancellable::NONE);
-        if e.matches(gio::IOErrorEnum::Cancelled) { fastcopy::cancelled() } else { io::Error::other(e.to_string()) }
-    })
+        let is_paused = ctx.is_paused();
+        paused.store(is_paused, Ordering::Relaxed);
+        if is_paused {
+            last_data = Instant::now();
+        }
+        if ctx.is_cancelled() && cancelled_at.is_none() {
+            cancel.cancel();
+            cancelled_at = Some(Instant::now());
+        }
+        if cancelled_at.is_some_and(|c| c.elapsed() > GIVE_UP_AFTER_CANCEL) {
+            return Err(fastcopy::cancelled());
+        }
+        if cancelled_at.is_none() && last_data.elapsed() > STALL {
+            cancel.cancel();
+            let root = super::gvfs::share_root(dst).unwrap_or_else(|| dst.to_path_buf());
+            return Err(super::gvfs::not_responding(root));
+        }
+    }
 }
 
 /// The name of `p` for messages.

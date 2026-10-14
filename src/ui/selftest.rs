@@ -15,7 +15,8 @@
 //! `expect-shortcuts <a | b | c>`, `expect-shortcut-marked <a>`, `shortcut-click <entry>`,
 //! `shortcut-menu <entry> : <item>` (`Show Hidden Entry/<name>` for the submenu),
 //! `shortcut-drag <entry> > <before entry>`, `shortcut-drop <folder> > <before entry>`,
-//! `window-snapshot <png>`, `quit`. Blank lines and `#` comments are ignored.
+//! `window-snapshot <png>`, `wait-error <text>`, `wait-dialog <text>`,
+//! `dialog-button <dialog text> : <button>`, `quit`. Blank lines and `#` comments are ignored.
 
 use super::app::AppCtx;
 use super::window::Window;
@@ -140,6 +141,16 @@ pub fn start(app: &Rc<AppCtx>, window: &Rc<Window>) {
     });
 }
 
+/// A visible message dialog whose text contains `text`.
+#[allow(deprecated)]
+fn find_dialog(text: &str) -> Option<gtk::MessageDialog> {
+    gtk::Window::list_toplevels()
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::MessageDialog>().ok())
+        .filter(|d| d.is_visible())
+        .find(|d| d.text().is_some_and(|t| t.contains(text)) || d.secondary_text().is_some_and(|t| t.contains(text)))
+}
+
 fn idle(r: &Runner) -> bool {
     !r.app.jobs.is_busy() && r.window.panes().iter().all(|p| !p.is_loading() && !p.refresh_pending())
 }
@@ -218,6 +229,29 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             // shortcut-drop <folder> > <before entry>
             let (dir, before) = arg.split_once('>').ok_or("need <folder> > <before>")?;
             super::sidebar::for_window(&w).ok_or("no sidebar")?.drop_dirs_before(vec![PathBuf::from(dir.trim())], before.trim())?;
+        }
+        "wait-error" => {
+            let want = arg.to_string();
+            wait(r, move |r| Ok(r.window.current_pane().error().is_some_and(|e| e.contains(&want))));
+        }
+        "wait-dialog" => {
+            let want = arg.to_string();
+            wait(r, move |_| Ok(find_dialog(&want).is_some()));
+        }
+        "dialog-button" => {
+            // dialog-button <dialog text> : <button label>
+            let (text, button) = arg.split_once(':').ok_or("need <dialog text> : <button>")?;
+            let d = find_dialog(text.trim()).ok_or("no such dialog")?;
+            fn find(w: &gtk::Widget, label: &str) -> Option<gtk::Button> {
+                if let Some(b) = w.downcast_ref::<gtk::Button>() {
+                    if b.label().is_some_and(|l| l.replace('_', "") == label) {
+                        return Some(b.clone());
+                    }
+                }
+                let c = w.downcast_ref::<gtk::Container>()?;
+                c.children().iter().find_map(|ch| find(ch, label))
+            }
+            find(d.upcast_ref(), button.trim()).ok_or("no such button")?.clicked();
         }
         "window-snapshot" => {
             // The window drawn into a PNG (works on any compositor, unlike `screenshot`).

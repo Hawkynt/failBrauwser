@@ -105,6 +105,12 @@ While you type one, the bar suggests addresses opened before, SMB servers found 
 local network (searched in the background, about two seconds) and, once a server is typed
 with its slash, that server's shares. Home and Drives are in the side panel.
 
+**Shares that stop answering:** before a share is listed or copied to, failBrauwser asks it
+with a timeout, so a server that went away (or a stuck GVfs) never freezes the window. The
+folder then says the share is not responding and offers *Reconnect*, which mounts it again;
+if GVfs itself is stuck, it offers to restart GVfs. Cancel always ends a copy onto a share
+within a few seconds, and a copy that moves no data for a minute stops with an error.
+
 Click empty space in the list to clear the selection (and to leave the typed path).
 The status bar shows how many files and folders the current folder holds and how much space
 it needs, subfolders included.
@@ -255,7 +261,7 @@ strings.
 src/
   lib.rs           everything testable without a display
     fs/            entries, listing, formatting, recursive sizes
-    ops/           copy engine, delete/trash, device classes, jobs
+    ops/           copy engine, delete/trash, device classes, jobs, share timeouts
     archive/       helper client, archive tree, VFS (nested archives, write-back)
     location.rs    folders, paths through archives, the drives page
     remote.rs      network address history, SMB servers on the local network
@@ -335,6 +341,8 @@ such a script (see `src/ui/selftest.rs` for the commands).
   a time (gvfsd-fuse deadlocks under parallel writes); SMB shares cannot hold symbolic
   links, which are reported and left out. Archive contents bound for a share are unpacked
   on local disk first (`~/.cache/failbrauwser/stage`) and then copied over.
+- A failBrauwser closed while a share hangs stays in the background until the share answers
+  again (closing files on it waits for GVfs).
 - Of the formats failBrauwser can write, about 270 keep files exactly. The rest are what
   their format is: old disk formats store upper-case 8.3 names or pad files to whole sectors
   (CP/M, RT-11, LIF, PlayStation memory cards), some formats have no folders, a few need

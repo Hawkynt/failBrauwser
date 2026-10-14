@@ -101,6 +101,9 @@ pub fn settings_changed(w: &Window) {
 /// Can files be created, changed or removed here?
 pub fn location_writable(loc: &Location) -> bool {
     match loc {
+        // Not asked on a network share (this runs on the UI thread, and a share that stopped
+        // answering would hang it); jobs report what the share refuses.
+        Location::Dir(p) if failbrauwser::ops::gvfs::is_gvfs_path(p) => true,
         Location::Dir(p) => {
             use std::os::unix::ffi::OsStrExt;
             let Ok(c) = std::ffi::CString::new(p.as_os_str().as_bytes()) else { return false };

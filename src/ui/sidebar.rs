@@ -275,7 +275,8 @@ impl Sidebar {
             };
             let row = make_row(&place_icon(&sc.kind), &sc.label(), &tip);
             if let Kind::Dir(p) = &sc.kind {
-                if !p.is_dir() {
+                // Never asked on a network share here: one that hangs would hang the window.
+                if !failbrauwser::ops::gvfs::is_gvfs_path(p) && !p.is_dir() {
                     // Gone (or on a drive that is not there now): still listed, dimmed.
                     row.set_opacity(0.5);
                 }
