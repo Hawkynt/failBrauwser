@@ -106,8 +106,10 @@ impl AppCtx {
     }
 }
 
-fn parse_args(args: &[std::ffi::OsString], cwd: Option<PathBuf>) -> (Vec<Location>, bool, bool) {
+/// Locations to open, network addresses to mount first (`smb://…`), `--daemon`, `--quit`.
+fn parse_args(args: &[std::ffi::OsString], cwd: Option<PathBuf>) -> (Vec<Location>, Vec<String>, bool, bool) {
     let mut locations = Vec::new();
+    let mut remote = Vec::new();
     let mut daemon = false;
     let mut quit = false;
     for a in args.iter().skip(1) {
@@ -116,6 +118,7 @@ fn parse_args(args: &[std::ffi::OsString], cwd: Option<PathBuf>) -> (Vec<Locatio
             "--daemon" | "-d" => daemon = true,
             "--quit" | "-q" => quit = true,
             _ if s.starts_with('-') => {}
+            _ if super::util::is_remote_uri(&s) => remote.push(s.to_string()),
             _ => {
                 let text = if s.starts_with('/') || s.contains("://") || s.starts_with('~') || s.starts_with("drives:") {
                     s.to_string()
@@ -135,7 +138,7 @@ fn parse_args(args: &[std::ffi::OsString], cwd: Option<PathBuf>) -> (Vec<Locatio
             }
         }
     }
-    (locations, daemon, quit)
+    (locations, remote, daemon, quit)
 }
 
 pub fn run() -> glib::ExitCode {
@@ -175,7 +178,7 @@ pub fn run() -> glib::ExitCode {
     let c = ctx.clone();
     app.connect_command_line(move |_app, cmdline| {
         let Some(actx) = c.borrow().clone() else { return glib::ExitCode::FAILURE };
-        let (locations, daemon, quit) = parse_args(&cmdline.arguments(), cmdline.cwd());
+        let (locations, remote, daemon, quit) = parse_args(&cmdline.arguments(), cmdline.cwd());
         if quit {
             actx.save_settings_now();
             actx.app.quit();
@@ -189,7 +192,13 @@ pub fn run() -> glib::ExitCode {
             }
             return glib::ExitCode::SUCCESS;
         }
+        // Network addresses are mounted once the window is there (it may ask for a password):
+        // the first one takes the window's only tab when nothing else was asked for.
+        let new_tabs = !locations.is_empty();
         let w = actx.open_window(locations);
+        for (i, uri) in remote.iter().enumerate() {
+            super::shares::open_remote(&w, uri, new_tabs || i > 0);
+        }
         if super::selftest::script_path().is_some() && !super::selftest::active() {
             super::selftest::start(&actx, &w);
         }
@@ -217,7 +226,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("x")).unwrap();
         std::fs::write(dir.path().join("f.txt"), "").unwrap();
         let args: Vec<std::ffi::OsString> = ["failbrauwser", "--daemon", "x", "f.txt"].iter().map(Into::into).collect();
-        let (locs, daemon, quit) = parse_args(&args, Some(dir.path().to_path_buf()));
+        let (locs, _, daemon, quit) = parse_args(&args, Some(dir.path().to_path_buf()));
         assert!(daemon);
         assert!(!quit);
         assert_eq!(locs, vec![Location::Dir(dir.path().join("x")), Location::Dir(dir.path().to_path_buf())]);
