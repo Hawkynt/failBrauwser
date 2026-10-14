@@ -263,7 +263,7 @@ strings.
 src/
   lib.rs           everything testable without a display
     fs/            entries, listing, formatting, recursive sizes
-    ops/           copy engine, delete/trash, device classes, jobs, share timeouts
+    ops/           copy engine, delete/trash, device classes, jobs, share timeouts, temp folders
     archive/       helper client, archive tree, VFS (nested archives, write-back)
     location.rs    folders, paths through archives, the drives page
     remote.rs      network address history, SMB servers on the local network
@@ -342,7 +342,8 @@ such a script (see `src/ui/selftest.rs` for the commands).
   (`mtp://`) are not browsable yet. Copies onto network shares go through GIO one file at
   a time (gvfsd-fuse deadlocks under parallel writes); SMB shares cannot hold symbolic
   links, which are reported and left out. Archive contents bound for a share are unpacked
-  on local disk first (`~/.cache/failbrauwser/stage`) and then copied over.
+  on local disk first (`~/.cache/failbrauwser/stage`) and then copied over. Temporary
+  folders a crash leaves behind are removed at the next start.
 - A failBrauwser closed while a share hangs stays in the background until the share answers
   again (closing files on it waits for GVfs).
 - Of the formats failBrauwser can write, about 270 keep files exactly. The rest are what
