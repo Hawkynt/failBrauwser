@@ -225,8 +225,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("x")).unwrap();
         std::fs::write(dir.path().join("f.txt"), "").unwrap();
-        let args: Vec<std::ffi::OsString> = ["failbrauwser", "--daemon", "x", "f.txt"].iter().map(Into::into).collect();
-        let (locs, _, daemon, quit) = parse_args(&args, Some(dir.path().to_path_buf()));
+        let args: Vec<std::ffi::OsString> = ["failbrauwser", "--daemon", "x", "f.txt", "smb://192.168.1.198/GamingCrypt-Drive"].iter().map(Into::into).collect();
+        let (locs, remote, daemon, quit) = parse_args(&args, Some(dir.path().to_path_buf()));
+        assert_eq!(remote, ["smb://192.168.1.198/GamingCrypt-Drive"]);
         assert!(daemon);
         assert!(!quit);
         assert_eq!(locs, vec![Location::Dir(dir.path().join("x")), Location::Dir(dir.path().to_path_buf())]);
