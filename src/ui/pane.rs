@@ -1072,13 +1072,13 @@ impl Pane {
                     TreeViewColumnExt::pack_start(&col, &text, true);
                     TreeViewColumnExt::add_attribute(&col, &text, "text", model::COL_NAME as i32);
                 }
-                "size" | "dirsize" => {
-                    col.set_title(if id == "size" { "Size" } else { "Total Size" });
+                "size" => {
+                    // Folders show their total, worked out in the background (see dirsize.rs).
+                    col.set_title("Size");
                     text.set_xalign(1.0);
                     col.set_alignment(1.0);
                     TreeViewColumnExt::pack_start(&col, &text, true);
-                    let src = if id == "size" { model::COL_SIZE_TEXT } else { model::COL_DIRSIZE_TEXT };
-                    TreeViewColumnExt::add_attribute(&col, &text, "text", src as i32);
+                    TreeViewColumnExt::add_attribute(&col, &text, "text", model::COL_DIRSIZE_TEXT as i32);
                     col.set_min_width(80);
                 }
                 "type" => {

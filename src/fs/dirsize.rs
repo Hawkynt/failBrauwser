@@ -3,7 +3,8 @@
 //! Symbolic links are never followed (a link to `/` inside a folder would otherwise count
 //! the whole disk, and link loops would never end); a link counts as an entry of 0 bytes.
 //! Files with several hard links count once. Other filesystems mounted below the folder
-//! are not entered, like `du -x`.
+//! are not entered, like `du -x`. A folder met a second time (a bind mount of a folder
+//! inside itself has the same device) is not entered again, so no walk goes round in circles.
 
 use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
@@ -38,6 +39,7 @@ pub fn dir_size(root: &Path, cancel: &AtomicBool, mut progress: impl FnMut(&DirS
     }
     let dev = meta.dev();
     let mut seen_links: HashSet<(u64, u64)> = HashSet::new();
+    let mut seen_dirs: HashSet<(u64, u64)> = HashSet::from([(meta.dev(), meta.ino())]);
     let mut stack = vec![root.to_path_buf()];
     let mut last_report = Instant::now();
     while let Some(dir) = stack.pop() {
@@ -63,7 +65,7 @@ pub fn dir_size(root: &Path, cancel: &AtomicBool, mut progress: impl FnMut(&DirS
             if ft.is_dir() {
                 if m.dev() != dev {
                     total.skipped_mounts = true;
-                } else {
+                } else if seen_dirs.insert((m.dev(), m.ino())) {
                     stack.push(entry.path());
                 }
                 continue;
@@ -116,6 +118,38 @@ mod tests {
         let s = size(d.path());
         assert_eq!(s.bytes, 10, "links must not add their targets");
         assert_eq!(s.files, 3); // f and the two links themselves
+    }
+
+    #[test]
+    fn a_folder_bind_mounted_inside_itself_counts_once() {
+        // Mounting needs a private user and mount namespace: the test runs itself again
+        // inside one (`unshare -rm`) and does the work there.
+        if std::env::var_os("FB_DIRSIZE_IN_NS").is_none() {
+            let me = std::env::current_exe().unwrap();
+            let out = std::process::Command::new("unshare")
+                .args(["-rm", "--"])
+                .arg(me)
+                .args(["--exact", "fs::dirsize::tests::a_folder_bind_mounted_inside_itself_counts_once", "--nocapture"])
+                .env("FB_DIRSIZE_IN_NS", "1")
+                .output();
+            match out {
+                Ok(o) if o.status.success() => assert!(String::from_utf8_lossy(&o.stdout).contains("1 passed"), "{o:?}"),
+                Ok(o) if String::from_utf8_lossy(&o.stderr).contains("unshare") => eprintln!("no user namespaces, skipping: {o:?}"),
+                Ok(o) => panic!("{}\n{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)),
+                Err(e) => eprintln!("unshare not available, skipping: {e}"),
+            }
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join("sub/loop")).unwrap();
+        fs::write(d.path().join("sub/f"), vec![0u8; 10]).unwrap();
+        let c = |p: &Path| std::ffi::CString::new(p.to_str().unwrap()).unwrap();
+        let (src, dst) = (c(d.path()), c(&d.path().join("sub/loop")));
+        let r = unsafe { libc::mount(src.as_ptr(), dst.as_ptr(), std::ptr::null(), libc::MS_BIND, std::ptr::null()) };
+        assert_eq!(r, 0, "bind mount failed: {}", std::io::Error::last_os_error());
+        assert!(d.path().join("sub/loop/sub/f").exists(), "the loop is there");
+        let s = size(d.path());
+        assert_eq!((s.bytes, s.files), (10, 1));
     }
 
     #[test]

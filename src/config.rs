@@ -42,7 +42,7 @@ pub const LIST_ZOOM: &[i32] = &[16, 24, 32, 48, 64];
 pub const ICON_ZOOM: &[i32] = &[32, 48, 64, 96, 128, 192, 256];
 
 /// Columns of the detailed list, in display order. `Name` is always shown.
-pub const COLUMN_IDS: &[&str] = &["name", "size", "dirsize", "type", "modified", "permissions", "owner", "group"];
+pub const COLUMN_IDS: &[&str] = &["name", "size", "type", "modified", "permissions", "owner", "group"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -148,21 +148,24 @@ impl Settings {
                 s.tree_root = t;
             }
         }
+        // The former "Total Size" column ("dirsize") is what the Size column shows now.
+        let renamed = |c: &str| if c == "dirsize" { "size".to_string() } else { c.to_string() };
         if let Ok(v) = kf.string(GROUP, "sort_column") {
+            let v = renamed(&v);
             if COLUMN_IDS.contains(&v.as_str()) {
-                s.sort_column = v.to_string();
+                s.sort_column = v;
             }
         }
         if let Ok(list) = kf.string_list(GROUP, "columns") {
-            let mut cols: Vec<String> = list
-                .iter()
-                .map(|c| c.to_string())
-                .filter(|c| COLUMN_IDS.contains(&c.as_str()))
-                .collect();
+            let mut cols: Vec<String> = Vec::new();
+            for c in list.iter().map(|c| renamed(c)) {
+                if COLUMN_IDS.contains(&c.as_str()) && !cols.contains(&c) {
+                    cols.push(c);
+                }
+            }
             if !cols.iter().any(|c| c == "name") {
                 cols.insert(0, "name".into());
             }
-            cols.dedup();
             s.columns = cols;
         }
         s
@@ -263,7 +266,7 @@ mod tests {
         s.show_hidden = true;
         s.view_mode = ViewMode::Icons;
         s.tree_root = TreeRoot::Current;
-        s.set_column_visible("dirsize", true);
+        s.set_column_visible("permissions", true);
         s.set_column_visible("type", false);
         s.window_width = 1234;
         s.zoom_icons = 4;
@@ -308,8 +311,20 @@ mod tests {
     fn column_order_is_canonical_and_name_stays() {
         let mut s = Settings::default();
         s.set_column_visible("owner", true);
-        s.set_column_visible("dirsize", true);
+        s.set_column_visible("permissions", true);
         s.set_column_visible("name", false);
-        assert_eq!(s.columns, vec!["name", "size", "dirsize", "type", "modified", "owner"]);
+        assert_eq!(s.columns, vec!["name", "size", "type", "modified", "permissions", "owner"]);
+    }
+
+    #[test]
+    fn total_size_column_becomes_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("old.ini");
+        std::fs::write(&p, "[General]\ncolumns=name;size;dirsize;type;\nsort_column=dirsize\n").unwrap();
+        let s = Settings::load_from(&p);
+        assert_eq!(s.columns, vec!["name", "size", "type"]);
+        assert_eq!(s.sort_column, "size");
+        std::fs::write(&p, "[General]\ncolumns=name;dirsize;modified;\n").unwrap();
+        assert_eq!(Settings::load_from(&p).columns, vec!["name", "size", "modified"]);
     }
 }

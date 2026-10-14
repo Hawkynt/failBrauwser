@@ -2,7 +2,7 @@
 
 A fast, native GTK 3 file manager in the spirit of Thunar — that opens archives like folders.
 
-![failBrauwser showing a home folder with the Total Size column, shortcuts and folder tree](docs/screenshots/main.png)
+![failBrauwser showing a home folder with folder sizes, shortcuts and folder tree](docs/screenshots/main.png)
 
 - **Fast copies.** Reflinks where the filesystem can, in-kernel `copy_file_range` otherwise,
   and many small files copied in parallel. Writes to USB sticks and spinning disks are paced,
@@ -27,7 +27,7 @@ A fast, native GTK 3 file manager in the spirit of Thunar — that opens archive
 - **Copy jobs you control:** pause and resume, copies to the same drive wait in a queue instead
   of fighting each other, and optional read-back verification.
 - **Custom actions** from Thunar (`uca.xml`) in the right-click menu, and *Open Terminal Here*.
-- **More details.** A *Total Size* column with recursive folder sizes (symlink-safe), a
+- **More details.** Folder sizes in the *Size* column (recursive, symlink-safe), a
   configurable column set, shortcuts and a folder tree rooted at the current folder, your home
   or `/`.
 
@@ -121,10 +121,13 @@ Drag and drop moves within a filesystem and copies across filesystems; hold
 <kbd>Shift</kbd> to move, <kbd>Ctrl</kbd> to copy, both to link. Middle-click a folder to open it
 in a new tab.
 
-**Columns:** *View → Columns* or right-click a column header. *Total Size* adds up folders
-recursively on background threads. Symbolic links are never followed (a link to `/` would
-count the whole disk, link loops would never end), hard-linked files count once, and mounted
-filesystems below a folder are not entered.
+**Columns:** *View → Columns* or right-click a column header. For folders, *Size* shows
+everything inside, added up on background threads (“…” until known, “≥” while counting);
+sorting by size sorts folders by that total. Symbolic links are never followed (a link to `/`
+would count the whole disk, link loops would never end), a folder met twice (a bind mount of a
+folder inside itself) is counted once, hard-linked files count once, and mounted filesystems
+below a folder are not entered. Folders on network shares are measured separately, so a slow
+share does not hold up the others.
 
 **Folder tree:** *View → Folder Tree → Tree Starts At* the current folder, your home folder or
 `/`.

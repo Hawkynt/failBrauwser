@@ -1,11 +1,9 @@
-# The Total Size column adds up folders recursively without following symlinks.
-action win.column-dirsize
+# The Size column adds up folders recursively without following symlinks.
 open $T/root
-wait-cell dirsize photos = 3.5 kB
-wait-cell dirsize with-link = 10 bytes
-wait-cell dirsize note.txt = 5 bytes
-wait-cell size photos = 
+wait-cell size photos = 3.5 kB
+wait-cell size with-link = 10 bytes
+wait-cell size note.txt = 5 bytes
 # Switching the column off and on again recomputes.
-action win.column-dirsize
-action win.column-dirsize
-wait-cell dirsize photos = 3.5 kB
+action win.column-size
+action win.column-size
+wait-cell size photos = 3.5 kB

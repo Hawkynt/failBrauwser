@@ -81,7 +81,7 @@ fn side_panel_entries() {
 }
 
 #[test]
-fn total_size_column() {
+fn size_column_adds_up_folders() {
     run("dirsize.fbt", |t| {
         let root = t.join("root");
         std::fs::create_dir_all(root.join("photos/2024/summer")).unwrap();
@@ -92,6 +92,8 @@ fn total_size_column() {
         std::fs::write(t.join("big"), vec![0u8; 100_000]).unwrap();
         // A link pointing at a big file outside: its target must not be counted.
         std::os::unix::fs::symlink(t.join("big"), root.join("with-link/big-link")).unwrap();
+        // A link back up the tree: following it would go round in circles.
+        std::os::unix::fs::symlink(&root, root.join("with-link/loop")).unwrap();
         std::fs::write(root.join("note.txt"), "hello").unwrap();
     });
 }

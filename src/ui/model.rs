@@ -253,12 +253,8 @@ pub fn install_sorting(store: &gtk::ListStore, folders_first: std::rc::Rc<std::c
                 natural_cmp(&sa, &sb)
             };
             let ord = match id {
+                // Files by size, folders by their total (not known yet: -1, first).
                 "size" => {
-                    let x: u64 = m.value(a, COL_SIZE as i32).get().unwrap_or_default();
-                    let y: u64 = m.value(b, COL_SIZE as i32).get().unwrap_or_default();
-                    x.cmp(&y)
-                }
-                "dirsize" => {
                     let x: i64 = m.value(a, COL_DIRSIZE as i32).get().unwrap_or_default();
                     let y: i64 = m.value(b, COL_DIRSIZE as i32).get().unwrap_or_default();
                     x.cmp(&y)

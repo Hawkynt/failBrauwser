@@ -74,8 +74,8 @@ shoot() { # name, script lines…
 }
 
 (cd "$ROOT" && cargo build --release)
-shoot main "action win.tree-root home" "action win.column-dirsize" "open $DEMO" "select Pictures" "sleep 1500" "screenshot $OUT/main.png"
-shoot archive "action win.column-dirsize" "open $DEMO/Downloads/photos-2024.zip/2024" "select summer" "sleep 1000" "screenshot $OUT/archive.png"
+shoot main "action win.tree-root home" "open $DEMO" "select Pictures" "sleep 1500" "screenshot $OUT/main.png"
+shoot archive "open $DEMO/Downloads/photos-2024.zip/2024" "select summer" "sleep 1000" "screenshot $OUT/archive.png"
 shoot nested "open $DEMO/Downloads/backup.zip/server-backup.tar.gz/server" "select config.toml" "sleep 800" "screenshot $OUT/nested-archive.png"
 shoot drives "action win.drives" "wait-drive File System" "sleep 800" "screenshot $OUT/drives.png"
 shoot icons "action win.view-mode icons" "action win.zoom-in" "open $DEMO/Pictures/Vacation" "wait-thumbnails 12" "sleep 800" "screenshot $OUT/icons.png"
