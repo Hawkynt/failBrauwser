@@ -155,3 +155,46 @@ pub fn free_space_cached(dir: &Path, read: fn(&Path) -> Option<u64>) -> Option<u
     cached
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn on_share(rest: &str) -> PathBuf {
+        fuse_root().join("smb-share:server=192.168.1.198,share=gamingcrypt-drive").join(rest)
+    }
+
+    #[test]
+    fn share_paths_and_names() {
+        let p = on_share("Windows Games/GTA4");
+        assert!(is_gvfs_path(&p));
+        let root = share_root(&p).unwrap();
+        assert_eq!(root, on_share(""));
+        assert_eq!(share_name(&root), "gamingcrypt-drive on 192.168.1.198");
+        assert_eq!(share_root(Path::new("/home/me")), None);
+        assert!(check(Path::new("/definitely/not/a/share"), Duration::from_millis(1)).is_ok());
+    }
+
+    #[test]
+    fn a_hanging_share_times_out_and_later_checks_fail_fast() {
+        let p = on_share("hang-test");
+        let (release, wait) = mpsc::channel::<()>();
+        let e = check_with(&p, Duration::from_millis(100), move |_| {
+            let _ = wait.recv();
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(not_responding_share(&e), share_root(&p));
+        assert_eq!(e.to_string(), "“gamingcrypt-drive on 192.168.1.198” is not responding.");
+        // The first probe is still stuck: no second thread, an answer at once.
+        let t = Instant::now();
+        assert!(check_with(&p, Duration::from_secs(5), |_| Ok(())).is_err());
+        assert!(t.elapsed() < Duration::from_secs(1));
+        // After a reconnect the share is asked again.
+        forget(&share_root(&p).unwrap());
+        assert!(check_with(&p, Duration::from_secs(5), |_| Ok(())).is_ok());
+        release.send(()).unwrap();
+        // Errors of the file system come through as they are.
+        let e = check_with(&p, Duration::from_secs(5), |_| Err(io::Error::from(io::ErrorKind::NotFound))).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::NotFound);
+    }
+}

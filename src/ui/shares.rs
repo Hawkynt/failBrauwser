@@ -174,3 +174,14 @@ fn offer_restart(w: &Rc<Window>, root: &Path) {
     d.show();
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smb_share_addresses_from_folder_names() {
+        let root = gvfs::fuse_root().join("smb-share:server=192.168.1.198,share=gamingcrypt-drive");
+        assert_eq!(share_uri(&root).as_deref(), Some("smb://192.168.1.198/gamingcrypt-drive"));
+        assert_eq!(share_uri(&gvfs::fuse_root().join("sftp:host=x")), None);
+    }
+}
