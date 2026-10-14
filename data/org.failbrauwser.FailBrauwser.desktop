@@ -10,7 +10,7 @@ Terminal=false
 StartupNotify=true
 Categories=System;FileTools;FileManager;GTK;
 Keywords=folder;manager;explore;disk;filesystem;archive;zip;
-MimeType=inode/directory;application/zip;application/x-7z-compressed;application/x-tar;application/x-compressed-tar;application/x-bzip-compressed-tar;application/x-xz-compressed-tar;application/x-zstd-compressed-tar;application/vnd.rar;application/x-rar;application/x-cpio;application/vnd.debian.binary-package;application/x-rpm;application/vnd.ms-cab-compressed;application/x-lha;application/x-arj;application/x-cbz;application/x-cbr;application/x-cd-image;application/x-iso9660-image;
+MimeType=inode/directory;x-scheme-handler/smb;application/zip;application/x-7z-compressed;application/x-tar;application/x-compressed-tar;application/x-bzip-compressed-tar;application/x-xz-compressed-tar;application/x-zstd-compressed-tar;application/vnd.rar;application/x-rar;application/x-cpio;application/vnd.debian.binary-package;application/x-rpm;application/vnd.ms-cab-compressed;application/x-lha;application/x-arj;application/x-cbz;application/x-cbr;application/x-cd-image;application/x-iso9660-image;
 Actions=new-window;
 
 [Desktop Action new-window]

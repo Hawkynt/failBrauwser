@@ -35,6 +35,10 @@ pub fn open_uri(w: &Window, uri: &str) {
         w.navigate(Location::Trash);
         return;
     }
+    if util::is_remote_uri(uri) {
+        super::shares::open_remote(&w.me(), uri, false);
+        return;
+    }
     util::show_error(&w.win, "Cannot open location", &format!("“{uri}” is not a local folder."));
 }
 

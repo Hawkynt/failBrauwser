@@ -104,6 +104,8 @@ through GVfs, asking for a password if needed, and opens as its local GVfs folde
 While you type one, the bar suggests addresses opened before, SMB servers found on the
 local network (searched in the background, about two seconds) and, once a server is typed
 with its slash, that server's shares. Home and Drives are in the side panel.
+Network addresses also open from the command line (`failbrauwser smb://nas/share`) and from
+other applications.
 
 **Shares that stop answering:** before a share is listed or copied to, failBrauwser asks it
 with a timeout, so a server that went away (or a stuck GVfs) never freezes the window. The
