@@ -3,7 +3,8 @@
 //! Symbolic links are never followed (a link to `/` inside a folder would otherwise count
 //! the whole disk, and link loops would never end); a link counts as an entry of 0 bytes.
 //! Files with several hard links count once. Other filesystems mounted below the folder
-//! are not entered, like `du -x`.
+//! are not entered, like `du -x`. A folder met a second time (a bind mount of a folder
+//! inside itself has the same device) is not entered again, so no walk goes round in circles.
 
 use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
@@ -38,6 +39,7 @@ pub fn dir_size(root: &Path, cancel: &AtomicBool, mut progress: impl FnMut(&DirS
     }
     let dev = meta.dev();
     let mut seen_links: HashSet<(u64, u64)> = HashSet::new();
+    let mut seen_dirs: HashSet<(u64, u64)> = HashSet::from([(meta.dev(), meta.ino())]);
     let mut stack = vec![root.to_path_buf()];
     let mut last_report = Instant::now();
     while let Some(dir) = stack.pop() {
@@ -63,7 +65,7 @@ pub fn dir_size(root: &Path, cancel: &AtomicBool, mut progress: impl FnMut(&DirS
             if ft.is_dir() {
                 if m.dev() != dev {
                     total.skipped_mounts = true;
-                } else {
+                } else if seen_dirs.insert((m.dev(), m.ino())) {
                     stack.push(entry.path());
                 }
                 continue;
