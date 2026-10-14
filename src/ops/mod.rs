@@ -8,3 +8,4 @@ pub mod fastcopy;
 pub mod gvfs;
 pub mod job;
 pub mod names;
+pub mod staging;

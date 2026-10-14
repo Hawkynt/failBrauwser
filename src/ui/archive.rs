@@ -14,7 +14,7 @@ use failbrauwser::archive::{ArchiveError, formats, is_browsable_name};
 use failbrauwser::location::{ArchiveLoc, Location};
 use failbrauwser::ops::copy::{self, Mode};
 use failbrauwser::ops::job::{Answer, JobCtx, Question};
-use failbrauwser::ops::{delete, names};
+use failbrauwser::ops::{delete, names, staging};
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use std::cell::RefCell;
@@ -344,6 +344,8 @@ fn transfer_work(ctx: &JobCtx, sources: Vec<ClipSource>, dest: &Location, mode: 
         }
         _ => v.scratch_dir("stage").map_err(io)?,
     };
+    // Recorded, so a crash in between does not leave it behind for good.
+    staging::created(&staging);
     let result = (|| {
         let mut local: Vec<PathBuf> = Vec::new();
         let mut from_archives: Vec<(ArchiveLoc, String)> = Vec::new();
@@ -394,7 +396,7 @@ fn transfer_work(ctx: &JobCtx, sources: Vec<ClipSource>, dest: &Location, mode: 
         }
         Ok(created)
     })();
-    let _ = std::fs::remove_dir_all(&staging);
+    staging::remove(&staging);
     result
 }
 
@@ -464,10 +466,11 @@ pub fn create(w: &Window, loc: &Location, name: &str, folder: bool) {
                 v.mkdir(&a2, &path).map_err(io)?;
             } else {
                 let dir = v.scratch_dir("new").map_err(io)?;
+                staging::created(&dir);
                 let file = dir.join("empty");
                 std::fs::write(&file, b"")?;
                 let r = v.add(&a2, &[(file, path)]).map_err(io);
-                let _ = std::fs::remove_dir_all(&dir);
+                staging::remove(&dir);
                 r?;
             }
             Ok(Vec::new())
@@ -505,7 +508,9 @@ pub fn fill_sizes(pane: &Rc<Pane>) {
 fn local_staging() -> std::io::Result<PathBuf> {
     let base = glib::user_cache_dir().join("failbrauwser").join("stage");
     std::fs::create_dir_all(&base)?;
-    Ok(tempfile::Builder::new().prefix("fb-").tempdir_in(&base)?.keep())
+    let dir = tempfile::Builder::new().prefix("fb-").tempdir_in(&base)?.keep();
+    staging::created(&dir);
+    Ok(dir)
 }
 
 /// Archive files among the selection (local files only).
@@ -541,7 +546,7 @@ fn extract_archives(w: &Window, archives: Vec<PathBuf>, dest: PathBuf) {
                     let result = tracked(ctx, || Vfs::global().extract_all(&loc, &staging))
                         .map_err(io_at(&loc))
                         .and_then(|got| copy::transfer(ctx, &[got], &dest, Mode::Move, &copy::Options::default()));
-                    let _ = std::fs::remove_dir_all(&staging);
+                    staging::remove(&staging);
                     made.extend(result?);
                 } else {
                     made.push(tracked(ctx, || Vfs::global().extract_all(&loc, &dest)).map_err(io_at(&loc))?);
