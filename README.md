@@ -148,6 +148,10 @@ otherwise failBrauwser makes picture thumbnails itself. Only rows you can see ar
 thumbnailed. Zooming the icon view past 128 px fetches the large (256 px) thumbnails, so
 pictures fill their place instead of sitting small in a wide border.
 
+**Default applications:** *Properties* of a file shows which application opens files of its
+type; pick another one there (or *Other application…*) to make it the default for all of
+them, desktop-wide (`~/.config/mimeapps.list`).
+
 **Zoom:** <kbd>Ctrl</kbd>+scroll, <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>-</kbd> or
 *View → Zoom*; the list and the icon view keep their own size.
 
