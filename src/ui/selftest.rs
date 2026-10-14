@@ -482,8 +482,7 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             let (name, want) = rest.split_once(" =").ok_or("usage: wait-cell <column> <name> = <text>")?;
             let want = want.trim();
             let column = match col {
-                "size" => super::model::COL_SIZE_TEXT,
-                "dirsize" => super::model::COL_DIRSIZE_TEXT,
+                "size" => super::model::COL_DIRSIZE_TEXT,
                 "type" => super::model::COL_TYPE,
                 "modified" => super::model::COL_MTIME_TEXT,
                 _ => return Err("unknown column".into()),

@@ -241,7 +241,6 @@ pub fn columns_menu() -> gio::Menu {
     let m = gio::Menu::new();
     for (id, label) in [
         ("size", "Size"),
-        ("dirsize", "Total Size (recursive)"),
         ("type", "Type"),
         ("modified", "Date Modified"),
         ("permissions", "Permissions"),
