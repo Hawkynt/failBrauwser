@@ -565,17 +565,25 @@ impl Window {
 
     /// Zooms the current view mode by `step` levels (0 = normal size), in every window.
     pub fn zoom(&self, step: i32) {
-        {
+        let flavor_changed = {
             let mut s = self.app.settings.borrow_mut();
+            let before = failbrauwser::thumbs::Flavor::for_size(s.icon_size());
             if step == 0 {
                 s.zoom_reset();
             } else if !s.zoom(step) {
                 return;
             }
-        }
+            failbrauwser::thumbs::Flavor::for_size(s.icon_size()) != before
+        };
         self.app.save_settings_soon();
         self.app.for_each_window(|w| {
             for p in w.panes() {
+                // Thumbnails of the other size (128 or 256 px) would be drawn too small, with
+                // a wide empty border: fetch them again at the new size.
+                if flavor_changed {
+                    p.drop_thumbnails();
+                    super::thumbnails::reset(&p);
+                }
                 p.apply_zoom();
                 super::extensions::pane_scrolled(w, &p);
             }

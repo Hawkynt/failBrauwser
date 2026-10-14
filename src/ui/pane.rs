@@ -972,6 +972,16 @@ impl Pane {
         }
     }
 
+    /// Takes all thumbnails away (they are asked for again at the current size).
+    pub fn drop_thumbnails(&self) {
+        let st = self.st.borrow();
+        for name in self.thumbs.borrow_mut().drain(..) {
+            if let Some((_, it)) = st.by_name.get(&name).and_then(|k| st.rows.get(k)) {
+                self.store.set_value(it, model::COL_THUMB, &None::<gtk::gdk_pixbuf::Pixbuf>.to_value());
+            }
+        }
+    }
+
     /// Rows showing a thumbnail right now (tests).
     pub fn thumbnail_count(&self) -> usize {
         let mut n = 0;

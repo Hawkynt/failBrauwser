@@ -72,15 +72,16 @@ fn is_current(thumb: &Pixbuf, uri: &str, mtime: i64) -> bool {
     uri_ok && mtime_ok
 }
 
-/// A current thumbnail from the cache: the wanted flavor, else the other one.
-pub fn load(root: &Path, path: &Path, mtime: i64, flavor: Flavor) -> Option<Pixbuf> {
+/// A current thumbnail from the cache: the wanted flavor, else the other one. Also says
+/// which flavor it is (a smaller one than wanted looks blurry or lost in its space).
+pub fn load(root: &Path, path: &Path, mtime: i64, flavor: Flavor) -> Option<(Pixbuf, Flavor)> {
     let uri = file_uri(path)?;
     let order = if flavor == Flavor::Large { [Flavor::Large, Flavor::Normal] } else { [Flavor::Normal, Flavor::Large] };
     for f in order {
         let p = thumb_path(root, &uri, f);
         if let Ok(pb) = Pixbuf::from_file(&p) {
             if is_current(&pb, &uri, mtime) {
-                return Some(pb);
+                return Some((pb, f));
             }
         }
     }
@@ -197,10 +198,14 @@ mod tests {
         let stored = thumb_path(&root, &uri, Flavor::Normal);
         assert!(stored.is_file());
         assert_eq!(std::fs::metadata(&stored).unwrap().mode() & 0o777, 0o600);
-        let back = load(&root, &img, m, Flavor::Normal).unwrap();
+        let (back, f) = load(&root, &img, m, Flavor::Normal).unwrap();
         assert_eq!(back.option("tEXt::Thumb::URI").as_deref(), Some(uri.as_str()));
-        // A large request can make do with the normal one until a large exists.
-        assert!(load(&root, &img, m, Flavor::Large).is_some());
+        assert_eq!(f, Flavor::Normal);
+        // A large request can make do with the normal one until a large exists, and says so.
+        assert_eq!(load(&root, &img, m, Flavor::Large).map(|(_, f)| f), Some(Flavor::Normal));
+        let big = generate(&root, &img, m, Flavor::Large).unwrap();
+        assert_eq!((big.width(), big.height()), (256, 128));
+        assert_eq!(load(&root, &img, m, Flavor::Large).map(|(_, f)| f), Some(Flavor::Large));
         // A changed file makes the thumbnail stale.
         assert!(load(&root, &img, m + 1, Flavor::Normal).is_none());
     }
