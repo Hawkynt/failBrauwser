@@ -5,5 +5,6 @@ pub mod copy;
 pub mod delete;
 pub mod device;
 pub mod fastcopy;
+pub mod gvfs;
 pub mod job;
 pub mod names;
