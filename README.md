@@ -145,7 +145,8 @@ cache (`~/.cache/thumbnails`), so thumbnails made by Thunar, Nautilus or Dolphin
 and the ones it makes are theirs too. Missing ones are requested from Tumbler (the thumbnailer
 service of Xfce) when it is installed, which covers videos, PDFs and office documents;
 otherwise failBrauwser makes picture thumbnails itself. Only rows you can see are
-thumbnailed.
+thumbnailed. Zooming the icon view past 128 px fetches the large (256 px) thumbnails, so
+pictures fill their place instead of sitting small in a wide border.
 
 **Zoom:** <kbd>Ctrl</kbd>+scroll, <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>-</kbd> or
 *View → Zoom*; the list and the icon view keep their own size.

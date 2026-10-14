@@ -33,7 +33,8 @@ struct Request {
 }
 
 enum Outcome {
-    Found(Pixbuf),
+    /// With "smaller than wanted" (a 128 px thumbnail where 256 px are shown).
+    Found(Pixbuf, bool),
     /// Not in the cache: the thumbnailer service should make it.
     Missing,
     Failed,
@@ -67,7 +68,8 @@ impl Raw {
     }
 }
 
-type Reply = (u64, bool, Result<Raw, bool>); // (id, may generate, Ok(thumb) | Err(missing?))
+/// (id, may generate, Ok((thumb, smaller than wanted)) | Err(missing?))
+type Reply = (u64, bool, Result<(Raw, bool), bool>);
 
 struct Service {
     jobs: mpsc::Sender<Job>,
@@ -105,12 +107,16 @@ fn service() -> Rc<Service> {
                     loop {
                         let job = { jrx.lock().unwrap().recv() };
                         let Ok(j) = job else { return };
+                        let can_make = j.generate && j.mime.starts_with("image/");
                         let result = match thumbs::load(&root, &j.path, j.mtime, j.flavor) {
-                            Some(pb) => Ok(Raw::from(&pb)),
-                            None if thumbs::failed_before(&root, &j.path, j.mtime) => Err(false),
-                            None if j.generate && j.mime.starts_with("image/") => {
-                                thumbs::generate(&root, &j.path, j.mtime, j.flavor).map(|pb| Raw::from(&pb)).ok_or(false)
+                            // Only the small one while a large one is wanted: make that.
+                            Some((small, f)) if f != j.flavor && f == Flavor::Normal && can_make => {
+                                let pb = thumbs::generate(&root, &j.path, j.mtime, j.flavor).unwrap_or(small);
+                                Ok((Raw::from(&pb), false))
                             }
+                            Some((pb, f)) => Ok((Raw::from(&pb), f != j.flavor && f == Flavor::Normal)),
+                            None if thumbs::failed_before(&root, &j.path, j.mtime) => Err(false),
+                            None if can_make => thumbs::generate(&root, &j.path, j.mtime, j.flavor).map(|pb| (Raw::from(&pb), false)).ok_or(false),
                             None => Err(true),
                         };
                         if rtx.send_blocking((j.id, j.generate, result)).is_err() {
@@ -137,7 +143,7 @@ fn service() -> Rc<Service> {
                 let Some(svc) = weak.upgrade() else { return };
                 let Some((req, _)) = svc.pending.borrow_mut().remove(&id) else { continue };
                 let outcome = match result {
-                    Ok(raw) => Outcome::Found(raw.into_pixbuf()),
+                    Ok((raw, smaller)) => Outcome::Found(raw.into_pixbuf(), smaller),
                     Err(true) => Outcome::Missing,
                     Err(false) => Outcome::Failed,
                 };
@@ -160,9 +166,17 @@ impl Service {
 
     fn handle(self: &Rc<Self>, req: Request, generated: bool, outcome: Outcome) {
         match outcome {
-            Outcome::Found(pb) => {
-                debug(|| format!("found {:?}", req.name));
-                deliver(&req, pb)
+            Outcome::Found(pb, smaller) => {
+                debug(|| format!("found {:?}{}", req.name, if smaller { " (smaller than wanted)" } else { "" }));
+                deliver(&req, pb);
+                // Shown for now; the wanted size is asked for once (never again for an answer
+                // of the service itself: no request loops).
+                if smaller && !generated && !req.from_service {
+                    match self.tumbler_ok.get() {
+                        Some(false) => self.submit(req, true),
+                        _ => self.queue_tumbler(req),
+                    }
+                }
             }
             Outcome::Failed => {}
             Outcome::Missing if generated => {}
