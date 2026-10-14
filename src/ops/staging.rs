@@ -106,3 +106,39 @@ fn clean_stale_in(reg: &Path, alive: impl Fn(u32) -> bool) -> Vec<PathBuf> {
     removed
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn leftovers_of_dead_processes_go_the_rest_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = dir.path().join("temp-folders");
+        let mk = |rel: &str| {
+            let p = dir.path().join(rel);
+            std::fs::create_dir_all(p.join("inner")).unwrap();
+            std::fs::write(p.join("inner/f"), "x").unwrap();
+            p
+        };
+        let dead_extract = mk("dest/.fb-extract-abc");
+        let dead_stage = mk("cache/failbrauwser/stage/fb-123");
+        let live = mk("dest/.fb-extract-live");
+        let not_ours = mk("dest/photos");
+        track_in(&reg, &dead_extract, 111).unwrap();
+        track_in(&reg, &dead_stage, 111).unwrap();
+        track_in(&reg, &live, 222).unwrap();
+        track_in(&reg, &not_ours, 111).unwrap();
+        track_in(&reg, &dir.path().join("dest/.fb-extract-gone"), 111).unwrap();
+
+        let removed = clean_stale_in(&reg, |pid| pid == 222);
+        assert_eq!(removed, vec![dead_extract.clone(), dead_stage.clone()]);
+        assert!(!dead_extract.exists() && !dead_stage.exists());
+        assert!(live.exists());
+        assert!(not_ours.join("inner/f").exists(), "only our own temp folders are removed");
+        assert_eq!(read(&reg), vec![(222, live.clone())]);
+
+        // Finished jobs take their record away.
+        untrack_in(&reg, &live).unwrap();
+        assert!(read(&reg).is_empty());
+    }
+}
