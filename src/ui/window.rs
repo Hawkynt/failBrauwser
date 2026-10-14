@@ -242,6 +242,7 @@ impl Window {
                     w.location_entry.set_text(&p.location().display());
                 }
                 PaneEvent::PasswordNeeded(loc) => super::extensions::ask_archive_password(&w, &p, loc),
+                PaneEvent::ShareNotResponding(root) => super::shares::offer_reconnect(&w, root),
             }
             if matches!(ev, PaneEvent::Contents) {
                 super::extensions::pane_contents_changed(&w, &p);
@@ -623,18 +624,7 @@ impl Window {
             let Some(w) = weak.upgrade() else { return };
             let text = e.text().to_string();
             if util::is_remote_uri(&text) {
-                let weak = Rc::downgrade(&w);
-                let uri = text.clone();
-                util::mount_remote(&w.win, &uri, move |res| {
-                    let Some(w) = weak.upgrade() else { return };
-                    match res {
-                        Ok(path) => {
-                            super::remote::remember(&text);
-                            w.navigate(Location::Dir(path));
-                        }
-                        Err(msg) => util::show_error(&w.win, &format!("Cannot open “{text}”"), &msg),
-                    }
-                });
+                super::shares::open_remote(&w, &text, false);
                 return;
             }
             match Location::parse(&text, failbrauwser::archive::is_browsable_name) {
@@ -712,7 +702,9 @@ fn status_text(pane: &Pane) -> String {
                 }
             }
             if let Some(dir) = pane.location().local_path() {
-                if let Some(free) = free_space(dir) {
+                // On a network share statvfs can hang: read in the background, shown when known.
+                let free = if failbrauwser::ops::gvfs::is_gvfs_path(dir) { failbrauwser::ops::gvfs::free_space_cached(dir, free_space) } else { free_space(dir) };
+                if let Some(free) = free {
                     s.push_str(&format!(", free space: {}", human_size(free)));
                 }
             }

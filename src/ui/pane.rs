@@ -33,6 +33,8 @@ pub enum PaneEvent {
     OpenFiles(Vec<Item>),
     /// The archive shown is encrypted; ask for the password, then reload.
     PasswordNeeded(Location),
+    /// A network share did not answer (its top folder).
+    ShareNotResponding(std::path::PathBuf),
 }
 
 struct State {
@@ -411,6 +413,43 @@ impl Pane {
             self.start_search(s.clone());
             return;
         }
+        // A network share is asked first, off the UI thread: one that stopped answering
+        // would otherwise hang everything that looks at the folder.
+        if let Some(dir) = loc.local_path().filter(|p| failbrauwser::ops::gvfs::is_gvfs_path(p)).map(|p| p.to_path_buf()) {
+            let me = self.me();
+            self.st.borrow_mut().loading = true;
+            glib::spawn_future_local(async move {
+                let res = gio::spawn_blocking(move || failbrauwser::ops::gvfs::check(&dir, failbrauwser::ops::gvfs::TIMEOUT)).await;
+                if me.location() != loc {
+                    return;
+                }
+                match res {
+                    Ok(Err(e)) if failbrauwser::ops::gvfs::not_responding_share(&e).is_some() => {
+                        {
+                            let mut st = me.st.borrow_mut();
+                            st.generation += 1;
+                            st.loading = false;
+                            st.all.clear();
+                            st.error = Some(e.to_string());
+                        }
+                        me.clear_rows();
+                        me.show_error();
+                        me.emit(PaneEvent::Location);
+                        me.emit(PaneEvent::Contents);
+                        if let Some(root) = failbrauwser::ops::gvfs::not_responding_share(&e) {
+                            me.emit(PaneEvent::ShareNotResponding(root));
+                        }
+                    }
+                    // Answered (maybe with an error the listing reports as usual).
+                    _ => me.load_checked(loc, select, fresh),
+                }
+            });
+            return;
+        }
+        self.load_checked(loc, select, fresh);
+    }
+
+    fn load_checked(&self, loc: Location, select: Vec<OsString>, fresh: bool) {
         let generation = {
             let mut st = self.st.borrow_mut();
             st.generation += 1;

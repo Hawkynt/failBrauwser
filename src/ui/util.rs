@@ -212,13 +212,10 @@ pub fn is_remote_uri(text: &str) -> bool {
 }
 
 /// Mounts a network address through GVfs (asking for a password if the server wants one)
-/// and hands back the local folder GVfs exposes it under.
+/// and hands back the local folder GVfs exposes it under. Nothing here touches that folder:
+/// on a share that stopped answering that would hang the UI (the pane checks it).
 pub fn mount_remote(parent: &impl IsA<gtk::Window>, uri: &str, done: impl FnOnce(Result<PathBuf, String>) + 'static) {
     let file = gio::File::for_uri(uri.trim());
-    let local = |f: &gio::File| f.path().filter(|p| p.exists());
-    if let Some(p) = local(&file) {
-        return done(Ok(p));
-    }
     let op = gtk::MountOperation::new(Some(parent));
     let f = file.clone();
     file.mount_enclosing_volume(gio::MountMountFlags::NONE, Some(&op), gio::Cancellable::NONE, move |res| {
@@ -231,7 +228,7 @@ pub fn mount_remote(parent: &impl IsA<gtk::Window>, uri: &str, done: impl FnOnce
             )),
             Err(e) => Err(e.to_string()),
         };
-        done(res.and_then(|()| local(&f).ok_or_else(|| "The share was mounted but has no local folder (is gvfsd-fuse running?).".to_string())));
+        done(res.and_then(|()| f.path().ok_or_else(|| "The share was mounted but has no local folder (is gvfsd-fuse running?).".to_string())));
     });
 }
 

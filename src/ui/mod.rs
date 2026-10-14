@@ -19,6 +19,7 @@ pub mod pathbar;
 pub mod properties;
 pub mod remote;
 pub mod searchbar;
+pub mod shares;
 pub mod selftest;
 pub mod sidebar;
 pub mod style;
