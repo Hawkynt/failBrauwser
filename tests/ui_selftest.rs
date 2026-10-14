@@ -99,6 +99,28 @@ fn size_column_adds_up_folders() {
 }
 
 #[test]
+fn default_application_from_properties() {
+    // The desktop's own applications; any two that open text will do.
+    let apps = ["org.xfce.mousepad.desktop", "vim.desktop"];
+    if !apps.iter().all(|a| Path::new("/usr/share/applications").join(a).exists()) {
+        eprintln!("mousepad and vim not installed, skipping");
+        return;
+    }
+    run_checked(
+        "default_app.fbt",
+        &[],
+        |t| {
+            std::fs::create_dir_all(t.join("d")).unwrap();
+            std::fs::write(t.join("d/a.txt"), "hi").unwrap();
+        },
+        |t| {
+            let list = std::fs::read_to_string(t.join("config/mimeapps.list")).unwrap();
+            assert!(list.contains("text/plain=vim.desktop"), "{list}");
+        },
+    );
+}
+
+#[test]
 fn drives_page() {
     run("drives.fbt", |t| {
         std::fs::create_dir(t.join("d")).unwrap();

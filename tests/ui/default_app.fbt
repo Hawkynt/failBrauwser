@@ -1,0 +1,9 @@
+# Properties sets the application that opens all files of a type.
+open $T/d
+select a.txt
+action win.properties
+wait-idle
+properties-choose-app org.xfce.mousepad.desktop
+expect-default-app text/plain = org.xfce.mousepad.desktop
+properties-choose-app vim.desktop
+expect-default-app text/plain = vim.desktop
