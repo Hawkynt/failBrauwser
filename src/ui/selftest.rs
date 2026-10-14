@@ -16,7 +16,8 @@
 //! `shortcut-menu <entry> : <item>` (`Show Hidden Entry/<name>` for the submenu),
 //! `shortcut-drag <entry> > <before entry>`, `shortcut-drop <folder> > <before entry>`,
 //! `window-snapshot <png>`, `wait-error <text>`, `wait-dialog <text>`,
-//! `dialog-button <dialog text> : <button>`, `quit`. Blank lines and `#` comments are ignored.
+//! `dialog-button <dialog text> : <button>`, `properties-choose-app <desktop id>`,
+//! `expect-default-app <content type> = <desktop id>`, `quit`. Blank lines and `#` comments are ignored.
 
 use super::app::AppCtx;
 use super::window::Window;
@@ -141,6 +142,14 @@ pub fn start(app: &Rc<AppCtx>, window: &Rc<Window>) {
     });
 }
 
+/// The first widget of type `T` inside `w`.
+fn find_widget<T: IsA<gtk::Widget>>(w: &gtk::Widget) -> Option<T> {
+    if let Some(t) = w.downcast_ref::<T>() {
+        return Some(t.clone());
+    }
+    w.downcast_ref::<gtk::Container>()?.children().iter().find_map(find_widget::<T>)
+}
+
 /// A visible message dialog whose text contains `text`.
 #[allow(deprecated)]
 fn find_dialog(text: &str) -> Option<gtk::MessageDialog> {
@@ -252,6 +261,35 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
                 c.children().iter().find_map(|ch| find(ch, label))
             }
             find(d.upcast_ref(), button.trim()).ok_or("no such button")?.clicked();
+        }
+        "properties-choose-app" => {
+            // In the open Properties dialog, picks the application with this desktop id.
+            #[allow(deprecated)]
+            let chooser = gtk::Window::list_toplevels()
+                .into_iter()
+                .filter_map(|w| w.downcast::<gtk::Dialog>().ok())
+                .filter(|d| d.is_visible() && d.title().is_some_and(|t| t.ends_with("Properties")))
+                .find_map(|d| find_widget::<gtk::AppChooserButton>(d.upcast_ref()))
+                .ok_or("no Properties dialog with an application chooser")?;
+            let model = chooser.model().ok_or("no model")?;
+            let mut found = None;
+            model.foreach(|m, _, it| {
+                let app = m.value(it, 0).get::<Option<gio::AppInfo>>().ok().flatten();
+                if app.is_some_and(|a| a.id().is_some_and(|id| id == arg)) {
+                    found = Some(*it);
+                    return true;
+                }
+                false
+            });
+            chooser.set_active_iter(Some(&found.ok_or_else(|| format!("{arg} is not offered"))?));
+        }
+        "expect-default-app" => {
+            // expect-default-app <content type> = <desktop id>
+            let (ct, want) = arg.split_once('=').ok_or("need <type> = <id>")?;
+            let got = gio::AppInfo::default_for_type(ct.trim(), false).and_then(|a| a.id()).map(|s| s.to_string()).unwrap_or_default();
+            if got != want.trim() {
+                return Err(format!("default for {} is {got:?}", ct.trim()));
+            }
         }
         "window-snapshot" => {
             // The window drawn into a PNG (works on any compositor, unlike `screenshot`).
