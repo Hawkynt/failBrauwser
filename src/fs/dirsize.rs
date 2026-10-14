@@ -121,6 +121,38 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_bind_mounted_inside_itself_counts_once() {
+        // Mounting needs a private user and mount namespace: the test runs itself again
+        // inside one (`unshare -rm`) and does the work there.
+        if std::env::var_os("FB_DIRSIZE_IN_NS").is_none() {
+            let me = std::env::current_exe().unwrap();
+            let out = std::process::Command::new("unshare")
+                .args(["-rm", "--"])
+                .arg(me)
+                .args(["--exact", "fs::dirsize::tests::a_folder_bind_mounted_inside_itself_counts_once", "--nocapture"])
+                .env("FB_DIRSIZE_IN_NS", "1")
+                .output();
+            match out {
+                Ok(o) if o.status.success() => assert!(String::from_utf8_lossy(&o.stdout).contains("1 passed"), "{o:?}"),
+                Ok(o) if String::from_utf8_lossy(&o.stderr).contains("unshare") => eprintln!("no user namespaces, skipping: {o:?}"),
+                Ok(o) => panic!("{}\n{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)),
+                Err(e) => eprintln!("unshare not available, skipping: {e}"),
+            }
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join("sub/loop")).unwrap();
+        fs::write(d.path().join("sub/f"), vec![0u8; 10]).unwrap();
+        let c = |p: &Path| std::ffi::CString::new(p.to_str().unwrap()).unwrap();
+        let (src, dst) = (c(d.path()), c(&d.path().join("sub/loop")));
+        let r = unsafe { libc::mount(src.as_ptr(), dst.as_ptr(), std::ptr::null(), libc::MS_BIND, std::ptr::null()) };
+        assert_eq!(r, 0, "bind mount failed: {}", std::io::Error::last_os_error());
+        assert!(d.path().join("sub/loop/sub/f").exists(), "the loop is there");
+        let s = size(d.path());
+        assert_eq!((s.bytes, s.files), (10, 1));
+    }
+
+    #[test]
     fn hard_links_count_once() {
         let d = tempfile::tempdir().unwrap();
         fs::write(d.path().join("orig"), vec![0u8; 1000]).unwrap();

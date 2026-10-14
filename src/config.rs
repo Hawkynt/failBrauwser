@@ -316,4 +316,15 @@ mod tests {
         assert_eq!(s.columns, vec!["name", "size", "type", "modified", "permissions", "owner"]);
     }
 
+    #[test]
+    fn total_size_column_becomes_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("old.ini");
+        std::fs::write(&p, "[General]\ncolumns=name;size;dirsize;type;\nsort_column=dirsize\n").unwrap();
+        let s = Settings::load_from(&p);
+        assert_eq!(s.columns, vec!["name", "size", "type"]);
+        assert_eq!(s.sort_column, "size");
+        std::fs::write(&p, "[General]\ncolumns=name;dirsize;modified;\n").unwrap();
+        assert_eq!(Settings::load_from(&p).columns, vec!["name", "size", "modified"]);
+    }
 }
