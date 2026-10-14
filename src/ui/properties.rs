@@ -1,5 +1,6 @@
 //! The Properties dialog: what a file is, where, how big (folders are measured in the
-//! background), when it changed, who owns it and what may be done with it.
+//! background), when it changed, who owns it, what may be done with it, and which
+//! application opens files of its type (changeable there).
 
 use super::model::Item;
 use super::util;
@@ -66,12 +67,22 @@ pub fn show(w: &Window) {
     name.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     header.pack_start(&name, true, true, 0);
 
-    let mut y = 0;
-    let mut add = |label: &str, value: &str| {
-        let l = row(&grid, y, label, value);
-        y += 1;
+    let y = std::cell::Cell::new(0);
+    let add = |label: &str, value: &str| {
+        let l = row(&grid, y.get(), label, value);
+        y.set(y.get() + 1);
         l
     };
+    let add_widget = |label: &str, widget: &gtk::Widget| {
+        let l = gtk::Label::new(Some(label));
+        l.set_xalign(1.0);
+        l.style_context().add_class("dim-label");
+        grid.attach(&l, 0, y.get(), 1, 1);
+        grid.attach(widget, 1, y.get(), 1, 1);
+        y.set(y.get() + 1);
+    };
+    // A share that stopped answering would hang the dialog: asked only on local disks.
+    let local = |p: &std::path::Path| !failbrauwser::ops::gvfs::is_gvfs_path(p);
     let where_ = match &loc {
         Location::Archive(_) => format!("{} (in archive)", loc.display()),
         _ => loc.display(),
@@ -91,18 +102,16 @@ pub fn show(w: &Window) {
                 measure.push((e.path.clone(), size));
             }
             add("Modified:", &human_time(e.mtime, now));
-            if let Ok(m) = std::fs::metadata(&e.path) {
+            if let Some(m) = Some(&e.path).filter(|p| local(p)).and_then(|p| std::fs::metadata(p).ok()) {
                 use std::os::unix::fs::MetadataExt;
                 add("Accessed:", &human_time(m.atime(), now));
             }
             add("Permissions:", &format!("{} ({:o})", permissions(e.mode), e.mode & 0o7777));
             add("Owner:", &format!("{} / {}", util::user_name(e.uid), util::group_name(e.gid)));
             if !e.is_dir_like() {
-                if let Some(app) = gio::AppInfo::default_for_type(&e.content_type, false) {
-                    add("Opens with:", &app.display_name());
-                }
+                add_widget("Opens with:", default_app_chooser(&d, &e.content_type).upcast_ref());
             }
-            if let Some(free) = super::window::free_space(e.path.parent().unwrap_or(&e.path)) {
+            if let Some(free) = Some(e.path.parent().unwrap_or(&e.path)).filter(|p| local(p)).and_then(super::window::free_space) {
                 add("Free space:", &human_size(free));
             }
         }
@@ -141,7 +150,7 @@ pub fn show(w: &Window) {
             if let Some(p) = loc.local_path() {
                 let size = add("Size:", "Calculating…");
                 measure.push((p.to_path_buf(), size));
-                if let Some(free) = super::window::free_space(p) {
+                if let Some(free) = Some(p).filter(|p| local(p)).and_then(super::window::free_space) {
                     add("Free space:", &human_size(free));
                 }
             }
@@ -169,6 +178,30 @@ pub fn show(w: &Window) {
     area.add(&grid);
     d.connect_response(|d, _| d.close());
     d.show_all();
+}
+
+/// The applications that open `content_type`, the default one chosen. Choosing another one
+/// makes it the default for every file of this type (in `mimeapps.list`, shared with the
+/// rest of the desktop).
+fn default_app_chooser(dialog: &gtk::Dialog, content_type: &str) -> gtk::AppChooserButton {
+    let chooser = gtk::AppChooserButton::new(content_type);
+    chooser.set_show_default_item(true);
+    chooser.set_show_dialog_item(true);
+    chooser.set_heading(&format!("Open {} files with", util::type_description(content_type)));
+    chooser.set_tooltip_text(Some("The application that opens all files of this type"));
+    chooser.set_widget_name("default-app");
+    let ct = content_type.to_string();
+    let parent = dialog.clone();
+    chooser.connect_changed(move |c| {
+        let Some(app) = c.app_info() else { return };
+        if gio::AppInfo::default_for_type(&ct, false).is_some_and(|d| d.equal(&app)) {
+            return;
+        }
+        if let Err(e) = app.set_as_default_for_type(&ct) {
+            util::show_error(&parent, "Cannot change the default application", &e.to_string());
+        }
+    });
+    chooser
 }
 
 /// Measures folders on a worker thread and writes "1.2 GB (3,456 files)" into `label`.
