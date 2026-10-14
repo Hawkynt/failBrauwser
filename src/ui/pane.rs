@@ -114,8 +114,13 @@ impl Pane {
         let icons = gtk::IconView::with_model(&store);
         icons.set_selection_mode(gtk::SelectionMode::Multiple);
         icons.set_item_width(112);
+        // Tight around pictures: GTK's defaults (6 px padding and margin, 6 px between icon
+        // and name) leave thumbnails far apart.
         icons.set_column_spacing(4);
         icons.set_row_spacing(4);
+        icons.set_item_padding(2);
+        icons.set_spacing(2);
+        IconViewExt::set_margin(&icons, 4);
         let list_px = Rc::new(Cell::new(0));
         let grid_px = Rc::new(Cell::new(0));
         let pix = gtk::CellRendererPixbuf::new();
