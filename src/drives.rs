@@ -66,7 +66,8 @@ impl Usage {
 }
 
 impl Volume {
-    /// What to call it: label, else drive model plus size, else device.
+    /// What to call it: label, else the folder it is mounted on (unless that is just a
+    /// stand-in under `/run/media`), else drive model plus size, else device.
     pub fn title(&self) -> String {
         if self.is_device() {
             return if self.drive_name.is_empty() { "Phone".into() } else { self.drive_name.clone() };
@@ -76,6 +77,15 @@ impl Volume {
         }
         if self.mount_points.iter().any(|m| m == Path::new("/")) {
             return "File System".into();
+        }
+        if let Some(m) = self.mount_point() {
+            if m == Path::new("/home") {
+                return "Home".into();
+            }
+            let automounted = m.starts_with("/run/media") || m.starts_with("/media");
+            if let Some(name) = m.file_name().filter(|_| !automounted) {
+                return name.to_string_lossy().into_owned();
+            }
         }
         if self.size > 0 {
             let size = crate::fs::format::human_size(self.size);
@@ -113,6 +123,62 @@ impl Volume {
     pub fn device_kind(&self) -> Option<crate::devices::DeviceKind> {
         crate::devices::DeviceKind::from_protocol(&self.protocol)
     }
+}
+
+/// Mount points of the system itself rather than of the user's files (and everything below
+/// them: `/boot/efi`).
+const SYSTEM_MOUNTS: &[&str] = &["/boot", "/efi", "/usr", "/var", "/opt", "/srv", "/tmp", "/root", "/nix", "/gnu", "/snap", "/recovery", "/swap"];
+
+pub fn is_system_mount(m: &Path) -> bool {
+    SYSTEM_MOUNTS.iter().any(|s| m.starts_with(s))
+}
+
+/// Partition types that never hold the user's files: EFI, BIOS boot, extended boot,
+/// Microsoft reserved, Windows recovery, swap, extended partitions.
+fn is_system_partition(t: &str) -> bool {
+    matches!(
+        t.to_ascii_lowercase().as_str(),
+        "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+            | "0xef"
+            | "21686148-6449-6e6f-744e-656564454649"
+            | "bc13c2ff-59e6-4262-a352-b275fd6f7172"
+            | "e3c9e316-0b5c-4db8-817d-f92df00215ae"
+            | "de94bba4-06d1-4d40-a16a-bfd50179d6ac"
+            | "0x27"
+            | "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"
+            | "0x82"
+            | "0x05"
+            | "0x0f"
+    )
+}
+
+/// The volumes that hold the user's files, for the side panel: without the system's own
+/// (`/boot`, EFI, swap…), without `/` when the home folder is on a volume of its own, and
+/// without encrypted containers that are unlocked (their contents are listed). Phones stay.
+pub fn user_volumes(all: &[Volume], home: &Path) -> Vec<Volume> {
+    let root = Path::new("/");
+    let home_elsewhere = all.iter().flat_map(|v| &v.mount_points).any(|m| m != root && !is_system_mount(m) && home.starts_with(m));
+    all.iter()
+        .filter(|v| {
+            if v.is_device() {
+                return true;
+            }
+            if v.unlocked {
+                return false;
+            }
+            if v.mount_points.is_empty() {
+                return !is_system_partition(&v.partition_type);
+            }
+            v.mount_points.iter().any(|m| if m == root { !home_elsewhere } else { !is_system_mount(m) })
+        })
+        .map(|v| {
+            let mut v = v.clone();
+            if !v.is_device() {
+                v.mount_points.retain(|m| if m == root { !home_elsewhere } else { !is_system_mount(m) });
+            }
+            v
+        })
+        .collect()
 }
 
 /// Fill level of a mounted filesystem.
