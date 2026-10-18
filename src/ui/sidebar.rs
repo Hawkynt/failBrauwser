@@ -1,5 +1,6 @@
 //! The side panel: shortcuts (Drives, Home, Desktop, Trash, the user's folders and the
-//! mounted volumes, arranged by the user; see [`failbrauwser::shortcuts`]) above a folder tree.
+//! mounted volumes, arranged by the user; see [`failbrauwser::shortcuts`]), the connected
+//! drives and phones with their fill levels, and a folder tree.
 //!
 //! Right-click an entry to rename, move, hide or remove it; drag entries to reorder them and
 //! drop folders onto the list to add them. Every window shows the same entries.
@@ -7,6 +8,9 @@
 use super::util;
 use super::window::Window;
 use failbrauwser::config::TreeRoot;
+use failbrauwser::devices::DeviceKind;
+use failbrauwser::drives::{Usage, Volume};
+use failbrauwser::fs::format::human_size;
 use failbrauwser::location::Location;
 use failbrauwser::shortcuts::{Kind, Shortcuts};
 use gtk::prelude::*;
@@ -40,6 +44,15 @@ pub struct Sidebar {
     /// would select its row as soon as it gets the keyboard focus.
     list: gtk::ListBox,
     rows: RefCell<Vec<RowInfo>>,
+    /// The drives holding the user's files (see [`failbrauwser::drives::user_volumes`]), one
+    /// row each, below the shortcuts.
+    drives: gtk::ListBox,
+    drives_line: gtk::Separator,
+    /// Shortcuts and drives, above the tree.
+    column: gtk::Box,
+    drive_rows: RefCell<Vec<(Volume, Option<Usage>)>>,
+    /// Every volume, also those not shown (ejecting a drive unmounts all of it).
+    all_volumes: RefCell<Vec<Volume>>,
     tree: gtk::TreeView,
     store: gtk::TreeStore,
     tree_box: gtk::ScrolledWindow,
@@ -96,9 +109,14 @@ fn watch_mounts() {
     });
 }
 
-/// Mounts worth a row: not hidden behind another one, and not the system's own file systems.
-fn visible_mounts() -> Vec<gio::Mount> {
-    gio::VolumeMonitor::get().mounts().into_iter().filter(|m| !m.is_shadowed()).collect()
+/// Mounts worth a row: not hidden behind another one, not the system's own file systems,
+/// and not in the drive list (drives and phones, or mounted on one of `drive_mounts`).
+fn visible_mounts(drive_mounts: &[PathBuf]) -> Vec<gio::Mount> {
+    let in_drive_list = |m: &gio::Mount| {
+        let block = m.volume().and_then(|v| v.identifier("unix-device")).is_some_and(|d| d.starts_with("/dev/") && !d.starts_with("/dev/bus/"));
+        block || DeviceKind::of_uri(&m.root().uri()).is_some() || m.root().path().is_some_and(|p| drive_mounts.contains(&p))
+    };
+    gio::VolumeMonitor::get().mounts().into_iter().filter(|m| !m.is_shadowed() && !in_drive_list(m)).collect()
 }
 
 fn themed(names: &[&str]) -> gio::Icon {
@@ -140,6 +158,77 @@ fn add_dirs(dirs: Vec<PathBuf>, at: usize) -> bool {
         }
     });
     true
+}
+
+/// A drive row: icon, name, where it is mounted and a bar showing how full it is.
+fn drive_row(v: &Volume, usage: Option<&Usage>) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let image = gtk::Image::from_gicon(&themed(&v.icon_names()), gtk::IconSize::LargeToolbar);
+    image.style_context().add_class("sidebar-icon");
+    image.set_valign(gtk::Align::Center);
+    let lines = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    lines.set_valign(gtk::Align::Center);
+    let title = gtk::Label::new(Some(&v.title()));
+    title.set_xalign(0.0);
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    title.style_context().add_class("sidebar-label");
+    let place = gtk::Label::new(Some(&drive_place(v)));
+    place.set_xalign(0.0);
+    place.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    place.style_context().add_class("dim-label");
+    place.style_context().add_class("fb-drive-place");
+    lines.pack_start(&title, false, false, 0);
+    lines.pack_start(&place, false, false, 0);
+    let mut tip = vec![v.title()];
+    if let Some(u) = usage {
+        let bar = gtk::LevelBar::for_interval(0.0, 1.0);
+        // Theme colors: normal up to 90 % full, the warning color beyond (as on the Drives page).
+        bar.remove_offset_value(Some(gtk::LEVEL_BAR_OFFSET_LOW));
+        bar.remove_offset_value(Some(gtk::LEVEL_BAR_OFFSET_HIGH));
+        bar.remove_offset_value(Some(gtk::LEVEL_BAR_OFFSET_FULL));
+        bar.add_offset_value(gtk::LEVEL_BAR_OFFSET_HIGH, 0.9);
+        bar.add_offset_value(gtk::LEVEL_BAR_OFFSET_LOW, 1.0);
+        bar.set_value(u.fraction());
+        lines.pack_start(&bar, false, false, 0);
+        tip.push(format!("{} free of {} ({:.0} % used)", human_size(u.free), human_size(u.total), u.fraction() * 100.0));
+    }
+    if let Some(m) = v.mount_point().filter(|_| !v.is_device()) {
+        tip.push(m.display().to_string());
+    }
+    content.pack_start(&image, false, false, 0);
+    content.pack_start(&lines, true, true, 0);
+    row.add(&content);
+    row.set_tooltip_text(Some(&tip.join("\n")));
+    row.set_sensitive(!super::drives::is_busy(v));
+    row
+}
+
+/// The line under a drive's name: where it is mounted (`~/…` for the home folder), a
+/// phone's storage, or why there are no files to show.
+fn drive_place(v: &Volume) -> String {
+    if super::drives::no_storage(v) {
+        return "Locked — unlock the phone".into();
+    }
+    if v.is_device() {
+        return match (v.mount_point(), v.label.is_empty()) {
+            (None, _) => "Connected".into(),
+            (Some(_), true) => failbrauwser::drives::drive_kind(v),
+            (Some(_), false) => v.label.clone(),
+        };
+    }
+    match v.mount_point() {
+        Some(m) => {
+            let home = glib::home_dir();
+            match m.strip_prefix(&home) {
+                Ok(rest) if rest.as_os_str().is_empty() => "~".into(),
+                Ok(rest) => format!("~/{}", rest.display()),
+                Err(_) => m.display().to_string(),
+            }
+        }
+        None if v.fs_type.starts_with("crypto") => "Encrypted, locked".into(),
+        None => "Not mounted".into(),
+    }
 }
 
 fn make_row(icon: &gio::Icon, label: &str, tooltip: &str) -> gtk::ListBoxRow {
@@ -195,9 +284,22 @@ pub fn attach(w: &Rc<Window>) {
     list.style_context().add_class("fb-shortcuts");
     list.set_selection_mode(gtk::SelectionMode::None);
     list.set_activate_on_single_click(true);
+    let drives = gtk::ListBox::new();
+    drives.style_context().add_class("sidebar");
+    drives.style_context().add_class("fb-drives");
+    drives.set_selection_mode(gtk::SelectionMode::None);
+    drives.set_activate_on_single_click(true);
+    let drives_line = gtk::Separator::new(gtk::Orientation::Horizontal);
+    drives_line.style_context().add_class("fb-drives-line");
+    drives_line.set_no_show_all(true);
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    column.style_context().add_class("sidebar");
+    column.pack_start(&list, false, false, 0);
+    column.pack_start(&drives_line, false, false, 0);
+    column.pack_start(&drives, false, false, 0);
     let top = gtk::ScrolledWindow::new(gtk::Adjustment::NONE, gtk::Adjustment::NONE);
     top.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    top.add(&list);
+    top.add(&column);
     top.style_context().add_class("sidebar");
 
     let split = gtk::Paned::new(gtk::Orientation::Vertical);
@@ -210,6 +312,11 @@ pub fn attach(w: &Rc<Window>) {
     let sb = Rc::new(Sidebar {
         list,
         rows: RefCell::new(Vec::new()),
+        drives,
+        drives_line,
+        column,
+        drive_rows: RefCell::new(Vec::new()),
+        all_volumes: RefCell::new(Vec::new()),
         tree,
         store,
         tree_box,
@@ -223,6 +330,24 @@ pub fn attach(w: &Rc<Window>) {
     watch_mounts();
     sb.rebuild();
     sb.apply_settings();
+    sb.refresh_drives();
+    let weak = Rc::downgrade(&sb);
+    super::drives::connect_changed(move || match weak.upgrade() {
+        Some(sb) => {
+            sb.refresh_drives();
+            true
+        }
+        None => false,
+    });
+    // Fill levels change as files are written.
+    let weak = Rc::downgrade(&sb);
+    glib::timeout_add_seconds_local(30, move || match weak.upgrade() {
+        Some(sb) => {
+            sb.refresh_drives();
+            glib::ControlFlow::Continue
+        }
+        None => glib::ControlFlow::Break,
+    });
     let weak = Rc::downgrade(&sb);
     w.connect_location_changed(move |_| {
         if let Some(sb) = weak.upgrade() {
@@ -259,7 +384,8 @@ impl Sidebar {
                 continue;
             }
             if sc.kind == Kind::Mounts {
-                for m in visible_mounts() {
+                let drive_mounts: Vec<PathBuf> = self.drive_rows.borrow().iter().flat_map(|(v, _)| v.mount_points.clone()).collect();
+                for m in visible_mounts(&drive_mounts) {
                     let tip = m.root().path().map(|p| p.display().to_string()).unwrap_or_else(|| m.root().uri().to_string());
                     let row = make_row(&m.symbolic_icon(), &m.name(), &tip);
                     self.list.add(&row);
@@ -311,6 +437,124 @@ impl Sidebar {
                 row.unset_state_flags(gtk::StateFlags::SELECTED);
             }
         }
+        let dir = loc.local_path().map(Path::to_path_buf);
+        for (i, (v, _)) in self.drive_rows.borrow().iter().enumerate() {
+            let Some(row) = self.drives.row_at_index(i as i32) else { continue };
+            if dir.is_some() && v.mount_point() == dir.as_ref() {
+                row.set_state_flags(gtk::StateFlags::SELECTED, false);
+            } else {
+                row.unset_state_flags(gtk::StateFlags::SELECTED);
+            }
+        }
+    }
+
+    /// Reads the drives again (in the background) and shows those holding the user's files.
+    fn refresh_drives(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let all = super::drives::gather().await;
+            let Some(sb) = weak.upgrade() else { return };
+            let vols: Vec<Volume> = all.iter().map(|(v, _)| v.clone()).collect();
+            let shown: Vec<(Volume, Option<Usage>)> = failbrauwser::drives::user_volumes(&vols, &glib::home_dir())
+                .into_iter()
+                .map(|v| {
+                    let u = all.iter().find(|(x, _)| x.device == v.device && x.label == v.label).and_then(|(_, u)| *u);
+                    (v, u)
+                })
+                .collect();
+            *sb.all_volumes.borrow_mut() = vols;
+            let mounts_before: Vec<PathBuf> = sb.drive_rows.borrow().iter().flat_map(|(v, _)| v.mount_points.clone()).collect();
+            let mounts_now: Vec<PathBuf> = shown.iter().flat_map(|(v, _)| v.mount_points.clone()).collect();
+            sb.show_drives(shown);
+            // The mounted volumes leave out what the drive list shows.
+            if mounts_before != mounts_now {
+                sb.rebuild();
+            }
+        });
+    }
+
+    fn show_drives(&self, drives: Vec<(Volume, Option<Usage>)>) {
+        for child in self.drives.children() {
+            self.drives.remove(&child);
+        }
+        for (v, u) in &drives {
+            self.drives.add(&drive_row(v, u.as_ref()));
+        }
+        self.drives_line.set_visible(!drives.is_empty());
+        let more = drives.len() > self.drive_rows.borrow().len();
+        *self.drive_rows.borrow_mut() = drives;
+        self.drives.show_all();
+        self.mark_current();
+        if more {
+            self.fit_split();
+        }
+    }
+
+    /// Moves the split down so shortcuts and drives fit, when they no longer do (a drive was
+    /// plugged in), leaving the tree some room. Never moves it up.
+    fn fit_split(&self) {
+        let (split, column, tree_box) = (self.split.clone(), self.column.clone(), self.tree_box.clone());
+        glib::idle_add_local_once(move || {
+            let need = column.preferred_height().1;
+            let room = split.allocated_height() - if tree_box.is_visible() { 160 } else { 0 };
+            if need > split.position() && room > split.position() {
+                split.set_position(need.min(room));
+            }
+        });
+    }
+
+    fn drive_at(&self, row: &gtk::ListBoxRow) -> Option<(Volume, Option<Usage>)> {
+        usize::try_from(row.index()).ok().and_then(|i| self.drive_rows.borrow().get(i).cloned())
+    }
+
+    fn open_drive(&self, v: &Volume, new_tab: bool) {
+        if let Some(w) = self.window.upgrade() {
+            super::drives::open_volume(&w, &w.current_pane(), v, new_tab);
+        }
+    }
+
+    /// The right-click menu of a drive row.
+    fn drive_menu(self: &Rc<Self>, v: &Volume, usage: Option<Usage>) -> gtk::Menu {
+        let menu = gtk::Menu::new();
+        let add = |label: &str, f: Box<dyn Fn(&Sidebar, &Rc<Window>)>| {
+            let item = gtk::MenuItem::with_mnemonic(label);
+            let me = Rc::downgrade(self);
+            item.connect_activate(move |_| {
+                if let Some(sb) = me.upgrade() {
+                    if let Some(w) = sb.window.upgrade() {
+                        f(&sb, &w);
+                    }
+                }
+            });
+            menu.append(&item);
+        };
+        let vol = v.clone();
+        if super::drives::no_storage(v) {
+            add("_Retry", Box::new(move |_, w| super::drives::reconnect_device(w, &w.current_pane(), &vol)));
+        } else if v.mount_point().is_some() || v.is_device() || v.mountable {
+            add("_Open", Box::new(move |sb, _| sb.open_drive(&vol, false)));
+            let vol = v.clone();
+            add("Open in New _Tab", Box::new(move |sb, _| sb.open_drive(&vol, true)));
+        }
+        let mut ops = Vec::new();
+        if super::drives::can_unmount(v) {
+            ops.push(("_Unmount", false));
+        }
+        if super::drives::can_eject(v) {
+            ops.push(("_Eject", true));
+        }
+        if !ops.is_empty() {
+            menu.append(&gtk::SeparatorMenuItem::new());
+        }
+        for (label, eject) in ops {
+            let vol = v.clone();
+            add(label, Box::new(move |sb, w| super::drives::unmount_volume(w, &vol, eject, &sb.all_volumes.borrow())));
+        }
+        menu.append(&gtk::SeparatorMenuItem::new());
+        let vol = v.clone();
+        add("_Properties…", Box::new(move |_, w| super::drives::show_properties(w, &w.current_pane(), &vol, usage)));
+        menu.show_all();
+        menu
     }
 
     fn open(&self, target: &Target, new_tab: bool) {
@@ -602,6 +846,56 @@ impl Sidebar {
         Ok(self.rows.borrow()[i].index)
     }
 
+    /// The drive rows as `name : place` (tests).
+    pub fn drive_texts(&self) -> Vec<String> {
+        self.drive_rows.borrow().iter().map(|(v, _)| format!("{} : {}", v.title(), drive_place(v))).collect()
+    }
+
+    /// The drives shown, with where they are mounted (tests).
+    pub fn drive_mounts(&self) -> Vec<PathBuf> {
+        self.drive_rows.borrow().iter().flat_map(|(v, _)| v.mount_points.clone()).collect()
+    }
+
+    /// The drive rows marked as the current place, as `name : place` (tests).
+    pub fn drives_marked(&self) -> Vec<String> {
+        let texts = self.drive_texts();
+        (0..texts.len())
+            .filter(|&i| self.drives.row_at_index(i as i32).is_some_and(|r| r.state_flags().contains(gtk::StateFlags::SELECTED)))
+            .map(|i| texts[i].clone())
+            .collect()
+    }
+
+    fn drive_labelled(&self, text: &str) -> Result<(gtk::ListBoxRow, Volume, Option<Usage>), String> {
+        let i = self.drive_texts().iter().position(|t| t == text).ok_or_else(|| format!("no drive {text:?}, have {:?}", self.drive_texts()))?;
+        let row = self.drives.row_at_index(i as i32).ok_or("row missing")?;
+        let (v, u) = self.drive_rows.borrow()[i].clone();
+        Ok((row, v, u))
+    }
+
+    /// Clicks a drive row, `name : place` (tests).
+    pub fn click_drive(&self, text: &str) -> Result<(), String> {
+        let (row, ..) = self.drive_labelled(text)?;
+        if !row.is_sensitive() {
+            return Err("the drive is busy".into());
+        }
+        row.activate();
+        Ok(())
+    }
+
+    /// Activates an item (menu text without mnemonics) of a drive row's right-click menu (tests).
+    pub fn drive_menu_item(self: &Rc<Self>, text: &str, item: &str) -> Result<(), String> {
+        let (_, v, u) = self.drive_labelled(text)?;
+        let menu = self.drive_menu(&v, u);
+        let found = menu
+            .children()
+            .into_iter()
+            .filter_map(|c| c.downcast::<gtk::MenuItem>().ok())
+            .find(|m| m.label().is_some_and(|l| l.replace('_', "") == item))
+            .ok_or_else(|| format!("no menu item {item:?}"))?;
+        found.activate();
+        Ok(())
+    }
+
     /// The folder at the top of the tree.
     pub fn root_path(&self) -> Option<PathBuf> {
         self.root.borrow().clone()
@@ -701,6 +995,32 @@ impl Sidebar {
     }
 
     fn connect(self: &Rc<Self>) {
+        let me = Rc::downgrade(self);
+        self.drives.connect_row_activated(move |_, row| {
+            let Some(sb) = me.upgrade() else { return };
+            if let Some((v, _)) = sb.drive_at(row) {
+                sb.open_drive(&v, false);
+            }
+        });
+        let me = Rc::downgrade(self);
+        self.drives.connect_button_press_event(move |list, ev| {
+            let Some(sb) = me.upgrade() else { return glib::Propagation::Proceed };
+            if ev.event_type() != gdk::EventType::ButtonPress {
+                return glib::Propagation::Proceed;
+            }
+            let Some((v, u)) = list.row_at_y(ev.position().1 as i32).and_then(|r| sb.drive_at(&r)) else { return glib::Propagation::Proceed };
+            match ev.button() {
+                3 => {
+                    sb.drive_menu(&v, u).popup_at_pointer(Some(ev));
+                    glib::Propagation::Stop
+                }
+                2 => {
+                    sb.open_drive(&v, true);
+                    glib::Propagation::Stop
+                }
+                _ => glib::Propagation::Proceed,
+            }
+        });
         let me = Rc::downgrade(self);
         self.list.connect_row_activated(move |_, row| {
             let Some(sb) = me.upgrade() else { return };

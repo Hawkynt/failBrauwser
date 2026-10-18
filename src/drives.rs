@@ -29,6 +29,8 @@ pub struct Volume {
     pub mountable: bool,
     /// A system volume (root, boot, …) as UDisks2 sees it.
     pub system: bool,
+    /// An encrypted container that is unlocked: its contents are a volume of their own.
+    pub unlocked: bool,
     pub uuid: String,
     /// File system version ("1.0" for ext4, "FAT32", …).
     pub fs_version: String,
@@ -64,7 +66,8 @@ impl Usage {
 }
 
 impl Volume {
-    /// What to call it: label, else drive model plus size, else device.
+    /// What to call it: label, else the folder it is mounted on (unless that is just a
+    /// stand-in under `/run/media`), else drive model plus size, else device.
     pub fn title(&self) -> String {
         if self.is_device() {
             return if self.drive_name.is_empty() { "Phone".into() } else { self.drive_name.clone() };
@@ -74,6 +77,15 @@ impl Volume {
         }
         if self.mount_points.iter().any(|m| m == Path::new("/")) {
             return "File System".into();
+        }
+        if let Some(m) = self.mount_point() {
+            if m == Path::new("/home") {
+                return "Home".into();
+            }
+            let automounted = m.starts_with("/run/media") || m.starts_with("/media");
+            if let Some(name) = m.file_name().filter(|_| !automounted) {
+                return name.to_string_lossy().into_owned();
+            }
         }
         if self.size > 0 {
             let size = crate::fs::format::human_size(self.size);
@@ -111,6 +123,62 @@ impl Volume {
     pub fn device_kind(&self) -> Option<crate::devices::DeviceKind> {
         crate::devices::DeviceKind::from_protocol(&self.protocol)
     }
+}
+
+/// Mount points of the system itself rather than of the user's files (and everything below
+/// them: `/boot/efi`).
+const SYSTEM_MOUNTS: &[&str] = &["/boot", "/efi", "/usr", "/var", "/opt", "/srv", "/tmp", "/root", "/nix", "/gnu", "/snap", "/recovery", "/swap"];
+
+pub fn is_system_mount(m: &Path) -> bool {
+    SYSTEM_MOUNTS.iter().any(|s| m.starts_with(s))
+}
+
+/// Partition types that never hold the user's files: EFI, BIOS boot, extended boot,
+/// Microsoft reserved, Windows recovery, swap, extended partitions.
+fn is_system_partition(t: &str) -> bool {
+    matches!(
+        t.to_ascii_lowercase().as_str(),
+        "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+            | "0xef"
+            | "21686148-6449-6e6f-744e-656564454649"
+            | "bc13c2ff-59e6-4262-a352-b275fd6f7172"
+            | "e3c9e316-0b5c-4db8-817d-f92df00215ae"
+            | "de94bba4-06d1-4d40-a16a-bfd50179d6ac"
+            | "0x27"
+            | "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"
+            | "0x82"
+            | "0x05"
+            | "0x0f"
+    )
+}
+
+/// The volumes that hold the user's files, for the side panel: without the system's own
+/// (`/boot`, EFI, swap…), without `/` when the home folder is on a volume of its own, and
+/// without encrypted containers that are unlocked (their contents are listed). Phones stay.
+pub fn user_volumes(all: &[Volume], home: &Path) -> Vec<Volume> {
+    let root = Path::new("/");
+    let home_elsewhere = all.iter().flat_map(|v| &v.mount_points).any(|m| m != root && !is_system_mount(m) && home.starts_with(m));
+    all.iter()
+        .filter(|v| {
+            if v.is_device() {
+                return true;
+            }
+            if v.unlocked {
+                return false;
+            }
+            if v.mount_points.is_empty() {
+                return !is_system_partition(&v.partition_type);
+            }
+            v.mount_points.iter().any(|m| if m == root { !home_elsewhere } else { !is_system_mount(m) })
+        })
+        .map(|v| {
+            let mut v = v.clone();
+            if !v.is_device() {
+                v.mount_points.retain(|m| if m == root { !home_elsewhere } else { !is_system_mount(m) });
+            }
+            v
+        })
+        .collect()
 }
 
 /// Fill level of a mounted filesystem.
@@ -208,6 +276,7 @@ pub fn parse_udisks(reply: &glib::Variant) -> Vec<Volume> {
         let empty = Props::new();
         let d = drive.unwrap_or(&empty);
         let part = ifaces.get("org.freedesktop.UDisks2.Partition").unwrap_or(&empty);
+        let cleartext = ifaces.get("org.freedesktop.UDisks2.Encrypted").map(|e| o(e, "CleartextDevice")).unwrap_or_default();
         let (drive_name, removable, usb, optical, ejectable) = match drive {
             Some(d) => {
                 let name = [s(d, "Vendor"), s(d, "Model")].iter().filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join(" ");
@@ -236,6 +305,7 @@ pub fn parse_udisks(reply: &glib::Variant) -> Vec<Volume> {
             drive_object,
             mountable: fs.is_some(),
             system: b(block, "HintSystem"),
+            unlocked: !cleartext.is_empty() && cleartext != "/",
             uuid: s(block, "IdUUID"),
             fs_version: s(block, "IdVersion"),
             read_only: b(block, "ReadOnly"),
@@ -445,6 +515,73 @@ mod tests {
         assert_eq!(partition_type_name("unknown"), "unknown");
         let hdd = Volume { rotation_rate: 7200, ..Default::default() };
         assert_eq!(drive_kind(&hdd), "Hard disk (7200 rpm)");
+    }
+
+    #[test]
+    fn unlocked_containers_are_known() {
+        let text = "({objectpath '/o/b/sda2': {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sda2'>, 'IdUsage': <'crypto'>, 'IdType': <'crypto_LUKS'>, 'HintIgnore': <false>}, 'org.freedesktop.UDisks2.Encrypted': {'CleartextDevice': <objectpath '/o/b/dm_2d0'>}}, objectpath '/o/b/sdb1': {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sdb1'>, 'IdUsage': <'crypto'>, 'IdType': <'crypto_LUKS'>, 'HintIgnore': <false>}, 'org.freedesktop.UDisks2.Encrypted': {'CleartextDevice': <objectpath '/'>}}},)";
+        let v = glib::Variant::parse(Some(glib::VariantTy::new("(a{oa{sa{sv}}})").unwrap()), text).unwrap();
+        let vols = parse_udisks(&v);
+        let unlocked = |dev: &str| vols.iter().find(|v| v.device == dev).unwrap().unlocked;
+        assert!(unlocked("/dev/sda2"));
+        assert!(!unlocked("/dev/sdb1"));
+    }
+
+    fn mounted(device: &str, at: &[&str]) -> Volume {
+        Volume { device: device.into(), mount_points: at.iter().map(PathBuf::from).collect(), mountable: true, ..Default::default() }
+    }
+
+    fn shown(all: &[Volume]) -> Vec<String> {
+        user_volumes(all, Path::new("/home/me")).iter().map(|v| v.device.clone()).collect()
+    }
+
+    #[test]
+    fn the_side_panel_shows_the_users_volumes() {
+        let efi = Volume { device: "/dev/nvme0n1p1".into(), partition_type: "C12A7328-F81F-11D2-BA4B-00A0C93EC93B".into(), ..Default::default() };
+        let swap = Volume { device: "/dev/nvme0n1p3".into(), partition_type: "0x82".into(), ..Default::default() };
+        let windows = Volume { device: "/dev/sda1".into(), partition_type: "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7".into(), ..Default::default() };
+        let container = Volume { device: "/dev/nvme0n1p2".into(), fs_type: "crypto_LUKS".into(), unlocked: true, ..Default::default() };
+        let locked = Volume { device: "/dev/sdc1".into(), fs_type: "crypto_LUKS".into(), ..Default::default() };
+        let phone = Volume { device: "mtp://Pixel/".into(), protocol: "mtp".into(), label: "Internal shared storage".into(), mount_points: vec!["/run/user/1000/gvfs/mtp:host=Pixel/Internal shared storage".into()], ..Default::default() };
+        let all = vec![
+            mounted("/dev/mapper/root", &["/"]),
+            mounted("/dev/mapper/home", &["/home"]),
+            mounted("/dev/nvme0n1p1", &["/boot"]),
+            mounted("/dev/sdb1", &["/run/media/me/STICK"]),
+            mounted("/dev/mapper/veracrypt1", &["/home/me/Downloads"]),
+            mounted("/dev/sdd1", &["/boot/efi"]),
+            mounted("/dev/loop3", &["/snap/core/1"]),
+            efi.clone(),
+            swap,
+            windows,
+            container,
+            locked,
+            phone,
+        ];
+        // `/` stays out: the home folder has a volume of its own.
+        assert_eq!(shown(&all), ["/dev/mapper/home", "/dev/sdb1", "/dev/mapper/veracrypt1", "/dev/sda1", "/dev/sdc1", "mtp://Pixel/"]);
+        // Without one, `/` is where the user's files are.
+        let plain = vec![mounted("/dev/sda2", &["/"]), mounted("/dev/sda1", &["/boot/efi"]), efi];
+        assert_eq!(shown(&plain), ["/dev/sda2"]);
+        // One btrfs volume mounted on `/` and `/home`: shown as the home volume.
+        let btrfs = user_volumes(&[mounted("/dev/sda2", &["/", "/home"])], Path::new("/home/me"));
+        assert_eq!(btrfs[0].mount_points, vec![PathBuf::from("/home")]);
+        assert_eq!(btrfs[0].title(), "Home");
+        assert!(is_system_mount(Path::new("/boot/efi")) && !is_system_mount(Path::new("/bootleg")));
+    }
+
+    #[test]
+    fn volumes_are_named_after_their_folder() {
+        let v = |at: &str| Volume { size: 32_000_000_000, drive_name: "Kingston".into(), ..mounted("/dev/sdc1", &[at]) };
+        assert_eq!(v("/home").title(), "Home");
+        assert_eq!(v("/home/me/Downloads").title(), "Downloads");
+        assert_eq!(v("/mnt/data").title(), "data");
+        // Mounted automatically: the folder is just a stand-in (often the UUID).
+        assert_eq!(v("/run/media/me/1234-ABCD").title(), "32.0 GB Kingston");
+        let labelled = Volume { label: "STICK".into(), ..v("/mnt/data") };
+        assert_eq!(labelled.title(), "STICK");
+        let phone = Volume { protocol: "mtp".into(), drive_name: "Pixel 7".into(), label: "SD card".into(), ..Default::default() };
+        assert_eq!((phone.title(), drive_kind(&phone)), ("Pixel 7".to_string(), "Phone or tablet (MTP)".to_string()));
     }
 
     #[test]

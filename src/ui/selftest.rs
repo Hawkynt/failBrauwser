@@ -19,7 +19,10 @@
 //! `dialog-button <dialog text> : <button>`, `properties-choose-app <desktop id>`,
 //! `expect-default-app <content type> = <desktop id>`, `fake-phone <name> = <folder>`,
 //! `wait-drive-text <title> : <text>`, `wait-no-drive-text <title> : <text>`,
-//! `drive-button <title> : <row text> : <button>`, `expect-tabs <a | b>`, `expect-title <text>`, `quit`. Blank lines and `#` comments are ignored.
+//! `drive-button <title> : <row text> : <button>`, `expect-tabs <a | b>`, `expect-title <text>`,
+//! `wait-side-drive <name> : <place>`, `wait-no-side-drive <name>`, `expect-no-side-drive-at <path>`,
+//! `side-drive-click <name> : <place>`, `side-drive-menu <name> : <place> : <item>`,
+//! `expect-side-drive-marked <name> : <place>`, `quit`. Blank lines and `#` comments are ignored.
 
 use super::app::AppCtx;
 use super::window::Window;
@@ -574,6 +577,34 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             let got = w.win.title().map(|t| t.to_string()).unwrap_or_default();
             if !got.starts_with(&format!("{arg} - ")) {
                 return Err(format!("window title is {got:?}"));
+            }
+        }
+        "wait-side-drive" => {
+            // wait-side-drive <name> : <place>  (a row of the side panel's drive list)
+            let want = arg.to_string();
+            wait(r, move |r| Ok(super::sidebar::for_window(&r.window).ok_or("no sidebar")?.drive_texts().contains(&want)));
+        }
+        "wait-no-side-drive" => {
+            // wait-no-side-drive <name>  (no row of that name)
+            let prefix = format!("{arg} : ");
+            wait(r, move |r| Ok(!super::sidebar::for_window(&r.window).ok_or("no sidebar")?.drive_texts().iter().any(|t| t.starts_with(&prefix))));
+        }
+        "expect-no-side-drive-at" => {
+            let sb = super::sidebar::for_window(&w).ok_or("no sidebar")?;
+            if sb.drive_mounts().iter().any(|m| m == Path::new(arg)) {
+                return Err(format!("listed: {:?}", sb.drive_texts()));
+            }
+        }
+        "side-drive-click" => super::sidebar::for_window(&w).ok_or("no sidebar")?.click_drive(arg)?,
+        "side-drive-menu" => {
+            // side-drive-menu <name> : <place> : <item>
+            let (drive, item) = arg.rsplit_once(" : ").ok_or("usage: side-drive-menu <name> : <place> : <item>")?;
+            super::sidebar::for_window(&w).ok_or("no sidebar")?.drive_menu_item(drive, item)?;
+        }
+        "expect-side-drive-marked" => {
+            let got = super::sidebar::for_window(&w).ok_or("no sidebar")?.drives_marked().join(" | ");
+            if got != arg {
+                return Err(format!("marked: {got:?}"));
             }
         }
         "expect-tree-root" => {

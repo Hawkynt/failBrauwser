@@ -15,6 +15,8 @@ A fast, native GTK 3 file manager in the spirit of Thunar — that opens archive
   nothing is custom-drawn.
 - **Opens instantly.** After the first start a background instance keeps running; a new
   window appears ~40 ms after you click the launcher, using no CPU while idle.
+- **Drives in the side panel** with a fill bar under each mount point; the system's own
+  partitions (`/boot`, EFI, `/` when home has its own) stay out of the way.
 - **Drives page** with every volume, its fill level and mount point; mount, unmount and eject
   without freezing the window, and a properties window per drive (UUID, partition, model,
   serial, SSD or HDD, mount options, …).
@@ -142,7 +144,18 @@ entries can only be hidden), or to eject a volume; right-click the empty space t
 current folder or show a hidden entry again. Drag entries to reorder them, and drop folders
 from the file list onto the panel to add them. Middle-click opens an entry in a new tab. The
 first start takes over your GTK bookmarks; the arrangement is kept in
-`~/.config/failbrauwser/shortcuts`.
+`~/.config/failbrauwser/shortcuts`. The mounted volumes there are network shares and the
+like; drives and phones have their own list below.
+
+**Drives in the side panel:** between the entries and the folder tree, every connected drive,
+partition and phone that holds your files, each with the folder it is mounted on (or the
+phone's storage) and a bar showing how full it is. The system's own partitions are left out:
+`/boot`, the EFI partition, swap, `/usr`, `/var` and the like, and `/` when your home folder
+is on a partition of its own (then that one shows, as *Home*). A volume without a label is
+called after the folder it is mounted on (*Downloads* for one mounted on `~/Downloads`). Click
+a drive to open it (mounting it or connecting to the phone first), middle-click for a new
+tab, right-click to unmount, eject or see its properties. A drive plugged in moves the split
+down so the list fits; the bars follow as drives fill up.
 
 **Thumbnails:** *View → Show Thumbnails*. failBrauwser uses the freedesktop.org thumbnail
 cache (`~/.cache/thumbnails`), so thumbnails made by Thunar, Nautilus or Dolphin are reused

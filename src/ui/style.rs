@@ -29,6 +29,15 @@ list.fb-shortcuts row { min-height: 26px; padding: 0 8px; }
 list.fb-shortcuts row image.sidebar-icon:dir(ltr) { padding-right: 6px; }
 list.fb-shortcuts row image.sidebar-icon:dir(rtl) { padding-left: 6px; }
 
+/* The drive list: name, mount point in small print and a thin fill bar. */
+list.fb-drives row { padding: 3px 8px; }
+list.fb-drives row image.sidebar-icon:dir(ltr) { padding-right: 6px; }
+list.fb-drives row image.sidebar-icon:dir(rtl) { padding-left: 6px; }
+list.fb-drives label.fb-drive-place { font-size: smaller; }
+list.fb-drives levelbar trough { min-height: 4px; padding: 0; }
+list.fb-drives levelbar block { min-height: 4px; }
+separator.fb-drives-line { margin: 4px 8px; }
+
 /* Status bar: one line of text, not a band. */
 statusbar { padding: 1px 8px; }
 "#;
