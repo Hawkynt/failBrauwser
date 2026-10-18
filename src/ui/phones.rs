@@ -113,6 +113,12 @@ fn changed() {
     });
 }
 
+/// A folder standing in for a phone (self-test): its subfolders are the storages.
+pub fn add_fake(name: &str, dir: PathBuf) {
+    FAKES.with(|f| f.borrow_mut().push((name.to_string(), dir, true)));
+    changed();
+}
+
 /// The rows for the drives page: per device one per storage (with its fill level), or one
 /// for the device itself while it is closed or shows no storage.
 pub async fn volumes() -> Vec<(Volume, Option<Usage>)> {

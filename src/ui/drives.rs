@@ -175,6 +175,56 @@ pub fn click_empty(pane: &Rc<Pane>) -> bool {
     page.press_left(bottom + 5)
 }
 
+/// The texts of the rows of drives with this title, one string per row (tests).
+pub fn row_texts(pane: &Rc<Pane>, title: &str) -> Vec<String> {
+    let Some(page) = page_for(pane) else { return Vec::new() };
+    let vols = page.volumes.borrow();
+    page.list
+        .children()
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| vols.get(*i).is_some_and(|v| v.title() == title))
+        .map(|(_, row)| labels_in(row).join(" | "))
+        .collect()
+}
+
+fn labels_in(w: &gtk::Widget) -> Vec<String> {
+    if let Some(l) = w.downcast_ref::<gtk::Label>() {
+        return vec![l.text().to_string()];
+    }
+    if let Some(b) = w.downcast_ref::<gtk::Button>() {
+        return b.label().map(|l| vec![l.replace('_', "")]).unwrap_or_default();
+    }
+    w.downcast_ref::<gtk::Container>().map(|c| c.children().iter().flat_map(labels_in).collect()).unwrap_or_default()
+}
+
+/// Clicks a button (by its text) in the first row of the drive with this title whose texts
+/// contain `row_text` (tests).
+pub fn click_button(pane: &Rc<Pane>, title: &str, row_text: &str, button: &str) -> Result<(), String> {
+    let page = page_for(pane).ok_or("no drives page")?;
+    let rows = page.list.children();
+    let i = {
+        let vols = page.volumes.borrow();
+        (0..rows.len())
+            .find(|&i| vols.get(i).is_some_and(|v| v.title() == title) && labels_in(&rows[i]).join(" | ").contains(row_text))
+            .ok_or_else(|| format!("no drive {title:?} showing {row_text:?}"))?
+    };
+    fn find(w: &gtk::Widget, label: &str) -> Option<gtk::Button> {
+        if let Some(b) = w.downcast_ref::<gtk::Button>() {
+            if b.label().is_some_and(|l| l.replace('_', "") == label) {
+                return Some(b.clone());
+            }
+        }
+        w.downcast_ref::<gtk::Container>()?.children().iter().find_map(|c| find(c, label))
+    }
+    let b = find(&rows[i], button).ok_or_else(|| format!("no button {button:?}"))?;
+    if !b.is_sensitive() {
+        return Err(format!("button {button:?} is disabled"));
+    }
+    b.clicked();
+    Ok(())
+}
+
 /// Selects the drive with this title (tests).
 pub fn select(pane: &Rc<Pane>, title: &str) -> bool {
     let Some(page) = page_for(pane) else { return false };

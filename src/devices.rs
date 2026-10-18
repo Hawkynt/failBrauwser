@@ -168,3 +168,50 @@ pub fn named_root(p: &Path) -> Option<(PathBuf, String, DeviceKind)> {
     Some((root, name_from_host(&dir)?, kind))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kinds_from_addresses() {
+        assert_eq!(DeviceKind::of_uri("mtp://Google_Pixel_7_28041FDH2000ZA/"), Some(DeviceKind::Phone));
+        assert_eq!(DeviceKind::of_uri("gphoto2://Canon_Inc._Canon_Digital_Camera/"), Some(DeviceKind::Camera));
+        assert_eq!(DeviceKind::of_uri("afc://00008030-001A2D3E1E38802E/"), Some(DeviceKind::Apple));
+        assert_eq!(DeviceKind::of_uri("smb://server/share"), None);
+        assert_eq!(DeviceKind::of_fuse_dir("mtp:host=Google_Pixel_7_28041FDH2000ZA"), Some(DeviceKind::Phone));
+        assert_eq!(DeviceKind::from_protocol("gphoto2"), Some(DeviceKind::Camera));
+        assert_eq!(DeviceKind::from_protocol(""), None);
+    }
+
+    #[test]
+    fn names_from_hosts() {
+        assert_eq!(name_from_host("mtp:host=Google_Pixel_7_28041FDH2000ZA").as_deref(), Some("Google Pixel 7"));
+        assert_eq!(name_from_host("mtp://SAMSUNG_SAMSUNG_Android_R58M12ABCDE/").as_deref(), Some("SAMSUNG SAMSUNG Android"));
+        assert_eq!(name_from_host("mtp:host=Xiaomi_Mi_9T_Pro").as_deref(), Some("Xiaomi Mi 9T Pro"));
+        assert_eq!(name_from_host("gphoto2:host=Nikon_DSC_D3300").as_deref(), Some("Nikon DSC D3300"));
+        assert_eq!(name_from_host("mtp:host=%5Busb%3A001%2C005%5D"), None);
+        assert_eq!(name_from_host("smb-share:server=a,share=b"), None);
+    }
+
+    #[test]
+    fn errors_come_with_advice() {
+        let busy = explain_error(DeviceKind::Phone, "Unable to open MTP device '[usb:001,005]'");
+        assert!(busy.starts_with("Unable to open MTP device"));
+        assert!(busy.contains("Another program"));
+        assert!(explain_error(DeviceKind::Phone, "Timeout was reached").contains("File transfer"));
+        assert!(explain_error(DeviceKind::Apple, "").starts_with("Unlock the iPhone"));
+        assert!(no_storage_hint(DeviceKind::Phone).contains("unlock"));
+    }
+
+    #[test]
+    fn device_folders_are_named() {
+        let fuse = crate::ops::gvfs::fuse_root().join("mtp:host=Google_Pixel_7_28041FDH2000ZA");
+        let (root, name, kind) = named_root(&fuse.join("Internal shared storage/DCIM")).unwrap();
+        assert_eq!((root.as_path(), name.as_str(), kind), (fuse.as_path(), "Google Pixel 7", DeviceKind::Phone));
+        assert!(named_root(Path::new("/home/me")).is_none());
+        set_named_roots(vec![(fuse.clone(), "Pixel 7".into(), DeviceKind::Phone), (PathBuf::from("/tmp/fake-phone"), "Fake".into(), DeviceKind::Phone)]);
+        assert_eq!(named_root(&fuse).unwrap().1, "Pixel 7");
+        assert_eq!(named_root(Path::new("/tmp/fake-phone/Card")).unwrap().0, PathBuf::from("/tmp/fake-phone"));
+        set_named_roots(Vec::new());
+    }
+}
