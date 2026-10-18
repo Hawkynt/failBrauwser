@@ -5,6 +5,7 @@
 use super::pane::Pane;
 use super::util;
 use super::window::Window;
+use failbrauwser::devices::{self, DeviceKind};
 use failbrauwser::drives::{self, Usage, Volume};
 use failbrauwser::fs::format::human_size;
 use failbrauwser::location::Location;
@@ -83,6 +84,16 @@ pub fn attach(w: &Window, pane: &Rc<Pane>) {
         weak: RefCell::new(Weak::new()),
     });
     *page.weak.borrow_mut() = Rc::downgrade(&page);
+    super::phones::watch();
+    let weak = Rc::downgrade(&page);
+    super::phones::connect_changed(move || {
+        let Some(p) = weak.upgrade() else { return false };
+        // Only while the page is shown, like the UDisks2 notifications.
+        if p.subscription.borrow().is_some() {
+            p.schedule_refresh();
+        }
+        true
+    });
     let weak = Rc::downgrade(&page);
     page.list.connect_row_activated(move |_, row| {
         if let Some(p) = weak.upgrade() {
@@ -241,7 +252,7 @@ impl DrivesPage {
                 None => gio::spawn_blocking(drives::read_mountinfo).await.unwrap_or_default(),
             };
             // statvfs can hang on a dead network mount: never on the UI thread.
-            let with_usage = gio::spawn_blocking(move || {
+            let mut with_usage = gio::spawn_blocking(move || {
                 vols.into_iter().map(|v| {
                     let u = v.mount_point().and_then(|m| drives::usage(m));
                     (v, u)
@@ -249,6 +260,8 @@ impl DrivesPage {
             })
             .await
             .unwrap_or_default();
+            // Phones next to the USB sticks (their fill levels asked of GVfs, not statvfs).
+            with_usage.extend(super::phones::volumes().await);
             me.rebuild(with_usage);
         });
     }
@@ -297,11 +310,13 @@ impl DrivesPage {
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         grid.attach(&title, 1, 0, 1, 1);
 
-        let mut sub = vec![v.device.clone()];
+        // A phone: which storage and what kind of device, not its address.
+        let mut sub = if v.is_device() { vec![v.label.clone(), drives::drive_kind(v)] } else { vec![v.device.clone()] };
+        sub.retain(|s| !s.is_empty());
         if !v.fs_type.is_empty() {
             sub.push(v.fs_type.clone());
         }
-        if !v.drive_name.is_empty() {
+        if !v.drive_name.is_empty() && !v.is_device() {
             sub.push(v.drive_name.clone());
         }
         let subtitle = gtk::Label::new(Some(&sub.join(" · ")));
@@ -325,6 +340,10 @@ impl DrivesPage {
         grid.attach(&bar, 1, 2, 1, 1);
 
         let text = match (usage, v.mount_point()) {
+            (Some(u), Some(_)) if v.is_device() => format!("{} free of {} — {:.0} % used", human_size(u.free), human_size(u.total), u.fraction() * 100.0),
+            _ if no_storage(v) => devices::no_storage_hint(DeviceKind::Phone).to_string(),
+            (None, Some(_)) if v.is_device() => "Connected".to_string(),
+            (None, None) if v.is_device() => "Connected — open it to see its files".to_string(),
             (Some(u), Some(m)) => format!("{} free of {} — {:.0} % used — {}", human_size(u.free), human_size(u.total), u.fraction() * 100.0, m.display()),
             (None, Some(m)) => format!("Mounted at {}", m.display()),
             _ if v.fs_type.starts_with("crypto") => format!("Encrypted, locked — {}", human_size(v.size)),
@@ -337,7 +356,7 @@ impl DrivesPage {
 
         let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         buttons.set_valign(gtk::Align::Center);
-        let busy = self.busy.borrow().contains(&v.block_object);
+        let busy = self.busy.borrow().contains(&busy_key(v));
         let add = |label: &str, tip: &str, f: Box<dyn Fn(&DrivesPage)>| {
             let b = gtk::Button::with_mnemonic(label);
             b.set_tooltip_text(Some(tip));
@@ -351,8 +370,12 @@ impl DrivesPage {
             buttons.pack_start(&b, false, false, 0);
         };
         let vol = v.clone();
-        if v.mount_point().is_some() {
+        if no_storage(v) {
+            add("_Retry", "Connect again, after unlocking the phone", Box::new(move |p| p.reconnect(&vol)));
+        } else if v.mount_point().is_some() {
             add("_Open", "Show the files on this drive", Box::new(move |p| p.open(&vol)));
+        } else if v.is_device() {
+            add("_Open", "Connect and show the files on this device", Box::new(move |p| p.open(&vol)));
         } else if v.mountable && !v.block_object.is_empty() {
             add("_Mount", "Mount and open this drive", Box::new(move |p| p.open(&vol)));
         }
@@ -364,6 +387,9 @@ impl DrivesPage {
         if (v.usb || v.ejectable) && !v.drive_object.is_empty() {
             let vol = v.clone();
             add("_Eject", "Unmount and power off, safe to unplug", Box::new(move |p| p.unmount(&vol, true)));
+        } else if v.is_device() && v.mount_point().is_some() {
+            let vol = v.clone();
+            add("_Eject", "Close the connection, safe to unplug", Box::new(move |p| p.unmount(&vol, true)));
         }
         let info = gtk::Button::from_icon_name(Some("document-properties-symbolic"), gtk::IconSize::Button);
         info.set_tooltip_text(Some("Properties"));
@@ -400,7 +426,9 @@ impl DrivesPage {
             menu.append(&item);
         };
         let vol = v.clone();
-        if v.mount_point().is_some() {
+        if no_storage(&v) {
+            add("_Retry", Box::new(move |p| p.reconnect(&vol)));
+        } else if v.mount_point().is_some() || v.is_device() {
             add("_Open", Box::new(move |p| p.open(&vol)));
         } else if v.mountable {
             add("_Mount", Box::new(move |p| p.open(&vol)));
@@ -410,7 +438,7 @@ impl DrivesPage {
             let vol = v.clone();
             add("_Unmount", Box::new(move |p| p.unmount(&vol, false)));
         }
-        if (v.usb || v.ejectable) && !v.drive_object.is_empty() {
+        if (v.usb || v.ejectable) && !v.drive_object.is_empty() || v.is_device() && v.mount_point().is_some() {
             let vol = v.clone();
             add("_Eject", Box::new(move |p| p.unmount(&vol, true)));
         }
@@ -552,6 +580,7 @@ impl DrivesPage {
                 ("Firmware:", v.revision.clone()),
                 ("Kind:", drives::drive_kind(v)),
                 ("Connection:", match v.bus.as_str() {
+                    "usb" if v.is_device() => format!("USB ({})", v.protocol.to_uppercase()),
                     "usb" => "USB".into(),
                     "sdio" => "SD card reader".into(),
                     "ieee1394" => "FireWire".into(),
@@ -565,8 +594,10 @@ impl DrivesPage {
         );
         area.add(&grid);
 
-        if v.mount_point().is_some() || (v.mountable && !v.block_object.is_empty()) {
-            d.add_button(if v.mount_point().is_some() { "_Open" } else { "_Mount and Open" }, gtk::ResponseType::Accept);
+        if v.mount_point().is_some() && !no_storage(v) || v.is_device() {
+            d.add_button("_Open", gtk::ResponseType::Accept);
+        } else if v.mountable && !v.block_object.is_empty() {
+            d.add_button("_Mount and Open", gtk::ResponseType::Accept);
         }
         d.add_button("_Close", gtk::ResponseType::Close);
         d.set_default_response(gtk::ResponseType::Close);
@@ -584,6 +615,10 @@ impl DrivesPage {
     }
 
     fn open(&self, v: &Volume) {
+        if v.is_device() && (v.mount_point().is_none() || no_storage(v)) {
+            self.open_device(v);
+            return;
+        }
         if let Some(m) = v.mount_point() {
             self.navigate(Location::Dir(m.clone()));
             return;
@@ -607,22 +642,49 @@ impl DrivesPage {
         });
     }
 
+    /// Connects to a phone or camera and shows its files.
+    fn open_device(&self, v: &Volume) {
+        let Some(w) = self.window.upgrade() else { return };
+        let me = self.me();
+        let key = busy_key(v);
+        self.set_busy(&key, true);
+        super::phones::open(w.win.upcast_ref(), &v.device, move |res| {
+            me.set_busy(&key, false);
+            match res {
+                Ok(path) => me.navigate(Location::Dir(path)),
+                Err(msg) if msg.is_empty() => {}
+                Err(msg) => me.error("Cannot open the device", &msg),
+            }
+        });
+    }
+
+    /// Closes the connection to a device that showed no storage and opens it again (once
+    /// the phone is unlocked, its storages show up).
+    fn reconnect(&self, v: &Volume) {
+        let Some(w) = self.window.upgrade() else { return };
+        let me = self.me();
+        let vol = v.clone();
+        self.set_busy(&busy_key(v), true);
+        super::phones::eject(w.win.upcast_ref(), &v.device, move |_| {
+            me.set_busy(&busy_key(&vol), false);
+            me.open_device(&vol);
+        });
+    }
+
     /// Unmounts (and for `eject`, powers off / ejects the whole drive). Tabs showing the
     /// drive are moved to the drives page first, so they do not keep it busy.
     fn unmount(&self, v: &Volume, eject: bool) {
+        if v.is_device() {
+            self.eject_device(v);
+            return;
+        }
         let mounts: Vec<PathBuf> = if eject {
             self.volumes.borrow().iter().filter(|x| x.drive_object == v.drive_object).flat_map(|x| x.mount_points.clone()).collect()
         } else {
             v.mount_points.clone()
         };
         if let Some(w) = self.window.upgrade() {
-            for win in w.app.windows() {
-                for p in win.panes() {
-                    if p.location().nearest_dir().is_some_and(|d| mounts.iter().any(|m| d.starts_with(m))) {
-                        p.navigate(Location::Drives);
-                    }
-                }
-            }
+            leave(&w, &mounts);
         }
         let targets: Vec<String> = if eject {
             self.volumes.borrow().iter().filter(|x| x.drive_object == v.drive_object && !x.mount_points.is_empty()).map(|x| x.block_object.clone()).collect()
@@ -652,6 +714,26 @@ impl DrivesPage {
         });
     }
 
+    /// Closes the connection to a phone or camera; tabs showing its files go to the drives
+    /// page first.
+    fn eject_device(&self, v: &Volume) {
+        let Some(w) = self.window.upgrade() else { return };
+        if let Some(root) = super::phones::root_path(&v.device) {
+            leave(&w, &[root]);
+        }
+        let me = self.me();
+        let key = busy_key(v);
+        self.set_busy(&key, true);
+        super::phones::eject(w.win.upcast_ref(), &v.device, move |res| {
+            me.set_busy(&key, false);
+            match res {
+                Ok(()) => me.refresh(),
+                Err(msg) if msg.is_empty() => {}
+                Err(msg) => me.error("Cannot eject the device", &msg),
+            }
+        });
+    }
+
     fn set_busy(&self, obj: &str, on: bool) {
         {
             let mut b = self.busy.borrow_mut();
@@ -672,6 +754,27 @@ impl DrivesPage {
     fn error(&self, title: &str, msg: &str) {
         if let Some(w) = self.window.upgrade() {
             util::show_error(&w.win, title, msg);
+        }
+    }
+}
+
+/// What marks a volume as busy: its UDisks2 object, or a device's address.
+fn busy_key(v: &Volume) -> String {
+    if v.is_device() { v.device.clone() } else { v.block_object.clone() }
+}
+
+/// A phone that is open but shows no storage (locked, or access not allowed yet).
+fn no_storage(v: &Volume) -> bool {
+    v.device_kind() == Some(DeviceKind::Phone) && v.mount_point().is_some() && v.label.is_empty()
+}
+
+/// Moves every tab showing a folder below one of `mounts` to the drives page.
+fn leave(w: &Window, mounts: &[PathBuf]) {
+    for win in w.app.windows() {
+        for p in win.panes() {
+            if p.location().nearest_dir().is_some_and(|d| mounts.iter().any(|m| d.starts_with(m))) {
+                p.navigate(Location::Drives);
+            }
         }
     }
 }

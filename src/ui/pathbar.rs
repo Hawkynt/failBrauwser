@@ -45,9 +45,21 @@ pub fn crumbs_for(loc: &Location) -> Vec<Crumb> {
         cur = p;
     }
     chain.reverse();
+    // On a phone the path starts at the phone, not at gvfsd-fuse's folder.
+    let device = loc.nearest_dir().and_then(|d| failbrauwser::devices::named_root(&d));
+    if let Some((root, ..)) = &device {
+        if let Some(i) = chain.iter().position(|l| matches!(l, Location::Dir(p) if p == root)) {
+            chain.drain(..i);
+        }
+    }
     chain
         .into_iter()
         .map(|l| {
+            if let (Location::Dir(p), Some((root, name, kind))) = (&l, &device) {
+                if p == root {
+                    return Crumb { label: name.clone(), icon: Some(kind.symbolic_icon()), location: l };
+                }
+            }
             let (label, icon) = match &l {
                 Location::Dir(p) if *p == glib::home_dir() => (l.title(), Some("user-home-symbolic")),
                 Location::Dir(p) if p.parent().is_none() => ("/".to_string(), None),

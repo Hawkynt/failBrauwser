@@ -34,8 +34,12 @@ pub fn share_root(p: &Path) -> Option<PathBuf> {
     None
 }
 
-/// A readable name for the share: `share on server` for SMB, else its folder name.
+/// A readable name for the share: `share on server` for SMB, the device's name for a phone,
+/// else its folder name.
 pub fn share_name(root: &Path) -> String {
+    if let Some((_, name, _)) = crate::devices::named_root(root).filter(|(r, ..)| r == root) {
+        return name;
+    }
     let dir = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let field = |key: &str| dir.split([':', ',']).find_map(|kv| kv.strip_prefix(key).map(str::to_string));
     match (field("share="), field("server=")) {
