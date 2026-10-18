@@ -29,6 +29,8 @@ pub struct Volume {
     pub mountable: bool,
     /// A system volume (root, boot, …) as UDisks2 sees it.
     pub system: bool,
+    /// An encrypted container that is unlocked: its contents are a volume of their own.
+    pub unlocked: bool,
     pub uuid: String,
     /// File system version ("1.0" for ext4, "FAT32", …).
     pub fs_version: String,
@@ -208,6 +210,7 @@ pub fn parse_udisks(reply: &glib::Variant) -> Vec<Volume> {
         let empty = Props::new();
         let d = drive.unwrap_or(&empty);
         let part = ifaces.get("org.freedesktop.UDisks2.Partition").unwrap_or(&empty);
+        let cleartext = ifaces.get("org.freedesktop.UDisks2.Encrypted").map(|e| o(e, "CleartextDevice")).unwrap_or_default();
         let (drive_name, removable, usb, optical, ejectable) = match drive {
             Some(d) => {
                 let name = [s(d, "Vendor"), s(d, "Model")].iter().filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join(" ");
@@ -236,6 +239,7 @@ pub fn parse_udisks(reply: &glib::Variant) -> Vec<Volume> {
             drive_object,
             mountable: fs.is_some(),
             system: b(block, "HintSystem"),
+            unlocked: !cleartext.is_empty() && cleartext != "/",
             uuid: s(block, "IdUUID"),
             fs_version: s(block, "IdVersion"),
             read_only: b(block, "ReadOnly"),

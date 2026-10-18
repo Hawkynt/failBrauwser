@@ -396,6 +396,7 @@ impl DrivesPage {
             (None, None) if v.is_device() => "Connected — open it to see its files".to_string(),
             (Some(u), Some(m)) => format!("{} free of {} — {:.0} % used — {}", human_size(u.free), human_size(u.total), u.fraction() * 100.0, m.display()),
             (None, Some(m)) => format!("Mounted at {}", m.display()),
+            _ if v.unlocked => format!("Encrypted, unlocked — {}", human_size(v.size)),
             _ if v.fs_type.starts_with("crypto") => format!("Encrypted, locked — {}", human_size(v.size)),
             _ => format!("Not mounted — {}", human_size(v.size)),
         };
