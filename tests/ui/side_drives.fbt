@@ -1,0 +1,28 @@
+# The side panel lists the drives holding the user's files, phones included, never /boot.
+fake-phone Pixel 7 = $T/phone
+wait-side-drive Pixel 7 : Internal shared storage
+wait-side-drive Pixel 7 : SD card
+expect-no-side-drive-at /boot
+expect-no-side-drive-at /boot/efi
+# A click opens the storage; its row is marked while it is shown.
+side-drive-click Pixel 7 : SD card
+wait-location $T/phone/SD card
+expect-side-drive-marked Pixel 7 : SD card
+expect-crumbs Pixel 7 > SD card
+open $T/elsewhere
+expect-side-drive-marked
+# Right-click: open in a new tab; eject moves both tabs away and the phone stays, closed.
+side-drive-click Pixel 7 : SD card
+wait-location $T/phone/SD card
+side-drive-menu Pixel 7 : Internal shared storage : Open in New Tab
+wait-location $T/phone/Internal shared storage
+expect-tabs SD card | Internal shared storage
+side-drive-menu Pixel 7 : SD card : Eject
+wait-side-drive Pixel 7 : Connected
+expect-tabs Drives | Drives
+# Opening it again connects first.
+side-drive-click Pixel 7 : Connected
+wait-side-drive Pixel 7 : SD card
+# A locked phone says so.
+fake-phone Locked Phone = $T/locked
+wait-side-drive Locked Phone : Locked — unlock the phone

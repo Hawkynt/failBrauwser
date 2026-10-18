@@ -518,6 +518,73 @@ mod tests {
     }
 
     #[test]
+    fn unlocked_containers_are_known() {
+        let text = "({objectpath '/o/b/sda2': {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sda2'>, 'IdUsage': <'crypto'>, 'IdType': <'crypto_LUKS'>, 'HintIgnore': <false>}, 'org.freedesktop.UDisks2.Encrypted': {'CleartextDevice': <objectpath '/o/b/dm_2d0'>}}, objectpath '/o/b/sdb1': {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sdb1'>, 'IdUsage': <'crypto'>, 'IdType': <'crypto_LUKS'>, 'HintIgnore': <false>}, 'org.freedesktop.UDisks2.Encrypted': {'CleartextDevice': <objectpath '/'>}}},)";
+        let v = glib::Variant::parse(Some(glib::VariantTy::new("(a{oa{sa{sv}}})").unwrap()), text).unwrap();
+        let vols = parse_udisks(&v);
+        let unlocked = |dev: &str| vols.iter().find(|v| v.device == dev).unwrap().unlocked;
+        assert!(unlocked("/dev/sda2"));
+        assert!(!unlocked("/dev/sdb1"));
+    }
+
+    fn mounted(device: &str, at: &[&str]) -> Volume {
+        Volume { device: device.into(), mount_points: at.iter().map(PathBuf::from).collect(), mountable: true, ..Default::default() }
+    }
+
+    fn shown(all: &[Volume]) -> Vec<String> {
+        user_volumes(all, Path::new("/home/me")).iter().map(|v| v.device.clone()).collect()
+    }
+
+    #[test]
+    fn the_side_panel_shows_the_users_volumes() {
+        let efi = Volume { device: "/dev/nvme0n1p1".into(), partition_type: "C12A7328-F81F-11D2-BA4B-00A0C93EC93B".into(), ..Default::default() };
+        let swap = Volume { device: "/dev/nvme0n1p3".into(), partition_type: "0x82".into(), ..Default::default() };
+        let windows = Volume { device: "/dev/sda1".into(), partition_type: "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7".into(), ..Default::default() };
+        let container = Volume { device: "/dev/nvme0n1p2".into(), fs_type: "crypto_LUKS".into(), unlocked: true, ..Default::default() };
+        let locked = Volume { device: "/dev/sdc1".into(), fs_type: "crypto_LUKS".into(), ..Default::default() };
+        let phone = Volume { device: "mtp://Pixel/".into(), protocol: "mtp".into(), label: "Internal shared storage".into(), mount_points: vec!["/run/user/1000/gvfs/mtp:host=Pixel/Internal shared storage".into()], ..Default::default() };
+        let all = vec![
+            mounted("/dev/mapper/root", &["/"]),
+            mounted("/dev/mapper/home", &["/home"]),
+            mounted("/dev/nvme0n1p1", &["/boot"]),
+            mounted("/dev/sdb1", &["/run/media/me/STICK"]),
+            mounted("/dev/mapper/veracrypt1", &["/home/me/Downloads"]),
+            mounted("/dev/sdd1", &["/boot/efi"]),
+            mounted("/dev/loop3", &["/snap/core/1"]),
+            efi.clone(),
+            swap,
+            windows,
+            container,
+            locked,
+            phone,
+        ];
+        // `/` stays out: the home folder has a volume of its own.
+        assert_eq!(shown(&all), ["/dev/mapper/home", "/dev/sdb1", "/dev/mapper/veracrypt1", "/dev/sda1", "/dev/sdc1", "mtp://Pixel/"]);
+        // Without one, `/` is where the user's files are.
+        let plain = vec![mounted("/dev/sda2", &["/"]), mounted("/dev/sda1", &["/boot/efi"]), efi];
+        assert_eq!(shown(&plain), ["/dev/sda2"]);
+        // One btrfs volume mounted on `/` and `/home`: shown as the home volume.
+        let btrfs = user_volumes(&[mounted("/dev/sda2", &["/", "/home"])], Path::new("/home/me"));
+        assert_eq!(btrfs[0].mount_points, vec![PathBuf::from("/home")]);
+        assert_eq!(btrfs[0].title(), "Home");
+        assert!(is_system_mount(Path::new("/boot/efi")) && !is_system_mount(Path::new("/bootleg")));
+    }
+
+    #[test]
+    fn volumes_are_named_after_their_folder() {
+        let v = |at: &str| Volume { size: 32_000_000_000, drive_name: "Kingston".into(), ..mounted("/dev/sdc1", &[at]) };
+        assert_eq!(v("/home").title(), "Home");
+        assert_eq!(v("/home/me/Downloads").title(), "Downloads");
+        assert_eq!(v("/mnt/data").title(), "data");
+        // Mounted automatically: the folder is just a stand-in (often the UUID).
+        assert_eq!(v("/run/media/me/1234-ABCD").title(), "32.0 GB Kingston");
+        let labelled = Volume { label: "STICK".into(), ..v("/mnt/data") };
+        assert_eq!(labelled.title(), "STICK");
+        let phone = Volume { protocol: "mtp".into(), drive_name: "Pixel 7".into(), label: "SD card".into(), ..Default::default() };
+        assert_eq!((phone.title(), drive_kind(&phone)), ("Pixel 7".to_string(), "Phone or tablet (MTP)".to_string()));
+    }
+
+    #[test]
     fn titles_and_usage() {
         let mut v = Volume { device: "/dev/sdc1".into(), size: 32_000_000_000, drive_name: "Kingston".into(), ..Default::default() };
         assert_eq!(v.title(), "32.0 GB Kingston");

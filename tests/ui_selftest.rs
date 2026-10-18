@@ -138,6 +138,15 @@ fn phones_with_the_drives() {
 }
 
 #[test]
+fn drives_in_the_side_panel() {
+    run("side_drives.fbt", |t| {
+        for d in ["phone/Internal shared storage/DCIM", "phone/SD card/Music", "locked", "elsewhere"] {
+            std::fs::create_dir_all(t.join(d)).unwrap();
+        }
+    });
+}
+
+#[test]
 fn archives_as_folders() {
     if !failbrauwser::archive::client::locate_helper().is_file() {
         eprintln!("fb-archive helper not built, skipping");

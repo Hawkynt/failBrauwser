@@ -846,6 +846,56 @@ impl Sidebar {
         Ok(self.rows.borrow()[i].index)
     }
 
+    /// The drive rows as `name : place` (tests).
+    pub fn drive_texts(&self) -> Vec<String> {
+        self.drive_rows.borrow().iter().map(|(v, _)| format!("{} : {}", v.title(), drive_place(v))).collect()
+    }
+
+    /// The drives shown, with where they are mounted (tests).
+    pub fn drive_mounts(&self) -> Vec<PathBuf> {
+        self.drive_rows.borrow().iter().flat_map(|(v, _)| v.mount_points.clone()).collect()
+    }
+
+    /// The drive rows marked as the current place, as `name : place` (tests).
+    pub fn drives_marked(&self) -> Vec<String> {
+        let texts = self.drive_texts();
+        (0..texts.len())
+            .filter(|&i| self.drives.row_at_index(i as i32).is_some_and(|r| r.state_flags().contains(gtk::StateFlags::SELECTED)))
+            .map(|i| texts[i].clone())
+            .collect()
+    }
+
+    fn drive_labelled(&self, text: &str) -> Result<(gtk::ListBoxRow, Volume, Option<Usage>), String> {
+        let i = self.drive_texts().iter().position(|t| t == text).ok_or_else(|| format!("no drive {text:?}, have {:?}", self.drive_texts()))?;
+        let row = self.drives.row_at_index(i as i32).ok_or("row missing")?;
+        let (v, u) = self.drive_rows.borrow()[i].clone();
+        Ok((row, v, u))
+    }
+
+    /// Clicks a drive row, `name : place` (tests).
+    pub fn click_drive(&self, text: &str) -> Result<(), String> {
+        let (row, ..) = self.drive_labelled(text)?;
+        if !row.is_sensitive() {
+            return Err("the drive is busy".into());
+        }
+        row.activate();
+        Ok(())
+    }
+
+    /// Activates an item (menu text without mnemonics) of a drive row's right-click menu (tests).
+    pub fn drive_menu_item(self: &Rc<Self>, text: &str, item: &str) -> Result<(), String> {
+        let (_, v, u) = self.drive_labelled(text)?;
+        let menu = self.drive_menu(&v, u);
+        let found = menu
+            .children()
+            .into_iter()
+            .filter_map(|c| c.downcast::<gtk::MenuItem>().ok())
+            .find(|m| m.label().is_some_and(|l| l.replace('_', "") == item))
+            .ok_or_else(|| format!("no menu item {item:?}"))?;
+        found.activate();
+        Ok(())
+    }
+
     /// The folder at the top of the tree.
     pub fn root_path(&self) -> Option<PathBuf> {
         self.root.borrow().clone()
