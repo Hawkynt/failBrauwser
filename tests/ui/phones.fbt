@@ -1,0 +1,33 @@
+# A phone shows up next to the USB sticks under its own name, one row per storage with its
+# fill level.
+fake-phone Pixel 7 = $T/phone
+action win.drives
+wait-drive Pixel 7
+wait-drive-text Pixel 7 : Internal shared storage
+wait-drive-text Pixel 7 : SD card
+wait-drive-text Pixel 7 : Phone or tablet (MTP)
+wait-drive-text Pixel 7 : free of
+# Opening a storage: the path starts at the phone, tab and window are named after it.
+drive-button Pixel 7 : Internal shared storage : Open
+wait-location $T/phone/Internal shared storage
+expect-crumbs Pixel 7 > Internal shared storage
+expect-title Internal shared storage
+wait-row DCIM
+crumb-click Pixel 7
+expect-location $T/phone
+expect-title Pixel 7
+wait-row SD card
+# Ejecting moves tabs on the phone away; it stays listed, closed, and opens again.
+tab drives:///
+wait-drive Pixel 7
+drive-button Pixel 7 : SD card : Eject
+wait-drive-text Pixel 7 : Connected — open it to see its files
+expect-tabs Drives | Drives
+drive-button Pixel 7 : Connected : Open
+wait-location $T/phone
+# A phone that shows no storage (locked) says what to do, and Retry connects again.
+fake-phone Locked Phone = $T/locked
+action win.drives
+wait-drive-text Locked Phone : unlock the phone
+drive-button Locked Phone : unlock the phone : Retry
+wait-dialog Unlock the phone

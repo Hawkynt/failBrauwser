@@ -17,7 +17,9 @@
 //! `shortcut-drag <entry> > <before entry>`, `shortcut-drop <folder> > <before entry>`,
 //! `window-snapshot <png>`, `wait-error <text>`, `wait-dialog <text>`,
 //! `dialog-button <dialog text> : <button>`, `properties-choose-app <desktop id>`,
-//! `expect-default-app <content type> = <desktop id>`, `quit`. Blank lines and `#` comments are ignored.
+//! `expect-default-app <content type> = <desktop id>`, `fake-phone <name> = <folder>`,
+//! `wait-drive-text <title> : <text>`, `wait-no-drive-text <title> : <text>`,
+//! `drive-button <title> : <row text> : <button>`, `expect-tabs <a | b>`, `expect-title <text>`, `quit`. Blank lines and `#` comments are ignored.
 
 use super::app::AppCtx;
 use super::window::Window;
@@ -294,6 +296,7 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         "window-snapshot" => {
             // The window drawn into a PNG (works on any compositor, unlike `screenshot`).
             let alloc = w.win.allocation();
+            w.win.size_allocate(&alloc);
             let surface = gtk::cairo::ImageSurface::create(gtk::cairo::Format::ARgb32, alloc.width(), alloc.height()).map_err(|e| e.to_string())?;
             let cr = gtk::cairo::Context::new(&surface).map_err(|e| e.to_string())?;
             w.win.draw(&cr);
@@ -537,6 +540,41 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             // A volume with this title is listed (e.g. "File System" for /).
             let want = arg.to_string();
             wait(r, move |r| Ok(super::drives::shown_volumes(&r.window.current_pane()).iter().any(|v| v.title() == want)));
+        }
+        "fake-phone" => {
+            // fake-phone <name> = <folder>: a phone whose storages are the folder's subfolders.
+            let (name, dir) = arg.split_once(" = ").ok_or("usage: fake-phone <name> = <folder>")?;
+            super::phones::add_fake(name.trim(), PathBuf::from(dir.trim()));
+        }
+        "wait-drive-text" => {
+            // wait-drive-text <title> : <text>  (a row of that drive shows the text)
+            let (title, text) = arg.split_once(" : ").ok_or("usage: wait-drive-text <title> : <text>")?;
+            let (title, text) = (title.trim().to_string(), text.trim().to_string());
+            wait(r, move |r| Ok(super::drives::row_texts(&r.window.current_pane(), &title).iter().any(|t| t.contains(&text))));
+        }
+        "wait-no-drive-text" => {
+            let (title, text) = arg.split_once(" : ").ok_or("usage: wait-no-drive-text <title> : <text>")?;
+            let (title, text) = (title.trim().to_string(), text.trim().to_string());
+            wait(r, move |r| Ok(!super::drives::row_texts(&r.window.current_pane(), &title).iter().any(|t| t.contains(&text))));
+        }
+        "drive-button" => {
+            // drive-button <title> : <text in the row> : <button>
+            let parts: Vec<&str> = arg.split(" : ").map(str::trim).collect();
+            let [title, row, button] = parts[..] else { return Err("usage: drive-button <title> : <row text> : <button>".into()) };
+            super::drives::click_button(&w.current_pane(), title, row, button)?;
+        }
+        "expect-tabs" => {
+            // expect-tabs <title> | <title>  (the tabs of the window, in order)
+            let got = w.panes().iter().map(|p| p.location().title()).collect::<Vec<_>>().join(" | ");
+            if got != arg {
+                return Err(format!("tabs are {got}"));
+            }
+        }
+        "expect-title" => {
+            let got = w.win.title().map(|t| t.to_string()).unwrap_or_default();
+            if !got.starts_with(&format!("{arg} - ")) {
+                return Err(format!("window title is {got:?}"));
+            }
         }
         "expect-tree-root" => {
             let sb = super::sidebar::for_window(&w).ok_or("no sidebar")?;

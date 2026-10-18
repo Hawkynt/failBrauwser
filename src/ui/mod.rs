@@ -16,6 +16,7 @@ pub mod jobs;
 pub mod model;
 pub mod pane;
 pub mod pathbar;
+pub mod phones;
 pub mod properties;
 pub mod remote;
 pub mod searchbar;

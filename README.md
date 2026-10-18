@@ -18,6 +18,9 @@ A fast, native GTK 3 file manager in the spirit of Thunar — that opens archive
 - **Drives page** with every volume, its fill level and mount point; mount, unmount and eject
   without freezing the window, and a properties window per drive (UUID, partition, model,
   serial, SSD or HDD, mount options, …).
+- **Phones and cameras** next to the USB sticks under their own name (“Pixel 7”), one row per
+  storage with its fill level; open and eject them there, and a locked phone tells you what
+  to tap.
 - **Trash shared with Thunar** and other file managers (freedesktop.org spec): browse it,
   restore to the original place, delete permanently, empty.
 - **Thumbnails** for pictures, videos and documents (shared with other file managers), and
@@ -76,7 +79,8 @@ that; windows then take a moment longer the first time).
   `vendor/`). `install.sh` downloads the SDK into `~/.local/share/failbrauwser/dotnet` when
   none is on the `PATH` (needs `curl` or `wget`); `--no-archives` skips archive support.
 - Optional at run time: UDisks2 (drives page details and mounting), GVfs (trash, places;
-  with its backends such as `gvfs-smb`, network addresses like `smb://host/share`).
+  with its backends such as `gvfs-smb`, network addresses like `smb://host/share`; with
+  `gvfs-mtp`, `gvfs-gphoto2` or `gvfs-afc`, Android phones, cameras and iPhones).
 
 ## Using it
 
@@ -217,6 +221,16 @@ deleted for good. The status bar shows where a selected item was deleted from.
 **Drives:** *Drives* on the left lists every volume; the button at the end of a row (or a
 right-click, or <kbd>Alt</kbd>+<kbd>Enter</kbd>) shows its properties.
 
+**Phones:** plug in an Android phone, unlock it and choose *File transfer* in its USB
+notification. It shows up on the Drives page with the USB sticks, called by its name, with a
+row and fill level for each storage (internal storage, SD card). *Open* connects and shows its
+files; the path bar then starts at the phone (`Pixel 7 › Internal shared storage › DCIM`)
+instead of GVfs's folder in `/run/user`. A phone that is connected but locked shows *Nothing
+to show — unlock the phone…* and a *Retry* button; when it cannot be opened at all (another
+program holds it, for example) the error says what to do. *Eject* closes the connection, so
+the phone can be unplugged; tabs showing its files move to the Drives page first. Cameras
+(PTP) and iPhones (AFC) work the same way.
+
 **Settings** live in `~/.config/failbrauwser/settings.ini` and are changed from the menus;
 *Edit → Keep Running in Background* and *Edit → Smooth Writes to Slow Drives* switch off the
 daemon and the write pacing.
@@ -276,6 +290,7 @@ src/
     location.rs    folders, paths through archives, the drives page
     remote.rs      network address history, SMB servers on the local network
     drives.rs      UDisks2 / mount table, fill levels
+    devices.rs     phones and cameras (MTP, PTP, AFC): kinds, names, advice when they fail
     config.rs      settings
     search.rs      file name search, also inside archives
     shortcuts.rs   side panel entries: order, names, hidden ones, saved
@@ -346,8 +361,8 @@ such a script (see `src/ui/selftest.rs` for the commands).
 
 ## Limitations
 
-- Network addresses need GVfs's FUSE daemon (`gvfsd-fuse`); locations without a local path
-  (`mtp://`) are not browsable yet. Copies onto network shares go through GIO one file at
+- Network addresses and phones need GVfs's FUSE daemon (`gvfsd-fuse`), which gives them a
+  local path. Phones are slow at listing large folders (MTP sends one file at a time). Copies onto network shares go through GIO one file at
   a time (gvfsd-fuse deadlocks under parallel writes); SMB shares cannot hold symbolic
   links, which are reported and left out. Archive contents bound for a share are unpacked
   on local disk first (`~/.cache/failbrauwser/stage`) and then copied over. Temporary

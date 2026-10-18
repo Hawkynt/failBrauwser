@@ -45,9 +45,21 @@ pub fn crumbs_for(loc: &Location) -> Vec<Crumb> {
         cur = p;
     }
     chain.reverse();
+    // On a phone the path starts at the phone, not at gvfsd-fuse's folder.
+    let device = loc.nearest_dir().and_then(|d| failbrauwser::devices::named_root(&d));
+    if let Some((root, ..)) = &device {
+        if let Some(i) = chain.iter().position(|l| matches!(l, Location::Dir(p) if p == root)) {
+            chain.drain(..i);
+        }
+    }
     chain
         .into_iter()
         .map(|l| {
+            if let (Location::Dir(p), Some((root, name, kind))) = (&l, &device) {
+                if p == root {
+                    return Crumb { label: name.clone(), icon: Some(kind.symbolic_icon()), location: l };
+                }
+            }
             let (label, icon) = match &l {
                 Location::Dir(p) if *p == glib::home_dir() => (l.title(), Some("user-home-symbolic")),
                 Location::Dir(p) if p.parent().is_none() => ("/".to_string(), None),
@@ -290,5 +302,16 @@ mod tests {
         assert_eq!(labels, vec!["/", "data", "x.zip", "in", "y.tar", "docs"]);
         assert_eq!(c[2].icon, Some("package-x-generic-symbolic"));
         assert_eq!(crumbs_for(&Location::Drives)[0].label, "Drives");
+    }
+
+    #[test]
+    fn paths_on_a_phone_start_at_the_phone() {
+        let root = failbrauwser::ops::gvfs::fuse_root().join("mtp:host=Google_Pixel_7_28041FDH2000ZA");
+        let c = crumbs_for(&Location::Dir(root.join("Internal shared storage/DCIM")));
+        let labels: Vec<_> = c.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, vec!["Google Pixel 7", "Internal shared storage", "DCIM"]);
+        assert_eq!(c[0].icon, Some("phone-symbolic"));
+        assert_eq!(c[0].location, Location::Dir(root.clone()));
+        assert_eq!(Location::Dir(root).title(), "Google Pixel 7");
     }
 }

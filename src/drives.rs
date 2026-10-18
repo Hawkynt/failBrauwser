@@ -44,6 +44,10 @@ pub struct Volume {
     /// -1 unknown, 0 solid state, otherwise spindle speed.
     pub rotation_rate: i32,
     pub drive_size: u64,
+    /// A phone or camera reached through GVfs ("mtp", "gphoto2", "afc"), empty for a block
+    /// device. `device` then holds its address, `drive_name` its name and `label` the
+    /// storage ("Internal shared storage").
+    pub protocol: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -62,6 +66,9 @@ impl Usage {
 impl Volume {
     /// What to call it: label, else drive model plus size, else device.
     pub fn title(&self) -> String {
+        if self.is_device() {
+            return if self.drive_name.is_empty() { "Phone".into() } else { self.drive_name.clone() };
+        }
         if !self.label.is_empty() {
             return self.label.clone();
         }
@@ -79,7 +86,9 @@ impl Volume {
     }
 
     pub fn icon_names(&self) -> Vec<&'static str> {
-        if self.optical {
+        if let Some(kind) = self.device_kind() {
+            kind.icon_names()
+        } else if self.optical {
             vec!["drive-optical", "media-optical", "drive-harddisk"]
         } else if self.usb {
             vec!["drive-removable-media-usb", "drive-removable-media", "drive-harddisk-usb", "drive-harddisk"]
@@ -92,6 +101,15 @@ impl Volume {
 
     pub fn mount_point(&self) -> Option<&PathBuf> {
         self.mount_points.first()
+    }
+
+    /// A phone or camera rather than a block device.
+    pub fn is_device(&self) -> bool {
+        !self.protocol.is_empty()
+    }
+
+    pub fn device_kind(&self) -> Option<crate::devices::DeviceKind> {
+        crate::devices::DeviceKind::from_protocol(&self.protocol)
     }
 }
 
@@ -229,6 +247,7 @@ pub fn parse_udisks(reply: &glib::Variant) -> Vec<Volume> {
             bus: s(d, "ConnectionBus"),
             rotation_rate: if drive.is_some() { i(d, "RotationRate") } else { -1 },
             drive_size: u(d, "Size"),
+            protocol: String::new(),
         });
     }
     sort_volumes(&mut out);
@@ -343,7 +362,9 @@ pub fn partition_type_name(t: &str) -> String {
 
 /// What kind of drive, in words: "USB drive", "SSD", "Hard disk (7200 rpm)", …
 pub fn drive_kind(v: &Volume) -> String {
-    if v.optical {
+    if let Some(kind) = v.device_kind() {
+        kind.describe().into()
+    } else if v.optical {
         "Optical drive".into()
     } else if v.usb {
         "USB drive".into()

@@ -102,10 +102,16 @@ impl Location {
     /// Short name for tab and window titles.
     pub fn title(&self) -> String {
         match self {
-            Location::Dir(p) => match p.file_name() {
-                Some(n) => n.to_string_lossy().into_owned(),
-                None => p.to_string_lossy().into_owned(),
-            },
+            Location::Dir(p) => {
+                // A phone's folder is called by the phone's name.
+                if let Some((_, name, _)) = crate::devices::named_root(p).filter(|(r, ..)| r == p) {
+                    return name;
+                }
+                match p.file_name() {
+                    Some(n) => n.to_string_lossy().into_owned(),
+                    None => p.to_string_lossy().into_owned(),
+                }
+            }
             Location::Archive(a) => {
                 if let Some(leaf) = a.inner.rsplit('/').next().filter(|s| !s.is_empty()) {
                     leaf.to_string()
