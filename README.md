@@ -23,6 +23,8 @@ A fast, native GTK 3 file manager in the spirit of Thunar — that opens archive
 - **Phones and cameras** next to the USB sticks under their own name (“Pixel 7”), one row per
   storage with its fill level; open and eject them there, and a locked phone tells you what
   to tap.
+- **Links on the desktop** from the right-click menu of files, folders, side panel entries,
+  drives and the folder tree: standard `.desktop` links every desktop understands.
 - **Trash shared with Thunar** and other file managers (freedesktop.org spec): browse it,
   restore to the original place, delete permanently, empty.
 - **Thumbnails** for pictures, videos and documents (shared with other file managers), and
@@ -156,6 +158,25 @@ called after the folder it is mounted on (*Downloads* for one mounted on `~/Down
 a drive to open it (mounting it or connecting to the phone first), middle-click for a new
 tab, right-click to unmount, eject or see its properties. A drive plugged in moves the split
 down so the list fits; the bars follow as drives fill up.
+
+**Links on the desktop:** *Create Link on Desktop* in the right-click menu of files and
+folders (on the empty space: the folder shown), of side panel entries, drives and phones, and
+of folders in the tree. It writes a freedesktop.org Desktop Entry of type `Link` into your
+desktop folder (`XDG_DESKTOP_DIR`, usually `~/Desktop`), e.g. `Music.desktop`:
+
+```ini
+[Desktop Entry]
+Version=1.0
+Type=Link
+Name=Music
+URL=file:///home/me/Music
+Icon=folder-music
+```
+
+GNOME (with the Desktop Icons extension), KDE Plasma, Xfce, Cinnamon, MATE, LXQt and PCManFM
+show it as an icon that opens the folder, file or drive. The file is marked executable, which
+some desktops want before they trust it; a second link of the same name gets a number
+(`Music (2).desktop`). A link to a phone that is not open points to its `mtp://` address.
 
 **Thumbnails:** *View → Show Thumbnails*. failBrauwser uses the freedesktop.org thumbnail
 cache (`~/.cache/thumbnails`), so thumbnails made by Thunar, Nautilus or Dolphin are reused
@@ -305,6 +326,7 @@ src/
     drives.rs      UDisks2 / mount table, fill levels
     devices.rs     phones and cameras (MTP, PTP, AFC): kinds, names, advice when they fail
     config.rs      settings
+    desktoplink.rs links on the desktop (freedesktop.org .desktop files of type Link)
     search.rs      file name search, also inside archives
     shortcuts.rs   side panel entries: order, names, hidden ones, saved
     thumbs.rs      freedesktop.org thumbnail cache
