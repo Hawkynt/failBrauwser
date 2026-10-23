@@ -33,6 +33,7 @@ pub fn install_actions(w: &Window) {
     w.add_action("rename", rename_selection);
     w.add_action("new-folder", new_folder);
     w.add_action("new-file", new_file);
+    w.add_action("link-on-desktop", link_on_desktop);
     update_sensitivity(w);
 }
 
@@ -61,6 +62,9 @@ pub fn update_sensitivity(w: &Window) {
     super::trash::update_sensitivity(w, |name, on| set_enabled(w, name, on));
     set_enabled(w, "new-folder", writable && browsable);
     set_enabled(w, "new-file", writable && browsable);
+    let items = pane.selected_items();
+    let linkable = if items.is_empty() { loc.local_path().is_some() } else { !in_trash && items.iter().all(|i| i.path().is_some()) };
+    set_enabled(w, "link-on-desktop", linkable);
     if matches!(loc, Location::Search(_)) {
         // Results on disk can be handled like files anywhere; nothing is created here.
         let on_disk = n > 0 && pane.selected_items().iter().all(|i| matches!(i, Item::Found(..)));
@@ -69,6 +73,18 @@ pub fn update_sensitivity(w: &Window) {
         set_enabled(w, "delete", on_disk);
         set_enabled(w, "rename", on_disk && n == 1);
     }
+}
+
+/// Links the selection (nothing selected: the folder shown) on the desktop.
+fn link_on_desktop(w: &Window) {
+    let pane = w.current_pane();
+    let items = pane.selected_items();
+    let links: Vec<_> = if items.is_empty() {
+        pane.location().local_path().and_then(|p| super::desktoplink::for_dir(p, None)).into_iter().collect()
+    } else {
+        items.iter().filter_map(super::desktoplink::for_item).collect()
+    };
+    super::desktoplink::create(w, &links);
 }
 
 /// The selection as clipboard sources.

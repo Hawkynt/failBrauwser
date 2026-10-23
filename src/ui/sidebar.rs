@@ -5,6 +5,7 @@
 //! Right-click an entry to rename, move, hide or remove it; drag entries to reorder them and
 //! drop folders onto the list to add them. Every window shows the same entries.
 
+use super::desktoplink;
 use super::util;
 use super::window::Window;
 use failbrauwser::config::TreeRoot;
@@ -513,6 +514,39 @@ impl Sidebar {
         }
     }
 
+    /// The folder of a row of the tree.
+    fn tree_dir_at(&self, p: &gtk::TreePath) -> Option<PathBuf> {
+        let model = self.tree.model()?;
+        let path: String = model.value(&model.iter(p)?, T_PATH as i32).get().unwrap_or_default();
+        (!path.is_empty()).then(|| PathBuf::from(path))
+    }
+
+    /// The right-click menu of a folder in the tree.
+    fn tree_menu(self: &Rc<Self>, dir: &Path) -> gtk::Menu {
+        let menu = gtk::Menu::new();
+        let open = gtk::MenuItem::with_mnemonic("Open in New _Tab");
+        let me = Rc::downgrade(self);
+        let d = dir.to_path_buf();
+        open.connect_activate(move |_| {
+            if let Some(sb) = me.upgrade() {
+                sb.open(&Target::Place(Location::Dir(d.clone())), true);
+            }
+        });
+        menu.append(&open);
+        let link = gtk::MenuItem::with_mnemonic("Create _Link on Desktop");
+        let me = Rc::downgrade(self);
+        let l = desktoplink::for_dir(dir, None);
+        link.set_sensitive(l.is_some());
+        link.connect_activate(move |_| {
+            if let (Some(w), Some(l)) = (me.upgrade().and_then(|sb| sb.window.upgrade()), &l) {
+                desktoplink::create(&w, std::slice::from_ref(l));
+            }
+        });
+        menu.append(&link);
+        menu.show_all();
+        menu
+    }
+
     /// The right-click menu of a drive row.
     fn drive_menu(self: &Rc<Self>, v: &Volume, usage: Option<Usage>) -> gtk::Menu {
         let menu = gtk::Menu::new();
@@ -535,6 +569,9 @@ impl Sidebar {
             add("_Open", Box::new(move |sb, _| sb.open_drive(&vol, false)));
             let vol = v.clone();
             add("Open in New _Tab", Box::new(move |sb, _| sb.open_drive(&vol, true)));
+        }
+        if let Some(link) = desktoplink::for_volume(v) {
+            add("Create _Link on Desktop", Box::new(move |_, w| desktoplink::create(w, std::slice::from_ref(&link))));
         }
         let mut ops = Vec::new();
         if super::drives::can_unmount(v) {
@@ -604,6 +641,18 @@ impl Sidebar {
             add(&menu, "Open in New _Tab", true, Box::new(move || {
                 if let Some(sb) = me.upgrade() {
                     sb.open(&t, true);
+                }
+            }));
+            let link = match &target {
+                Target::Place(Location::Dir(p)) => desktoplink::for_dir(p, Some(&entry.label())),
+                Target::Place(Location::Trash) => Some(desktoplink::Link { name: entry.label(), url: "trash:///".into(), icon: "user-trash".into() }),
+                Target::Place(_) => None,
+                Target::Mount(m) => Some(desktoplink::for_mount(m)),
+            };
+            let me = Rc::downgrade(self);
+            add(&menu, "Create _Link on Desktop", link.is_some(), Box::new(move || {
+                if let (Some(w), Some(l)) = (me.upgrade().and_then(|sb| sb.window.upgrade()), &link) {
+                    desktoplink::create(&w, std::slice::from_ref(l));
                 }
             }));
             if let Target::Mount(m) = &target {
@@ -896,6 +945,20 @@ impl Sidebar {
         Ok(())
     }
 
+    /// Picks an item of a tree folder's right-click menu (tests).
+    pub fn tree_menu_item(self: &Rc<Self>, dir: &Path, item: &str) -> Result<(), String> {
+        self.tree_path_of(dir).ok_or("folder not in tree")?;
+        let menu = self.tree_menu(dir);
+        let found = menu
+            .children()
+            .into_iter()
+            .filter_map(|c| c.downcast::<gtk::MenuItem>().ok())
+            .find(|m| m.label().is_some_and(|l| l.replace('_', "") == item))
+            .ok_or_else(|| format!("no menu item {item:?}"))?;
+        found.activate();
+        Ok(())
+    }
+
     /// The folder at the top of the tree.
     pub fn root_path(&self) -> Option<PathBuf> {
         self.root.borrow().clone()
@@ -1051,6 +1114,17 @@ impl Sidebar {
         });
         self.connect_drops();
 
+        let me = Rc::downgrade(self);
+        self.tree.connect_button_press_event(move |tree, ev| {
+            let Some(sb) = me.upgrade() else { return glib::Propagation::Proceed };
+            if ev.event_type() != gdk::EventType::ButtonPress || ev.button() != 3 {
+                return glib::Propagation::Proceed;
+            }
+            let (x, y) = ev.position();
+            let Some(dir) = tree.path_at_pos(x as i32, y as i32).and_then(|(p, ..)| sb.tree_dir_at(&p?)) else { return glib::Propagation::Proceed };
+            sb.tree_menu(&dir).popup_at_pointer(Some(ev));
+            glib::Propagation::Stop
+        });
         let me = Rc::downgrade(self);
         self.tree.connect_test_expand_row(move |_, iter, _| {
             if let Some(sb) = me.upgrade() {

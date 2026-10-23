@@ -6,6 +6,7 @@ pub mod archive;
 pub mod backend;
 pub mod clipboard;
 pub mod customactions;
+pub mod desktoplink;
 pub mod dirsize;
 pub mod dnd;
 pub mod drives;
