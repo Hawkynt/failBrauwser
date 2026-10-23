@@ -173,6 +173,7 @@ pub fn context_menu_model(w: &Window, pane: &Rc<Pane>, items: &[Item]) -> gio::M
         section(&menu, &[("_Paste", "win.paste")]);
         section(&menu, &[("Select _All", "win.select-all"), ("Show _Hidden Files", "win.show-hidden"), ("_Reload", "win.reload")]);
         if local {
+            section(&menu, &[("Create _Link on Desktop", "win.link-on-desktop")]);
             if let Some(s) = super::customactions::menu_section(w) {
                 menu.append_section(None, &s);
             }
@@ -213,6 +214,9 @@ pub fn context_menu_model(w: &Window, pane: &Rc<Pane>, items: &[Item]) -> gio::M
         arch.push(("C_ompress…", "win.compress"));
     }
     section(&menu, &arch);
+    if items.iter().all(|i| i.path().is_some()) {
+        section(&menu, &[("Create _Link on Desktop", "win.link-on-desktop")]);
+    }
     if local || matches!(pane.location(), Location::Search(_)) {
         if let Some(s) = super::customactions::menu_section(w) {
             menu.append_section(None, &s);

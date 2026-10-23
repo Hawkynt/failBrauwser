@@ -6,6 +6,7 @@ pub mod archive;
 pub mod clipformat;
 pub mod fs;
 pub mod config;
+pub mod desktoplink;
 pub mod devices;
 pub mod drives;
 pub mod location;
