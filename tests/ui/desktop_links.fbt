@@ -1,0 +1,32 @@
+# "Create Link on Desktop" in the right-click menus puts a .desktop link on the desktop.
+# A file and a folder from the file list; nothing selected: the folder shown.
+open $T/files
+select Music | notes.txt
+action win.link-on-desktop
+wait-exists $T/Desktop/Music.desktop
+wait-exists $T/Desktop/notes.txt.desktop
+select Music
+action win.link-on-desktop
+wait-exists $T/Desktop/Music (2).desktop
+open $T/files/Music
+action win.link-on-desktop
+wait-exists $T/Desktop/Music (3).desktop
+# Not for what is in the trash.
+open trash:///
+expect-disabled win.link-on-desktop
+# A shortcut, under the name it has in the side panel.
+shortcut-menu Projects : Create Link on Desktop
+wait-exists $T/Desktop/Projects.desktop
+# A drive: a phone's storage, named after the phone and the storage.
+fake-phone Pixel 7 = $T/phone
+wait-side-drive Pixel 7 : SD card
+side-drive-menu Pixel 7 : SD card : Create Link on Desktop
+wait-exists $T/Desktop/Pixel 7 – SD card.desktop
+# A folder in the tree.
+action win.tree-root current
+open $T/files
+wait-tree-selected $T/files
+tree-expand $T/files
+wait-tree-children $T/files = Music
+tree-menu $T/files/Music : Create Link on Desktop
+wait-exists $T/Desktop/Music (4).desktop

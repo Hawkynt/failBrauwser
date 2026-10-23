@@ -645,6 +645,11 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
                 Ok(sb.children_of(&dir) == want)
             });
         }
+        "tree-menu" => {
+            // tree-menu <dir> : <item>
+            let (dir, item) = arg.rsplit_once(" : ").ok_or("usage: tree-menu <dir> : <item>")?;
+            super::sidebar::for_window(&w).ok_or("no sidebar")?.tree_menu_item(Path::new(dir), item)?;
+        }
         "tree-click" => {
             let sb = super::sidebar::for_window(&w).ok_or("no sidebar")?;
             if !sb.click(Path::new(arg)) {

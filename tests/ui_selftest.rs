@@ -147,6 +147,36 @@ fn drives_in_the_side_panel() {
 }
 
 #[test]
+fn links_on_the_desktop() {
+    run_checked(
+        "desktop_links.fbt",
+        &[],
+        |t| {
+            for d in ["files/Music", "projects", "phone/SD card", "phone/Internal shared storage"] {
+                std::fs::create_dir_all(t.join(d)).unwrap();
+            }
+            std::fs::write(t.join("files/notes.txt"), "n").unwrap();
+            // The desktop of the test, not the user's.
+            std::fs::create_dir_all(t.join("config/failbrauwser")).unwrap();
+            std::fs::write(t.join("config/user-dirs.dirs"), format!("XDG_DESKTOP_DIR=\"{}/Desktop\"\n", t.display())).unwrap();
+            let projects = format!("file://{}", t.join("projects").display());
+            std::fs::write(t.join("config/failbrauwser/shortcuts"), format!("0\thome\t\n0\t{projects}\tProjects\n0\ttrash\t\n")).unwrap();
+        },
+        |t| {
+            let read = |name: &str| std::fs::read_to_string(t.join("Desktop").join(name)).unwrap();
+            let music = read("Music.desktop");
+            assert!(music.starts_with("[Desktop Entry]\n"), "{music}");
+            for line in ["Type=Link", "Name=Music", &format!("URL=file://{}/files/Music", t.display())] {
+                assert!(music.lines().any(|l| l == line), "{line} missing in {music}");
+            }
+            assert!(read("notes.txt.desktop").contains("\nName=notes.txt\n"));
+            assert!(read("Projects.desktop").contains(&format!("\nURL=file://{}/projects\n", t.display())));
+            assert!(read("Pixel 7 – SD card.desktop").contains("/phone/SD%20card\n"));
+        },
+    );
+}
+
+#[test]
 fn archives_as_folders() {
     if !failbrauwser::archive::client::locate_helper().is_file() {
         eprintln!("fb-archive helper not built, skipping");
