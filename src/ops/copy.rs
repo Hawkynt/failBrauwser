@@ -570,10 +570,11 @@ pub use super::gvfs::is_gvfs_path;
 /// Copies one file onto a GVfs share through GIO, which talks to the share's backend
 /// directly instead of through gvfsd-fuse. Keeps the modification time.
 ///
-/// The copy runs on a thread of its own: GIO waits for a backend that stopped answering even
-/// after it was cancelled. A cancelled job then returns after a moment and leaves that thread
-/// to end by itself (it removes the partial file when the share answers again), and a copy
-/// that moves no data for a minute ends with a "not responding" error.
+/// The copy runs on a GIO copy thread (see [`gio_copier`]): GIO waits for a backend that
+/// stopped answering even after it was cancelled. A cancelled job then returns after a
+/// moment and leaves that thread to end by itself (it removes the partial file when the
+/// share answers again), and a copy that moves no data for a minute ends with a "not
+/// responding" error.
 fn write_file_gio(ctx: &JobCtx, t: &FileTask, dst: &Path, counted: &mut u64) -> io::Result<()> {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -581,39 +582,14 @@ fn write_file_gio(ctx: &JobCtx, t: &FileTask, dst: &Path, counted: &mut u64) -> 
     use std::time::{Duration, Instant};
     const STALL: Duration = Duration::from_secs(60);
     const GIVE_UP_AFTER_CANCEL: Duration = Duration::from_secs(2);
-    enum Msg {
-        Progress(u64),
-        Done(Result<(), gtk::glib::Error>),
-    }
 
-    let (src, out) = (gio::File::for_path(&t.src), gio::File::for_path(dst));
     let cancel = gio::Cancellable::new();
     let paused = Arc::new(AtomicBool::new(false));
     let (tx, rx) = mpsc::channel();
-    {
-        let (cancel, paused) = (cancel.clone(), paused.clone());
-        std::thread::Builder::new()
-            .name("fb-gio-copy".into())
-            .spawn(move || {
-                let progress_tx = tx.clone();
-                let mut progress = |done: i64, _total: i64| {
-                    let _ = progress_tx.send(Msg::Progress(done.max(0) as u64));
-                    while paused.load(Ordering::Relaxed) && !cancel.is_cancelled() {
-                        std::thread::sleep(Duration::from_millis(100));
-                    }
-                };
-                let flags = gio::FileCopyFlags::NOFOLLOW_SYMLINKS | gio::FileCopyFlags::TARGET_DEFAULT_PERMS;
-                let r = src.copy(&out, flags, Some(&cancel), Some(&mut progress));
-                if let Err(e) = &r {
-                    // Someone else's file stays; a partial copy goes.
-                    if !e.matches(gio::IOErrorEnum::Exists) {
-                        let _ = out.delete(gio::Cancellable::NONE);
-                    }
-                }
-                let _ = tx.send(Msg::Done(r));
-            })
-            .map_err(io::Error::other)?;
-    }
+    let copier = gio_copier()?;
+    copier
+        .send(GioCopy { src: gio::File::for_path(&t.src), out: gio::File::for_path(dst), cancel: cancel.clone(), paused: paused.clone(), tx })
+        .map_err(|_| io::Error::other("the copy thread ended"))?;
 
     let mut seen = 0u64;
     let mut last_data = Instant::now();
@@ -629,6 +605,7 @@ fn write_file_gio(ctx: &JobCtx, t: &FileTask, dst: &Path, counted: &mut u64) -> 
                 }
             }
             Ok(Msg::Done(result)) => {
+                IDLE_GIO_COPIERS.lock().unwrap_or_else(|e| e.into_inner()).push(copier);
                 // Empty files report no progress; count what is left either way.
                 if result.is_ok() && t.size > seen {
                     ctx.add_bytes(t.size - seen);
@@ -665,6 +642,58 @@ fn write_file_gio(ctx: &JobCtx, t: &FileTask, dst: &Path, counted: &mut u64) -> 
             return Err(super::gvfs::not_responding(root));
         }
     }
+}
+
+enum Msg {
+    Progress(u64),
+    Done(Result<(), gtk::glib::Error>),
+}
+
+struct GioCopy {
+    src: gio::File,
+    out: gio::File,
+    cancel: gio::Cancellable,
+    paused: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    tx: std::sync::mpsc::Sender<Msg>,
+}
+
+/// GIO copy threads waiting for work.
+static IDLE_GIO_COPIERS: Mutex<Vec<std::sync::mpsc::Sender<GioCopy>>> = Mutex::new(Vec::new());
+
+/// A thread to copy one file through GIO; give it back to [`IDLE_GIO_COPIERS`] when the copy
+/// is done. The threads live on because GVfs opens a D-Bus connection to the share's
+/// backend for each thread and never closes it: a thread per file ran out of file
+/// descriptors after about a thousand files. A thread that is never given back (its copy
+/// hangs) ends once that copy returns.
+fn gio_copier() -> io::Result<std::sync::mpsc::Sender<GioCopy>> {
+    if let Some(c) = IDLE_GIO_COPIERS.lock().unwrap_or_else(|e| e.into_inner()).pop() {
+        return Ok(c);
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<GioCopy>();
+    std::thread::Builder::new()
+        .name("fb-gio-copy".into())
+        .spawn(move || {
+            for job in rx {
+                let progress_tx = job.tx.clone();
+                let mut progress = |done: i64, _total: i64| {
+                    let _ = progress_tx.send(Msg::Progress(done.max(0) as u64));
+                    while job.paused.load(Ordering::Relaxed) && !job.cancel.is_cancelled() {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                };
+                let flags = gio::FileCopyFlags::NOFOLLOW_SYMLINKS | gio::FileCopyFlags::TARGET_DEFAULT_PERMS;
+                let r = job.src.copy(&job.out, flags, Some(&job.cancel), Some(&mut progress));
+                if let Err(e) = &r {
+                    // Someone else's file stays; a partial copy goes.
+                    if !e.matches(gio::IOErrorEnum::Exists) {
+                        let _ = job.out.delete(gio::Cancellable::NONE);
+                    }
+                }
+                let _ = job.tx.send(Msg::Done(r));
+            }
+        })
+        .map_err(io::Error::other)?;
+    Ok(tx)
 }
 
 /// The name of `p` for messages.

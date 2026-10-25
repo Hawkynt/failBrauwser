@@ -28,5 +28,18 @@ fn main() -> gtk::glib::ExitCode {
             _ => {}
         }
     }
+    raise_open_file_limit();
     ui::app::run()
+}
+
+/// Lifts the soft limit on open files (often 1024) to the hard limit: GLib aborts the whole
+/// process when it finds no free descriptor, which must not end a long-running instance.
+fn raise_open_file_limit() {
+    let mut l = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    unsafe {
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut l) == 0 && l.rlim_cur < l.rlim_max {
+            l.rlim_cur = l.rlim_max;
+            libc::setrlimit(libc::RLIMIT_NOFILE, &l);
+        }
+    }
 }
