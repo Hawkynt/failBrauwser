@@ -302,3 +302,31 @@ fn copies_onto_gvfs_shares_through_gio() {
     assert_eq!(s.bytes_done, s.bytes_total);
     assert!(ctx.errors().is_empty(), "{:?}", ctx.errors());
 }
+
+fn open_fds() -> usize {
+    fs::read_dir("/proc/self/fd").unwrap().count()
+}
+
+#[test]
+fn copying_many_files_onto_gvfs_shares_keeps_no_descriptors_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir(&src).unwrap();
+    for i in 0..300 {
+        fs::write(src.join(format!("f{i}")), "x").unwrap();
+    }
+    fs::create_dir(dir.path().join("dest")).unwrap();
+    let Some(dest) = through_gvfs(&dir.path().join("dest")) else {
+        eprintln!("GVfs FUSE with the localtest backend not available, skipping");
+        return;
+    };
+    // Warms up GIO's own connections, which stay for the life of the process.
+    transfer(&JobCtx::new(), &[src.join("f0")], &dest, Mode::Copy, &opts()).unwrap();
+    let before = open_fds();
+    let ctx = JobCtx::new();
+    transfer(&ctx, &[src], &dest, Mode::Copy, &opts()).unwrap();
+    assert!(ctx.errors().is_empty(), "{:?}", ctx.errors());
+    assert_eq!(fs::read_dir(dir.path().join("dest/src")).unwrap().count(), 300);
+    let after = open_fds();
+    assert!(after < before + 20, "{before} descriptors open before the copy, {after} after");
+}
