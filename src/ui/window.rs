@@ -658,6 +658,7 @@ impl Window {
         self.location_entry.connect_activate(move |e| {
             let Some(w) = weak.upgrade() else { return };
             let text = e.text().to_string();
+            let text = failbrauwser::remote::unc_to_uri(&text).unwrap_or(text);
             if util::is_remote_uri(&text) {
                 super::shares::open_remote(&w, &text, false);
                 return;

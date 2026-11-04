@@ -157,8 +157,12 @@ fn on_typed(text: &str) {
     if t.is_empty() || t.starts_with('/') || t.starts_with('~') {
         return;
     }
-    scan();
-    if let Some(host) = remote::smb_host(t) {
+    // A test does not go looking through the real network.
+    if !super::selftest::active() {
+        scan();
+    }
+    let unc = remote::unc_as_typed(t);
+    if let Some(host) = remote::smb_host(unc.as_deref().unwrap_or(t)) {
         list_shares(host);
     }
 }

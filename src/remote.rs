@@ -42,6 +42,29 @@ pub fn remember_in(path: &Path, uri: &str) -> io::Result<Vec<String>> {
     Ok(list)
 }
 
+/// `\\host\share\dir` as it is being typed, spelled `smb://host/share/dir` (names unescaped,
+/// a trailing separator kept): what suggestions are compared with.
+pub fn unc_as_typed(text: &str) -> Option<String> {
+    let rest = text.trim().strip_prefix(r"\\")?;
+    let parts: Vec<&str> = rest.split(['\\', '/']).filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let end = if rest.ends_with(['\\', '/']) { "/" } else { "" };
+    Some(format!("smb://{}{end}", parts.join("/")))
+}
+
+/// The address of a Windows-style share name: `\\host\My Share` is `smb://host/My%20Share`.
+/// None for anything else.
+pub fn unc_to_uri(text: &str) -> Option<String> {
+    let typed = unc_as_typed(text)?;
+    let Some((host, path)) = typed.strip_prefix("smb://")?.split_once('/') else {
+        return Some(typed);
+    };
+    let path = path.split('/').map(|s| glib::uri_escape_string(s, None::<&str>, false).to_string()).collect::<Vec<_>>().join("/");
+    Some(format!("smb://{host}/{path}"))
+}
+
 /// The server part of `smb://host/share/…`, when the text has one followed by a slash.
 pub fn smb_host(text: &str) -> Option<&str> {
     let rest = text.trim().strip_prefix("smb://")?;
@@ -51,9 +74,9 @@ pub fn smb_host(text: &str) -> Option<&str> {
 }
 
 /// Whether a suggestion fits what is typed: from the start, or from the server name on so
-/// that typing `192.168` finds `smb://192.168.1.198`.
+/// that typing `192.168` finds `smb://192.168.1.198`. `\\192.168` finds it too.
 pub fn suggestion_matches(candidate: &str, typed: &str) -> bool {
-    let typed = typed.trim().to_lowercase();
+    let typed = unc_as_typed(typed).unwrap_or_else(|| typed.to_string()).trim().to_lowercase();
     if typed.is_empty() {
         return false;
     }
@@ -372,6 +395,25 @@ mod tests {
         assert_eq!(smb_host("smb://me@nas/share/dir"), Some("nas"));
         assert_eq!(smb_host("smb://nas"), None);
         assert_eq!(smb_host("sftp://nas/"), None);
+        assert_eq!(unc_as_typed(r"\\192.168.1.198\").as_deref(), Some("smb://192.168.1.198/"));
+        assert_eq!(unc_as_typed(r"\\nas\My Music\dir").as_deref(), Some("smb://nas/My Music/dir"));
+        assert_eq!(unc_as_typed(r"\\nas").as_deref(), Some("smb://nas"));
+    }
+
+    #[test]
+    fn windows_share_names() {
+        let uri = |s: &str| unc_to_uri(s);
+        assert_eq!(uri(r"\\192.168.1.198").as_deref(), Some("smb://192.168.1.198"));
+        assert_eq!(uri(r"\\nas\").as_deref(), Some("smb://nas/"));
+        assert_eq!(uri(r"\\nas\share").as_deref(), Some("smb://nas/share"));
+        assert_eq!(uri(r" \\nas\share\dir\ ").as_deref(), Some("smb://nas/share/dir/"));
+        assert_eq!(uri(r"\\nas/share\dir").as_deref(), Some("smb://nas/share/dir"));
+        assert_eq!(uri(r"\\nas\\share").as_deref(), Some("smb://nas/share"));
+        assert_eq!(uri(r"\\nas\My Music\50% #1?").as_deref(), Some("smb://nas/My%20Music/50%25%20%231%3F"));
+        assert_eq!(uri(r"\\me@nas\share").as_deref(), Some("smb://me@nas/share"));
+        for not_one in [r"\\", r"\\\", r"\nas\share", "/home/me", "smb://nas/share", ""] {
+            assert_eq!(uri(not_one), None, "{not_one}");
+        }
     }
 
     #[test]
@@ -382,6 +424,10 @@ mod tests {
         assert!(!suggestion_matches("smb://192.168.1.198", "smb://192.168.1.198"));
         assert!(!suggestion_matches("smb://192.168.1.198", "/home"));
         assert!(!suggestion_matches("smb://192.168.1.198", ""));
+        assert!(suggestion_matches("smb://192.168.1.198", r"\\192.168"));
+        assert!(suggestion_matches("smb://nas/My Music", r"\\NAS\my m"));
+        assert!(!suggestion_matches("smb://nas/My Music", r"\\nas\My Music"));
+        assert!(!suggestion_matches("sftp://nas", r"\\nas"));
     }
 
     /// A node status answer from a Samba server called NAS in workgroup WORKGROUP.
