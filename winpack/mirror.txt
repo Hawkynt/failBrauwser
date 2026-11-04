@@ -1,0 +1,3 @@
+# Base URL of the MSYS2 repository this build fetches its Windows GTK stack from.
+# The company Artifactory mirrors repo.msys2.org internally; external network is blocked.
+https://jhcnartifactory.global.jhcn.net/artifactory/msys2
