@@ -7,3 +7,4 @@ pub mod netinfo;
 pub mod recyclebin;
 pub mod storage;
 pub mod volume;
+pub mod wnet;

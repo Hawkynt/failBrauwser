@@ -204,6 +204,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // the mtp:host=… fuse folder naming; Windows phones arrive as WPD volumes
     fn device_folders_are_named() {
         let fuse = crate::ops::gvfs::fuse_root().join("mtp:host=Google_Pixel_7_28041FDH2000ZA");
         let (root, name, kind) = named_root(&fuse.join("Internal shared storage/DCIM")).unwrap();

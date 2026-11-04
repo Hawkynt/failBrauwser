@@ -154,6 +154,31 @@ pub fn classify_smbclient(stdout: &str, stderr: &str) -> Probe {
 
 /// Asks `host` for its shared folders as a guest (never shows a password dialog); gives up
 /// after `timeout`.
+#[cfg(windows)]
+pub fn probe_shares(host: &str, timeout: std::time::Duration) -> Probe {
+    // The redirector answers for the whole workgroup; a dead host can block the call, so
+    // the ask runs on its own thread with the same fail-fast shape as the smbclient arm.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let host = host.to_string();
+    if std::thread::Builder::new().name("fb-share-probe".into()).spawn(move || tx.send(crate::win::wnet::probe_shares(&host))).is_err() {
+        return Probe::Unknown;
+    }
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(shares)) => Probe::Shares(shares.into_iter().filter(|(n, _)| visible_share(n)).map(|(name, comment)| Share { name, comment }).collect()),
+        Ok(Err(e)) => {
+            if crate::win::wnet::is_locked(&e) {
+                Probe::Locked
+            } else {
+                Probe::Nothing
+            }
+        }
+        Err(_) => Probe::Nothing,
+    }
+}
+
+/// Asks `host` for its shared folders as a guest (never shows a password dialog); gives up
+/// after `timeout`.
+#[cfg(not(windows))]
 pub fn probe_shares(host: &str, timeout: std::time::Duration) -> Probe {
     use std::process::{Command, Stdio};
     let child = Command::new("smbclient")

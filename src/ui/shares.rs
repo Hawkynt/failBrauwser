@@ -16,13 +16,16 @@ use std::rc::Rc;
 thread_local! {
     /// Shares a "not responding" dialog is open for (one dialog per share).
     static ASKING: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
-    /// The shares mounted when the computer went to sleep.
+    /// The shares mounted when the computer went to sleep (logind's cycle — Linux only).
+    #[cfg(unix)]
     static BEFORE_SLEEP: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// logind's sleep signal (dropped = unsubscribed).
+    #[cfg(unix)]
     static SLEEP: RefCell<Option<gio::SignalSubscription>> = const { RefCell::new(None) };
 }
 
 /// The network shares GVfs has mounted: (address, local folder).
+#[cfg(unix)]
 fn mounted_shares() -> Vec<(String, PathBuf, gio::Mount)> {
     gio::VolumeMonitor::get()
         .mounts()
@@ -35,7 +38,22 @@ fn mounted_shares() -> Vec<(String, PathBuf, gio::Mount)> {
         .collect()
 }
 
+/// The network connections Windows has: mapped drives and credential sessions.
+#[cfg(windows)]
+fn mounted_shares() -> Vec<failbrauwser::win::wnet::Connection> {
+    failbrauwser::win::wnet::connections().unwrap_or_default()
+}
+
+/// Mapped network drives are drive letters and already ride the Windows volume list
+/// (`win::storage`, with their `share_uri` set for the Disconnect button) — adding them
+/// again here would double the rows.
+#[cfg(windows)]
+pub async fn volumes() -> Vec<(failbrauwser::drives::Volume, Option<failbrauwser::drives::Usage>)> {
+    Vec::new()
+}
+
 /// The mounted network shares as drives, with their fill level where the server tells it.
+#[cfg(unix)]
 pub async fn volumes() -> Vec<(failbrauwser::drives::Volume, Option<failbrauwser::drives::Usage>)> {
     let mut out = Vec::new();
     for (uri, path, m) in mounted_shares() {
@@ -55,7 +73,22 @@ pub async fn volumes() -> Vec<(failbrauwser::drives::Volume, Option<failbrauwser
     out
 }
 
+/// Disconnects a mapped drive shown as a row; tabs showing it go to the drives page first.
+/// The drive letter goes with its profile entry, and the credential session behind the
+/// share goes too (harmless when other paths still use it: the redirector drops what is
+/// unreferenced on its own).
+#[cfg(windows)]
+pub fn eject(w: &Rc<Window>, v: &failbrauwser::drives::Volume, leave: impl Fn(&[PathBuf])) {
+    leave(&v.mount_points);
+    if let Some(point) = v.mount_points.first() {
+        if let Err(e) = failbrauwser::win::wnet::disconnect(&point.to_string_lossy(), true) {
+            util::show_error(&w.win, &format!("Cannot disconnect “{}”", failbrauwser::network::uri_name(&v.share_uri)), &e.to_string());
+        }
+    }
+}
+
 /// Unmounts a share shown as a drive; tabs showing it go to the drives page first.
+#[cfg(unix)]
 pub fn eject(w: &Rc<Window>, v: &failbrauwser::drives::Volume, leave: impl Fn(&[PathBuf])) {
     leave(&v.mount_points);
     let Some((_, _, m)) = mounted_shares().into_iter().find(|(u, ..)| *u == v.share_uri) else { return };
@@ -70,9 +103,16 @@ pub fn eject(w: &Rc<Window>, v: &failbrauwser::drives::Volume, leave: impl Fn(&[
     });
 }
 
+/// Windows has no session-inhibition channel reachable from GTK: the redirector
+/// reconnects sessions after sleep on its own, and a share that stayed dead is caught by
+/// the per-pane `gvfs::check` and the Reconnect button. Nothing to subscribe to.
+#[cfg(windows)]
+pub fn follow_sleep(_app: &Rc<super::app::AppCtx>) {}
+
 /// Watches the computer going to sleep and waking up (systemd-logind): what was mounted
 /// before is checked afterwards, a share that hangs is reconnected and one that sleep
 /// unmounted is mounted again.
+#[cfg(unix)]
 pub fn follow_sleep(app: &Rc<super::app::AppCtx>) {
     SLEEP.with(|s| {
         if s.borrow().is_some() {
@@ -106,13 +146,29 @@ pub fn follow_sleep(app: &Rc<super::app::AppCtx>) {
 }
 
 /// Going to sleep (tests): remembers the shares mounted now.
+#[cfg(unix)]
 pub fn sleeping() {
     let uris: Vec<String> = mounted_shares().into_iter().map(|(u, ..)| u).collect();
     BEFORE_SLEEP.with(|b| *b.borrow_mut() = uris);
 }
 
+/// Windows: nothing to remember — sessions survive sleep; a dead one is forgotten below so
+/// open panes ask it afresh.
+#[cfg(windows)]
+pub fn sleeping() {}
+
+/// Windows: forget the cached probe failures so open panes ask their shares again (the
+/// redirector itself re-establishes sessions on the next access).
+#[cfg(windows)]
+pub async fn resumed(_app: &Rc<super::app::AppCtx>) {
+    for c in mounted_shares() {
+        gvfs::forget(&PathBuf::from(&c.remote));
+    }
+}
+
 /// After waking up: reconnects shares that hang, mounts again those sleep took away, and
 /// reads the tabs showing them again.
+#[cfg(unix)]
 pub async fn resumed(app: &Rc<super::app::AppCtx>) {
     let before = BEFORE_SLEEP.with(|b| std::mem::take(&mut *b.borrow_mut()));
     let mut now = Vec::new();
@@ -169,8 +225,15 @@ pub fn open_remote(w: &Rc<Window>, uri: &str, new_tab: bool) {
     });
 }
 
+/// The address a UNC share sits at, in the `smb://` spelling the panel and history use.
+#[cfg(windows)]
+fn share_uri(root: &Path) -> Option<String> {
+    failbrauwser::win::wnet::smb_for_unc(root)
+}
+
 /// The address a share was mounted from: GIO knows it while the mount exists; an SMB share's
 /// folder name also spells it out.
+#[cfg(unix)]
 fn share_uri(root: &Path) -> Option<String> {
     let uri = gio::File::for_path(root).uri().to_string();
     if !uri.starts_with("file:") {
@@ -202,7 +265,10 @@ pub fn offer_reconnect(w: &Window, root: &Path) {
         gtk::ButtonsType::None,
         &format!("“{}” is not responding", gvfs::share_name(root)),
     );
+    #[cfg(unix)]
     d.set_secondary_text(Some("The server or the GVfs service in between stopped answering. Reconnecting mounts the share again."));
+    #[cfg(windows)]
+    d.set_secondary_text(Some("The server stopped answering. Reconnecting drops its session and enters the share again."));
     d.add_button("_Cancel", gtk::ResponseType::Cancel);
     d.add_button("_Reconnect", gtk::ResponseType::Accept);
     d.set_default_response(gtk::ResponseType::Accept);
@@ -218,8 +284,53 @@ pub fn offer_reconnect(w: &Window, root: &Path) {
     d.show();
 }
 
+/// Drops the session to the share (over WNet, never through the hung path), signs in again
+/// and re-asks: once it fails twice, the server — not any layer in between — is the answer.
+#[cfg(windows)]
+fn reconnect(w: &Rc<Window>, root: &Path, restarted: bool) {
+    let Some(uri) = share_uri(root) else {
+        util::show_error(&w.win, "Cannot reconnect", &format!("The address of “{}” is not known.", gvfs::share_name(root)));
+        return;
+    };
+    let Some(unc) = failbrauwser::win::wnet::unc_for_smb(&uri) else {
+        util::show_error(&w.win, "Cannot reconnect", &format!("“{uri}” is not a share path Windows can re-enter."));
+        return;
+    };
+    let _ = failbrauwser::win::wnet::disconnect(&unc, false);
+    gvfs::forget(root);
+    let weak = Rc::downgrade(w);
+    util::mount_remote(&w.win, &uri, move |res| {
+        let Some(w) = weak.upgrade() else { return };
+        let path = match res {
+            Ok(p) => p,
+            Err(msg) => {
+                util::show_error(&w.win, &format!("Cannot reconnect “{}”", gvfs::share_name(Path::new(&unc))), &msg);
+                return;
+            }
+        };
+        let weak = Rc::downgrade(&w);
+        glib::spawn_future_local(async move {
+            let probe = path.clone();
+            let ok = gio::spawn_blocking(move || gvfs::check(&probe, gvfs::TIMEOUT).is_ok()).await.unwrap_or(false);
+            let Some(w) = weak.upgrade() else { return };
+            if ok {
+                for p in w.panes() {
+                    if p.location().local_path().is_some_and(|l| l.starts_with(&path)) {
+                        p.reload();
+                    }
+                }
+            } else if restarted {
+                util::show_error(&w.win, &format!("“{}” is still not responding", gvfs::share_name(&path)), "The server does not answer. Check that it is switched on and reachable.");
+            } else {
+                reconnect(&w, &path, true);
+            }
+        });
+    });
+}
+
 /// Unmounts the share (forcibly) and mounts it again; when it still does not answer, offers
 /// to restart GVfs, which also gets a hung gvfsd-fuse going again.
+#[cfg(unix)]
 fn reconnect(w: &Rc<Window>, root: &Path, restarted: bool) {
     let Some(uri) = share_uri(root) else {
         util::show_error(&w.win, "Cannot reconnect", &format!("The address of “{}” is not known.", gvfs::share_name(root)));
@@ -266,7 +377,9 @@ fn reconnect(w: &Rc<Window>, root: &Path, restarted: bool) {
     });
 }
 
-/// The share came back but its folder still hangs: gvfsd-fuse itself is stuck.
+/// The share came back but its folder still hangs: gvfsd-fuse itself is stuck. Windows
+/// has no such layer between the redirector and the server, so there is nothing to restart.
+#[cfg(unix)]
 fn offer_restart(w: &Rc<Window>, root: &Path) {
     let d = gtk::MessageDialog::new(
         Some(&w.win),
@@ -312,9 +425,17 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)] // the fuse folder naming is what this decodes
     fn smb_share_addresses_from_folder_names() {
         let root = gvfs::fuse_root().join("smb-share:server=192.168.1.198,share=gamingcrypt-drive");
         assert_eq!(share_uri(&root).as_deref(), Some("smb://192.168.1.198/gamingcrypt-drive"));
         assert_eq!(share_uri(&gvfs::fuse_root().join("sftp:host=x")), None);
+    }
+
+    #[test]
+    #[cfg(windows)] // the UNC path itself spells the address
+    fn smb_share_addresses_from_unc_paths() {
+        assert_eq!(share_uri(Path::new(r"\\192.168.1.198\GamingCrypt-Drive")).as_deref(), Some("smb://192.168.1.198/GamingCrypt-Drive"));
+        assert_eq!(share_uri(Path::new(r"C:\work")), None);
     }
 }

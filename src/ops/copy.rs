@@ -232,7 +232,12 @@ pub fn transfer_pairs(ctx: &JobCtx, sources: &[PathBuf], dest_dir: &Path, mode: 
     }
     fs::metadata(dest_dir)?; // fail before any work if the destination folder is gone
     let dest_class = classify(dest_dir);
+    // The GIO backend copy exists to skip gvfsd-fuse; Windows UNC paths are native to the
+    // redirector, so the normal engine (with its own timeout checks) serves them.
+    #[cfg(unix)]
     let via_gio = is_gvfs_path(dest_dir);
+    #[cfg(windows)]
+    let via_gio = false;
     let mut plan = Plan::default();
     let mut tops = Vec::new();
 

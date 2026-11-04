@@ -312,6 +312,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // the mtp:host=… fuse folder naming; Windows phone crumbs arrive with WPD
     fn paths_on_a_phone_start_at_the_phone() {
         let root = failbrauwser::ops::gvfs::fuse_root().join("mtp:host=Google_Pixel_7_28041FDH2000ZA");
         let c = crumbs_for(&Location::Dir(root.join("Internal shared storage/DCIM")));

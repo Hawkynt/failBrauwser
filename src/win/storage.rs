@@ -51,9 +51,13 @@ pub fn volumes() -> Vec<Volume> {
         let have_media = unsafe { GetVolumeInformationW(PCWSTR(wide_text(&root).as_ptr()), Some(&mut label_buf), Some(&raw mut serial), Some(&raw mut comp), Some(&raw mut flags), Some(&mut fs_buf)) }.is_ok();
         let (label, fs) = (wide_nul(&label_buf), wide_nul(&fs_buf));
         let disk = disk_info(letter).unwrap_or_default();
-        // The system's own drive, and mapped shares until the network milestone builds
-        // disconnect, get no unmount button; an externally attached fixed disk does.
-        let internal_fixed = kind.0 == "Network Drive" || kind.1 == false && kind.2 == false && letter_is_fixed(&root) && disk.bus != "usb";
+        // Mapped shares carry their UNC origin and get the Disconnect button (the drives
+        // dispatch routes a volume with a share_uri to shares::eject → WNetCancelConnection);
+        // the system's own fixed drive gets no unmount button; an externally attached
+        // fixed disk does.
+        let network = kind.0 == "Network Drive";
+        let share_uri = if network { crate::win::wnet::connection_for(&root).as_deref().and_then(|unc| crate::win::wnet::smb_for_unc(std::path::Path::new(unc))).unwrap_or_default() } else { String::new() };
+        let internal_fixed = kind.1 == false && kind.2 == false && letter_is_fixed(&root) && disk.bus != "usb";
         out.push(Volume {
             device: root.clone(),
             // Without a label Explorer's name for the kind: "Local Disk", "Removable Disk"…
@@ -68,6 +72,7 @@ pub fn volumes() -> Vec<Volume> {
             ejectable: kind.2 || kind.1 || disk.removable || disk.bus == "usb",
             block_object: root.clone(),
             drive_object: root.clone(),
+            share_uri,
             // An empty drive (no media in a tray or reader) has nothing to mount.
             mountable: have_media,
             // The system's own drive and mapped network drives get no unmount button
