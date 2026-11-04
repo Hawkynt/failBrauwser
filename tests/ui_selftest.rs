@@ -554,6 +554,11 @@ fn path_bar() {
 }
 
 #[test]
+fn windows_share_names_in_the_location_bar() {
+    run("unc_address.fbt", |_| {});
+}
+
+#[test]
 fn trash() {
     run("trash.fbt", |t| {
         let w = t.join("w");

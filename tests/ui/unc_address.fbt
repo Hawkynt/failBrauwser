@@ -1,0 +1,10 @@
+# A Windows-style share name typed in the location bar is opened as its smb:// address. This
+# share does not exist on the test machine, so the mount fails and the message names the address.
+path-edit
+type-location \\127.0.0.1\My Share\sub dir
+wait-dialog Cannot open “smb://127.0.0.1/My%20Share/sub%20dir”
+dialog-button Cannot open : Close
+# A plain path still is one.
+path-edit
+type-location $T
+expect-location $T
