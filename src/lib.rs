@@ -14,6 +14,7 @@ pub mod drives;
 pub mod location;
 pub mod network;
 pub mod ops;
+pub mod osprim;
 pub mod remote;
 pub mod search;
 pub mod servers;
@@ -22,3 +23,5 @@ pub mod thumbs;
 pub mod trash;
 pub mod update;
 pub mod wmtheme;
+#[cfg(windows)]
+pub mod win;
