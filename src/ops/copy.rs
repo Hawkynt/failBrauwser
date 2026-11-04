@@ -52,6 +52,8 @@ struct FileTask {
     dst: PathBuf,
     size: u64,
     mode: u32,
+    /// Windows HIDDEN|SYSTEM|READONLY mask of the source (0 on Unix).
+    attrs: u32,
     atime: (i64, i64),
     mtime: (i64, i64),
     ino: u64,
@@ -60,7 +62,10 @@ struct FileTask {
 #[derive(Debug)]
 struct DirTask {
     dst: PathBuf,
+    /// Only Unix applies mode bits to folders; Windows carries `attrs`.
+    #[cfg(unix)]
     mode: u32,
+    attrs: u32,
     atime: (i64, i64),
     mtime: (i64, i64),
     /// We created it (so we own its metadata); false when merging into an existing folder.
@@ -143,17 +148,24 @@ fn remove_any(p: &Path) -> io::Result<()> {
 }
 
 /// Runs `op` until it succeeds, the user skips it (`Ok(None)`) or cancels (`Err`).
+/// Transient sharing blocks retry among themselves first — an AV scan or preview
+/// handler releases within a blink and should not interrupt the user.
 fn with_retry<T>(ctx: &JobCtx, path: &Path, mut op: impl FnMut() -> io::Result<T>) -> io::Result<Option<T>> {
+    let mut sharing = 0u32;
     loop {
         match op() {
             Ok(v) => return Ok(Some(v)),
             Err(e) if is_cancelled_error(&e) => return Err(e),
-            Err(e) => match ctx.ask(Question::Error { path: path.to_path_buf(), message: e.to_string() }) {
-                Answer::Retry => continue,
-                Answer::Cancel => return Err(fastcopy::cancelled()),
-                _ => {
-                    ctx.record_error(format!("{}: {}", path.display(), e));
-                    return Ok(None);
+            Err(e) if fastcopy::wait_sharing_retry(&e, &mut sharing) => continue,
+            Err(e) => {
+                sharing = 0;
+                match ctx.ask(Question::Error { path: path.to_path_buf(), message: e.to_string() }) {
+                    Answer::Retry => continue,
+                    Answer::Cancel => return Err(fastcopy::cancelled()),
+                    _ => {
+                        ctx.record_error(format!("{}: {}", path.display(), e));
+                        return Ok(None);
+                    }
                 }
             },
         }
@@ -322,9 +334,7 @@ pub fn transfer_pairs(ctx: &JobCtx, sources: &[PathBuf], dest_dir: &Path, mode: 
     for d in plan.dirs.iter().rev().filter(|d| d.created) {
         #[cfg(unix)]
         let _ = fs::set_permissions(&d.dst, fs::Permissions::from_mode(d.mode & 0o7777));
-        // Attribute propagation (read-only, hidden) arrives with the copy-engine milestone.
-        #[cfg(windows)]
-        let _ = &d.mode;
+        osprim::set_attrs(&d.dst, d.attrs); // HIDDEN/SYSTEM/READONLY on Windows, no-op on Unix
         osprim::set_times(&d.dst, d.atime, d.mtime, true);
     }
     if mode == Mode::Move {
@@ -393,7 +403,7 @@ fn plan_tree(ctx: &JobCtx, src: &Path, meta: &fs::Metadata, dst: &Path, mode: Mo
         plan.links.push((src.to_path_buf(), target, dst.to_path_buf()));
     } else if ft.is_dir() {
         let exists = dst.is_dir();
-        plan.dirs.push(DirTask { dst: dst.to_path_buf(), mode: osprim::mode_of(&meta), atime, mtime, created: !exists });
+        plan.dirs.push(DirTask { dst: dst.to_path_buf(), attrs: osprim::attrs_of(src), atime, mtime, created: !exists, #[cfg(unix)] mode: osprim::mode_of(&meta) });
         let Some(entries) = with_retry(ctx, src, || fs::read_dir(src)?.collect::<io::Result<Vec<_>>>())? else { return Ok(()) };
         for e in entries {
             let child = e.path();
@@ -404,7 +414,7 @@ fn plan_tree(ctx: &JobCtx, src: &Path, meta: &fs::Metadata, dst: &Path, mode: Mo
             plan.move_leftovers.push(src.to_path_buf());
         }
     } else if ft.is_file() {
-        plan.files.push(FileTask { src: src.to_path_buf(), dst: dst.to_path_buf(), size: meta.len(), mode: osprim::mode_of(&meta), atime, mtime, ino: inode_of(src, meta) });
+        plan.files.push(FileTask { src: src.to_path_buf(), dst: dst.to_path_buf(), size: meta.len(), mode: osprim::mode_of(&meta), attrs: osprim::attrs_of(src), atime, mtime, ino: inode_of(src, meta) });
     } else {
         ctx.record_error(format!("{}: special files are not copied", src.display()));
     }
@@ -529,14 +539,15 @@ fn copy_one(ctx: &JobCtx, t: &FileTask, mode: Mode, throttle: bool, verify: bool
 }
 
 /// Compares a copy with its original, reading the copy from the device rather than from
-/// the page cache (it is flushed and dropped first).
+/// the page cache. On Unix the copy's pages are flushed and dropped first; on Windows
+/// the sector-aligned bulk is read back through `FILE_FLAG_NO_BUFFERING`, which cannot
+/// be served by cache at all, and only the sub-sector tail reads normally.
 pub fn verify_copy(ctx: &JobCtx, src: &Path, dst: &Path, counted: &mut u64) -> io::Result<()> {
     use std::io::Read;
     ctx.set_phase(Phase::Working);
     let mut a = fs::File::open(src)?;
     let mut b = fs::File::open(dst)?;
-    // Drop the copy's cached pages so the compare reads from the device; the
-    // Windows cache-eviction twin arrives with the copy-engine milestone.
+    // Drop the copy's cached pages so the compare reads from the device.
     #[cfg(unix)]
     unsafe {
         libc::fdatasync(b.as_raw_fd());
@@ -544,6 +555,39 @@ pub fn verify_copy(ctx: &JobCtx, src: &Path, dst: &Path, counted: &mut u64) -> i
     }
     let mut x = vec![0u8; 1 << 20];
     let mut y = vec![0u8; 1 << 20];
+
+    #[cfg(windows)]
+    {
+        use std::io::Seek;
+        let sector = fastcopy::sector_size(dst) as usize;
+        let len = b.metadata()?.len() as usize;
+        let bulk = len - len % sector;
+        if bulk > 0 {
+            let mut uncached = fastcopy::UncachedReader::open(dst)?;
+            let mut off = 0usize;
+            while off < bulk {
+                ctx.wait_while_paused();
+                if ctx.is_cancelled() {
+                    return Err(fastcopy::cancelled());
+                }
+                let want = x.len().min(bulk - off);
+                let n = read_full(&mut a, &mut x[..want])?;
+                let m = uncached.read(&mut y[..want])?;
+                if m == 0 {
+                    return Err(io::Error::other("verification failed: the copy changed during verification"));
+                }
+                if n != m || x[..n] != y[..n] {
+                    return Err(io::Error::other("verification failed: the copy differs from the original"));
+                }
+                off += n;
+                ctx.add_bytes(n as u64);
+                *counted += n as u64;
+            }
+        }
+        // The tail loop continues both files from here; b must skip the bulk it has not read.
+        b.seek(std::io::SeekFrom::Start(bulk as u64))?;
+    }
+
     loop {
         ctx.wait_while_paused();
         if ctx.is_cancelled() {
@@ -584,6 +628,9 @@ fn write_file(ctx: &JobCtx, t: &FileTask, dst: &Path, throttle: bool, buf: &mut 
         if perm != (perm & 0o777 & !umask()) {
             out.set_permissions(fs::Permissions::from_mode(perm))?;
         }
+        // HIDDEN/SYSTEM/READONLY travel with the copy once the bytes are written
+        // (read-only first would block the write itself); the Windows twin of the mode bits.
+        osprim::set_attrs(dst, t.attrs);
         osprim::set_times(dst, t.atime, t.mtime, true);
         Ok(())
     })();
@@ -615,7 +662,9 @@ fn open_new(dst: &Path, perm: u32) -> io::Result<fs::File> {
 
 #[cfg(windows)]
 fn open_new(dst: &Path, perm: u32) -> io::Result<fs::File> {
-    let _ = perm; // read-only/hidden propagation comes with the copy-engine milestone
+    // The attribute shape (read-only/hidden/system) rides on FileTask.attrs and is
+    // applied after the copy; perm is the Unix view and carries nothing to set here.
+    let _ = perm;
     OpenOptions::new().write(true).create_new(true).open(dst)
 }
 
@@ -753,4 +802,61 @@ fn gio_copier() -> io::Result<std::sync::mpsc::Sender<GioCopy>> {
 /// The name of `p` for messages.
 pub fn display_name(p: &Path) -> String {
     p.file_name().unwrap_or(OsStr::new("/")).to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(windows)] // the attribute twin of the Unix mode-bit scenario in tests/copy_engine.rs
+    fn readonly_and_hidden_travel_through_a_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir(&src).unwrap();
+        let f = src.join("locked.txt");
+        fs::write(&f, "secret").unwrap();
+        osprim::set_attrs(&f, 0x3); // READONLY | HIDDEN
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let ctx = JobCtx::new();
+        transfer(&ctx, &[src.clone()], &dest, Mode::Copy, &Options::default()).unwrap();
+        let out = dest.join("src").join("locked.txt");
+        assert_eq!(fs::read_to_string(&out).unwrap(), "secret");
+        assert_eq!(osprim::attrs_of(&out), 0x3);
+        assert!(fs::metadata(&out).unwrap().permissions().readonly());
+    }
+
+    #[test]
+    #[cfg(windows)] // verification must catch a byte change in bulk or tail through NO_BUFFERING
+    fn verification_reads_from_the_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = JobCtx::new();
+        for size in [0usize, 1, 500, 4096, 5000, (1 << 20) + 777] {
+            let a = dir.path().join(format!("a{size}"));
+            let b = dir.path().join(format!("b{size}"));
+            let data: Vec<u8> = (0..size).map(|i| (i * 13 % 251) as u8).collect();
+            fs::write(&a, &data).unwrap();
+            fs::write(&b, &data).unwrap();
+            verify_copy(&ctx, &a, &b, &mut 0).unwrap();
+            if size >= 2 {
+                let mut bad = data.clone();
+                let idx = if size > 4200 { 4200 } else { size - 2 };
+                bad[idx] ^= 0xFF;
+                fs::write(&b, &bad).unwrap();
+                assert!(verify_copy(&ctx, &a, &b, &mut 0).is_err(), "a changed byte at {idx} of {size} must be caught");
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(windows)] // measured behaviour: removal ignores READONLY, so moves need no clearing
+    fn removal_ignores_the_readonly_attribute() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("ro.txt");
+        fs::write(&f, "x").unwrap();
+        osprim::set_attrs(&f, 0x1);
+        fs::remove_file(&f).unwrap();
+        assert!(!f.exists());
+    }
 }

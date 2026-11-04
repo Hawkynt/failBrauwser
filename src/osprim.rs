@@ -177,6 +177,47 @@ fn distilled_mode_of(meta: &std::fs::Metadata) -> u32 {
     }
 }
 
+/// The propagatable file attributes of a source: Windows answers the HIDDEN/SYSTEM/
+/// READONLY mask (the ones a copy can safely re-set); Unix answers 0 because its
+/// engine carries the mode bits instead.
+pub fn attrs_of(path: &Path) -> u32 {
+    #[cfg(windows)]
+    {
+        let w = crate::win::longpath::wide(path);
+        let attrs = unsafe { windows::Win32::Storage::FileSystem::GetFileAttributesW(windows::core::PCWSTR(w.as_ptr())) };
+        if attrs == windows::Win32::Storage::FileSystem::INVALID_FILE_ATTRIBUTES {
+            0
+        } else {
+            attrs & 0x7 // READONLY | HIDDEN | SYSTEM
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        0
+    }
+}
+
+/// Applies `attrs_of` output to a fresh copy, keeping whatever else the new file
+/// already carries (the archive bit and friends). Best effort, like set_times.
+pub fn set_attrs(path: &Path, attrs: u32) {
+    #[cfg(windows)]
+    {
+        if attrs & 0x7 == 0 {
+            return;
+        }
+        let w = crate::win::longpath::wide(path);
+        let pcw = windows::core::PCWSTR(w.as_ptr());
+        let existing = unsafe { windows::Win32::Storage::FileSystem::GetFileAttributesW(pcw) };
+        if existing == windows::Win32::Storage::FileSystem::INVALID_FILE_ATTRIBUTES {
+            return;
+        }
+        let _ = unsafe { windows::Win32::Storage::FileSystem::SetFileAttributesW(pcw, windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES((existing & !0x7) | attrs & 0x7)) };
+    }
+    #[cfg(not(windows))]
+    let _ = (path, attrs);
+}
+
 /// A quick "may I write here" hint (permission bits only, like access(2)).
 pub fn can_write(path: &Path) -> bool {
     #[cfg(unix)]

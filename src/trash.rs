@@ -309,6 +309,7 @@ pub fn empty(_dirs: &[TrashDir]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)] // every fixture that touches the filesystem is a Unix scenario
     use std::fs;
 
     #[cfg(unix)] // builds the freedesktop folders the Unix scenarios need

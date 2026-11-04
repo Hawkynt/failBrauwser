@@ -41,11 +41,14 @@ fn remove_tree(ctx: &JobCtx, p: &Path) -> io::Result<()> {
         }
     };
     ctx.set_current(p.file_name().unwrap_or_default().to_string_lossy());
+    let mut sharing = 0u32;
     if meta.is_dir() {
         let entries = loop {
             match fs::read_dir(p).and_then(|d| d.collect::<io::Result<Vec<_>>>()) {
                 Ok(v) => break v,
+                Err(e) if fastcopy::wait_sharing_retry(&e, &mut sharing) => continue,
                 Err(e) => {
+                    sharing = 0;
                     if !ask_error(ctx, p, &e)? {
                         return Ok(());
                     }
@@ -60,7 +63,9 @@ fn remove_tree(ctx: &JobCtx, p: &Path) -> io::Result<()> {
                 Ok(()) => break,
                 // Something inside was skipped; the folder stays.
                 Err(e) if crate::osprim::is_dir_not_empty(&e) => break,
+                Err(e) if fastcopy::wait_sharing_retry(&e, &mut sharing) => continue,
                 Err(e) => {
+                    sharing = 0;
                     if !ask_error(ctx, p, &e)? {
                         break;
                     }
@@ -72,7 +77,9 @@ fn remove_tree(ctx: &JobCtx, p: &Path) -> io::Result<()> {
             match fs::remove_file(p) {
                 Ok(()) => break,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => break,
+                Err(e) if fastcopy::wait_sharing_retry(&e, &mut sharing) => continue,
                 Err(e) => {
+                    sharing = 0;
                     if !ask_error(ctx, p, &e)? {
                         break;
                     }
