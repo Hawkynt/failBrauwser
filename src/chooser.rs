@@ -4,7 +4,6 @@
 
 use gtk::prelude::*;
 use gtk::{gio, glib};
-use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
 /// One entry of the "files of type" list: name patterns (`*.png`) and content types
@@ -74,7 +73,18 @@ pub struct Request {
 fn bytes_path(v: &glib::Variant) -> Option<PathBuf> {
     let b: Vec<u8> = v.fixed_array::<u8>().ok()?.to_vec();
     let b: Vec<u8> = b.into_iter().take_while(|c| *c != 0).collect();
-    (!b.is_empty()).then(|| PathBuf::from(std::ffi::OsString::from_vec(b)))
+    (!b.is_empty()).then(|| path_from_bytes(b))
+}
+
+#[cfg(unix)]
+fn path_from_bytes(b: Vec<u8>) -> PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    PathBuf::from(std::ffi::OsString::from_vec(b))
+}
+
+#[cfg(not(unix))]
+fn path_from_bytes(b: Vec<u8>) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(&b).into_owned())
 }
 
 fn filter_of(v: &glib::Variant) -> Option<Filter> {

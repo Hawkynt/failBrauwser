@@ -87,12 +87,18 @@ pub fn create_in(dir: &Path, name: &str, url: &str, icon: &str) -> io::Result<Pa
 /// Writes an entry's text into `dir` under a free name, executable.
 pub fn write_in(dir: &Path, name: &str, text: &str) -> io::Result<PathBuf> {
     use std::io::Write;
+    #[cfg(unix)]
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     std::fs::create_dir_all(dir)?;
     let path = free_file_name(dir, name);
-    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o755).open(&path)?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    opts.mode(0o755);
+    let mut f = opts.open(&path)?;
     f.write_all(text.as_bytes())?;
     // The umask may have taken the executable bits away.
+    #[cfg(unix)]
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
     Ok(path)
 }
@@ -105,6 +111,7 @@ pub fn write(name: &str, text: &str) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -142,6 +149,7 @@ mod tests {
         assert_eq!(b, desk.join("Music (2).desktop"));
         assert_eq!(c, desk.join("a_b.desktop"));
         assert_eq!(d, desk.join("Link.desktop"));
+        #[cfg(unix)] // desktop environments demand the executable bit on .desktop files; Windows has none
         assert_eq!(std::fs::metadata(&a).unwrap().permissions().mode() & 0o777, 0o755);
         assert!(std::fs::read_to_string(&c).unwrap().contains("URL=file:///ab\n"));
     }

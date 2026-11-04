@@ -226,7 +226,7 @@ impl Location {
             gtk::glib::home_dir()
         } else if let Some(rest) = t.strip_prefix("~/") {
             gtk::glib::home_dir().join(rest)
-        } else if t.starts_with('/') {
+        } else if looks_absolute(t) {
             PathBuf::from(t)
         } else {
             return None;
@@ -280,7 +280,25 @@ fn normalize(p: &Path) -> PathBuf {
             other => out.push(other.as_os_str()),
         }
     }
-    if out.as_os_str().is_empty() { PathBuf::from("/") } else { out }
+    // The lexical root of the platform, never an invented "/".
+    if out.as_os_str().is_empty() {
+        return PathBuf::from(if cfg!(windows) { "\\" } else { "/" });
+    }
+    out
+}
+
+/// Does this text stand for an absolute path on this platform?
+#[cfg(unix)]
+fn looks_absolute(text: &str) -> bool {
+    text.starts_with('/')
+}
+
+#[cfg(windows)]
+fn looks_absolute(text: &str) -> bool {
+    let b = text.as_bytes();
+    text.starts_with('/')
+        || text.starts_with('\\')
+        || (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':')
 }
 
 #[cfg(test)]

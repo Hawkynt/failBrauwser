@@ -3,8 +3,6 @@
 
 use gtk::glib;
 use std::collections::HashMap;
-use std::ffi::CString;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -212,6 +210,21 @@ pub fn user_volumes(all: &[Volume], home: &Path) -> Vec<Volume> {
 
 /// Fill level of a mounted filesystem.
 pub fn usage(mount_point: &Path) -> Option<Usage> {
+    #[cfg(unix)]
+    return unix_usage(mount_point);
+    #[cfg(windows)]
+    return win_usage(mount_point);
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = mount_point;
+        None
+    }
+}
+
+#[cfg(unix)]
+fn unix_usage(mount_point: &Path) -> Option<Usage> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
     let c = CString::new(mount_point.as_os_str().as_bytes()).ok()?;
     let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
@@ -220,6 +233,17 @@ pub fn usage(mount_point: &Path) -> Option<Usage> {
     let f = st.f_frsize as u64;
     let total = st.f_blocks as u64 * f;
     Some(Usage { total, used: (st.f_blocks as u64 - st.f_bfree as u64) * f, free: st.f_bavail as u64 * f })
+}
+
+#[cfg(windows)]
+fn win_usage(mount_point: &Path) -> Option<Usage> {
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let w = crate::win::longpath::wide(mount_point);
+    let (mut free, mut total, mut total_free) = (0u64, 0u64, 0u64);
+    if unsafe { GetDiskFreeSpaceExW(windows::core::PCWSTR(w.as_ptr()), Some(&raw mut free), Some(&raw mut total), Some(&raw mut total_free)) }.is_err() {
+        return None;
+    }
+    Some(Usage { total, used: total.saturating_sub(total_free), free })
 }
 
 fn bytes_to_string(v: &glib::Variant) -> String {

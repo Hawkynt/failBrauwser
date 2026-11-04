@@ -1,9 +1,8 @@
 //! A directory entry with everything the views need, gathered off the UI thread.
 
-use std::ffi::OsString;
+use crate::osprim;
+use std::ffi::{OsStr, OsString};
 use std::fs::Metadata;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +33,8 @@ pub struct FileEntry {
     pub dev: u64,
     pub ino: u64,
     pub nlink: u64,
+    /// The Windows Hidden attribute; always false on Unix (there is no such notion).
+    pub attr_hidden: bool,
     /// MIME type, guessed from the name only (no content sniffing, no extra I/O).
     pub content_type: String,
 }
@@ -67,6 +68,7 @@ impl FileEntry {
             size = 0;
         }
         let content_type = guess_content_type(&name, kind, target_is_dir);
+        let ident = osprim::identity(&path, lmeta);
         FileEntry {
             name,
             path,
@@ -74,13 +76,14 @@ impl FileEntry {
             target_is_dir,
             broken,
             size,
-            mtime: lmeta.mtime(),
-            mode: lmeta.mode(),
-            uid: lmeta.uid(),
-            gid: lmeta.gid(),
-            dev: lmeta.dev(),
-            ino: lmeta.ino(),
-            nlink: lmeta.nlink(),
+            mtime: osprim::times(lmeta).1.0,
+            mode: osprim::mode_of(lmeta),
+            uid: owner_id(lmeta),
+            gid: group_id(lmeta),
+            dev: ident.dev,
+            ino: ident.id as u64,
+            nlink: ident.nlink,
+            attr_hidden: hidden_attr(lmeta),
             content_type,
         }
     }
@@ -97,13 +100,63 @@ impl FileEntry {
     }
 
     pub fn is_hidden(&self) -> bool {
-        let b = self.name.as_bytes();
-        b.first() == Some(&b'.') || b.last() == Some(&b'~')
+        unix_style_hidden(&self.name) || self.attr_hidden
     }
 
     pub fn display_name(&self) -> String {
         self.name.to_string_lossy().into_owned()
     }
+}
+
+// ---- per-platform entry stamps (Unix values verbatim; Windows distilled from what it has) ----
+
+#[cfg(unix)]
+fn owner_id(m: &Metadata) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    m.uid()
+}
+
+#[cfg(not(unix))]
+fn owner_id(_: &Metadata) -> u32 {
+    0
+}
+
+#[cfg(unix)]
+fn group_id(m: &Metadata) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    m.gid()
+}
+
+#[cfg(not(unix))]
+fn group_id(_: &Metadata) -> u32 {
+    0
+}
+
+/// FILE_ATTRIBUTE_HIDDEN (0x2) on Windows; nothing to report elsewhere.
+#[cfg(windows)]
+fn hidden_attr(m: &Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    m.file_attributes() & 0x2 != 0
+}
+
+#[cfg(not(windows))]
+fn hidden_attr(_: &Metadata) -> bool {
+    false
+}
+
+/// The `.prefix` / `tilde.suffix` rule, on bytes on Unix and on the text elsewhere
+/// (the byte view is what the Unix filesystem really stores).
+#[cfg(unix)]
+fn unix_style_hidden(name: &OsStr) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let b = name.as_bytes();
+    b.first() == Some(&b'.') || b.last() == Some(&b'~')
+}
+
+#[cfg(not(unix))]
+fn unix_style_hidden(name: &OsStr) -> bool {
+    let n = name.to_string_lossy();
+    n.starts_with('.') || n.ends_with('~')
 }
 
 /// MIME type from the file name, the way GIO does it but without touching the file.
@@ -121,9 +174,11 @@ pub fn guess_content_type(name: &std::ffi::OsStr, kind: Kind, target_is_dir: boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::fs;
 
     #[test]
+    #[cfg(unix)] // the fixture builds Unix symlinks; the classifications they exercise are Unix notions
     fn classifies_files_dirs_and_links() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
@@ -170,6 +225,7 @@ mod tests {
             dev: 0,
             ino: 0,
             nlink: 1,
+            attr_hidden: false,
             content_type: String::new(),
         };
         assert!(e(".bashrc").is_hidden());

@@ -78,6 +78,16 @@ impl Host {
     }
 }
 
+/// The neighbors the OS saw recently: `/proc/net/arp` on Unix, the IP net table on Windows.
+pub fn arp_neighbours() -> Vec<Ipv4Addr> {
+    #[cfg(unix)]
+    return std::fs::read_to_string("/proc/net/arp").map(|t| parse_arp(&t)).unwrap_or_default();
+    #[cfg(windows)]
+    return crate::win::netinfo::arp_table();
+    #[cfg(not(any(unix, windows)))]
+    Vec::new()
+}
+
 /// Addresses the kernel saw recently (`/proc/net/arp`), complete entries only.
 pub fn parse_arp(text: &str) -> Vec<Ipv4Addr> {
     text.lines()
@@ -92,6 +102,16 @@ pub fn parse_arp(text: &str) -> Vec<Ipv4Addr> {
 
 /// This machine's IPv4 addresses on private networks, with their prefix length.
 pub fn local_networks() -> Vec<(Ipv4Addr, u32)> {
+    #[cfg(unix)]
+    return unix_local_networks();
+    #[cfg(windows)]
+    return crate::win::netinfo::local_networks();
+    #[cfg(not(any(unix, windows)))]
+    Vec::new()
+}
+
+#[cfg(unix)]
+fn unix_local_networks() -> Vec<(Ipv4Addr, u32)> {
     let mut out = Vec::new();
     let mut ifap: *mut libc::ifaddrs = std::ptr::null_mut();
     // SAFETY: getifaddrs fills a list we only read and free with freeifaddrs.
@@ -149,6 +169,19 @@ fn same_net(a: Ipv4Addr, b: Ipv4Addr, prefix: u32) -> bool {
 
 /// The name reverse DNS gives an address, if any.
 fn reverse_name(addr: Ipv4Addr) -> Option<String> {
+    #[cfg(unix)]
+    return unix_reverse_name(addr);
+    #[cfg(windows)]
+    return crate::win::netinfo::reverse_name(addr);
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = addr;
+        None
+    }
+}
+
+#[cfg(unix)]
+fn unix_reverse_name(addr: Ipv4Addr) -> Option<String> {
     // SAFETY: plain C call on a stack sockaddr_in and buffer.
     unsafe {
         let mut sa: libc::sockaddr_in = std::mem::zeroed();
@@ -322,7 +355,7 @@ pub fn host_name(addr: Ipv4Addr) -> Option<String> {
 /// Asks every address on the local networks whether it takes SMB connections, and what the
 /// ones that do are called. Blocks for a second or two (many addresses are tried at once).
 pub fn find_smb_servers() -> Vec<Host> {
-    let neighbours = std::fs::read_to_string("/proc/net/arp").map(|t| parse_arp(&t)).unwrap_or_default();
+    let neighbours = arp_neighbours();
     let targets = scan_targets(&local_networks(), &neighbours);
     let timeout = Duration::from_millis(400);
     let found: Vec<Ipv4Addr> = std::thread::scope(|s| {

@@ -79,7 +79,6 @@ pub fn percent_decode(s: &str) -> Vec<u8> {
 
 /// Reads a `.trashinfo`; returns (original path as written, deletion date).
 pub fn parse_trashinfo(text: &str) -> Option<(PathBuf, String)> {
-    use std::os::unix::ffi::OsStringExt;
     let mut in_section = false;
     let (mut path, mut date) = (None, String::new());
     for line in text.lines() {
@@ -92,7 +91,7 @@ pub fn parse_trashinfo(text: &str) -> Option<(PathBuf, String)> {
             continue;
         }
         if let Some(v) = line.strip_prefix("Path=") {
-            path = Some(PathBuf::from(std::ffi::OsString::from_vec(percent_decode(v))));
+            path = Some(decode_path(percent_decode(v)));
         } else if let Some(v) = line.strip_prefix("DeletionDate=") {
             date = v.to_string();
         }
@@ -100,8 +99,33 @@ pub fn parse_trashinfo(text: &str) -> Option<(PathBuf, String)> {
     path.map(|p| (p, date))
 }
 
+/// The percent-decoded spec bytes as a path: raw on Unix (where they are the name),
+/// UTF-8 text elsewhere.
+#[cfg(unix)]
+fn decode_path(bytes: Vec<u8>) -> PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    PathBuf::from(std::ffi::OsString::from_vec(bytes))
+}
+
+#[cfg(not(unix))]
+fn decode_path(bytes: Vec<u8>) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// The home trash and the trash folders of mounted drives that exist.
 pub fn trash_dirs() -> Vec<TrashDir> {
+    #[cfg(unix)]
+    return unix_trash_dirs();
+    // Windows: the Recycle Bin is enumerated through the shell (win::recyclebin), not
+    // through XDG folders — that part of the trash lands with the shell-integration step.
+    #[cfg(windows)]
+    return Vec::new();
+    #[cfg(not(any(unix, windows)))]
+    Vec::new()
+}
+
+#[cfg(unix)]
+fn unix_trash_dirs() -> Vec<TrashDir> {
     let uid = unsafe { libc::getuid() };
     let mut dirs = vec![TrashDir { root: gtk::glib::user_data_dir().join("Trash"), top: None }];
     let home_dev = std::fs::metadata(gtk::glib::user_data_dir()).ok().map(|m| std::os::unix::fs::MetadataExt::dev(&m));

@@ -18,12 +18,15 @@ use crate::osprim;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
-use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
+#[cfg(unix)]
+use std::sync::OnceLock;
 use gtk::gio;
 use gtk::prelude::*;
 
@@ -74,6 +77,18 @@ struct Plan {
     move_leftovers: Vec<PathBuf>,
 }
 
+/// Sort key giving roughly sequential read order in the plan.
+#[cfg(unix)]
+fn inode_of(_src: &Path, meta: &fs::Metadata) -> u64 {
+    meta.ino()
+}
+
+#[cfg(windows)]
+fn inode_of(src: &Path, meta: &fs::Metadata) -> u64 {
+    osprim::identity(src, meta).id as u64
+}
+
+#[cfg(unix)]
 fn umask() -> u32 {
     static UMASK: OnceLock<u32> = OnceLock::new();
     *UMASK.get_or_init(|| {
@@ -170,8 +185,8 @@ fn resolve_conflict(ctx: &JobCtx, src: &Path, src_meta: &fs::Metadata, dst: &Pat
         dst: dst.to_path_buf(),
         src_size: src_meta.len(),
         dst_size: dst_meta.len(),
-        src_mtime: src_meta.mtime(),
-        dst_mtime: dst_meta.mtime(),
+        src_mtime: osprim::times(&src_meta).1.0,
+        dst_mtime: osprim::times(&dst_meta).1.0,
         dst_is_dir: dst_meta.is_dir(),
     };
     match ctx.ask(q) {
@@ -305,7 +320,11 @@ pub fn transfer_pairs(ctx: &JobCtx, sources: &[PathBuf], dest_dir: &Path, mode: 
 
     // Folder metadata last (deepest first); then clean up after cross-device moves.
     for d in plan.dirs.iter().rev().filter(|d| d.created) {
+        #[cfg(unix)]
         let _ = fs::set_permissions(&d.dst, fs::Permissions::from_mode(d.mode & 0o7777));
+        // Attribute propagation (read-only, hidden) arrives with the copy-engine milestone.
+        #[cfg(windows)]
+        let _ = &d.mode;
         osprim::set_times(&d.dst, d.atime, d.mtime, true);
     }
     if mode == Mode::Move {
@@ -374,7 +393,7 @@ fn plan_tree(ctx: &JobCtx, src: &Path, meta: &fs::Metadata, dst: &Path, mode: Mo
         plan.links.push((src.to_path_buf(), target, dst.to_path_buf()));
     } else if ft.is_dir() {
         let exists = dst.is_dir();
-        plan.dirs.push(DirTask { dst: dst.to_path_buf(), mode: meta.mode(), atime, mtime, created: !exists });
+        plan.dirs.push(DirTask { dst: dst.to_path_buf(), mode: osprim::mode_of(&meta), atime, mtime, created: !exists });
         let Some(entries) = with_retry(ctx, src, || fs::read_dir(src)?.collect::<io::Result<Vec<_>>>())? else { return Ok(()) };
         for e in entries {
             let child = e.path();
@@ -385,7 +404,7 @@ fn plan_tree(ctx: &JobCtx, src: &Path, meta: &fs::Metadata, dst: &Path, mode: Mo
             plan.move_leftovers.push(src.to_path_buf());
         }
     } else if ft.is_file() {
-        plan.files.push(FileTask { src: src.to_path_buf(), dst: dst.to_path_buf(), size: meta.len(), mode: meta.mode(), atime, mtime, ino: meta.ino() });
+        plan.files.push(FileTask { src: src.to_path_buf(), dst: dst.to_path_buf(), size: meta.len(), mode: osprim::mode_of(&meta), atime, mtime, ino: inode_of(src, meta) });
     } else {
         ctx.record_error(format!("{}: special files are not copied", src.display()));
     }
@@ -516,6 +535,9 @@ pub fn verify_copy(ctx: &JobCtx, src: &Path, dst: &Path, counted: &mut u64) -> i
     ctx.set_phase(Phase::Working);
     let mut a = fs::File::open(src)?;
     let mut b = fs::File::open(dst)?;
+    // Drop the copy's cached pages so the compare reads from the device; the
+    // Windows cache-eviction twin arrives with the copy-engine milestone.
+    #[cfg(unix)]
     unsafe {
         libc::fdatasync(b.as_raw_fd());
         libc::posix_fadvise(b.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
@@ -552,12 +574,13 @@ pub fn verify_copy(ctx: &JobCtx, src: &Path, dst: &Path, counted: &mut u64) -> i
 }
 
 fn write_file(ctx: &JobCtx, t: &FileTask, dst: &Path, throttle: bool, buf: &mut Vec<u8>, counted: &mut u64) -> io::Result<()> {
-    let src = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&t.src)?;
+    let src = open_unfollowed(&t.src)?;
     let perm = t.mode & 0o7777;
-    let out = OpenOptions::new().write(true).create_new(true).mode(perm & 0o777).open(dst)?;
+    let out = open_new(dst, perm)?;
     let result = (|| {
         copy_contents(ctx, &src, &out, t.size, throttle, buf, counted)?;
         // Only when the umask changed what we asked for (saves a syscall per file).
+        #[cfg(unix)]
         if perm != (perm & 0o777 & !umask()) {
             out.set_permissions(fs::Permissions::from_mode(perm))?;
         }
@@ -569,6 +592,31 @@ fn write_file(ctx: &JobCtx, t: &FileTask, dst: &Path, throttle: bool, buf: &mut 
         let _ = fs::remove_file(dst);
     }
     result
+}
+
+/// Open a regular file, refusing to follow a symlink at the last component.
+#[cfg(unix)]
+fn open_unfollowed(p: &Path) -> io::Result<fs::File> {
+    OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(p)
+}
+
+#[cfg(windows)]
+fn open_unfollowed(p: &Path) -> io::Result<fs::File> {
+    // FILE_FLAG_OPEN_REPARSE_POINT: a reparse point opens as itself, matching O_NOFOLLOW.
+    use std::os::windows::fs::OpenOptionsExt;
+    OpenOptions::new().read(true).custom_flags(0x0020_0000).open(p)
+}
+
+/// Create a brand-new destination file with the source's permission shape.
+#[cfg(unix)]
+fn open_new(dst: &Path, perm: u32) -> io::Result<fs::File> {
+    OpenOptions::new().write(true).create_new(true).mode(perm & 0o777).open(dst)
+}
+
+#[cfg(windows)]
+fn open_new(dst: &Path, perm: u32) -> io::Result<fs::File> {
+    let _ = perm; // read-only/hidden propagation comes with the copy-engine milestone
+    OpenOptions::new().write(true).create_new(true).open(dst)
 }
 
 pub use super::gvfs::is_gvfs_path;

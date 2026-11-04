@@ -7,9 +7,9 @@
 
 use super::{ArchiveError, ArchiveTree, Helper, Result};
 use crate::location::ArchiveLoc;
+use crate::osprim;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -18,12 +18,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 struct Stamp {
     mtime_ns: i128,
     size: u64,
-    ino: u64,
+    ino: u128,
 }
 
 fn stamp(p: &Path) -> Result<Stamp> {
     let m = std::fs::metadata(p).map_err(|e| ArchiveError::new("notfound", format!("{}: {e}", p.display())))?;
-    Ok(Stamp { mtime_ns: m.mtime() as i128 * 1_000_000_000 + m.mtime_nsec() as i128, size: m.len(), ino: m.ino() })
+    let mt = osprim::times(&m).1;
+    Ok(Stamp { mtime_ns: mt.0 as i128 * 1_000_000_000 + mt.1 as i128, size: m.len(), ino: osprim::identity(p, &m).id })
 }
 
 #[derive(Debug)]

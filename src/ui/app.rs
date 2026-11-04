@@ -116,6 +116,8 @@ impl AppCtx {
     fn go_idle(&self) {
         super::util::clear_caches();
         failbrauwser::archive::Helper::global().shutdown();
+        // glibc hands freed pages back only on request; the Windows heap compacts itself.
+        #[cfg(unix)]
         unsafe {
             libc::malloc_trim(0);
         }

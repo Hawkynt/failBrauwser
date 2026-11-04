@@ -225,7 +225,7 @@ pub fn transfer(w: &Window, sources: Vec<ClipSource>, dest: Location, mode: Mode
             let dir = dir.clone();
             let weak = Rc::downgrade(&w.me());
             // Copies to the same drive wait for each other.
-            let key = std::fs::metadata(&dir).ok().map(|m| std::os::unix::fs::MetadataExt::dev(&m));
+            let key = failbrauwser::osprim::device_of(&dir);
             // What went where, for Ctrl+Z.
             let pairs = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
             let p2 = pairs.clone();

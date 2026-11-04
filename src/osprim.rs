@@ -146,6 +146,37 @@ pub fn make_symlink(target: &Path, link: &Path, target_is_dir: bool) -> io::Resu
     }
 }
 
+/// Permission bits as the views display them: the real mode on Unix; on Windows
+/// distilled from the read-only attribute (the ACL truth comes with `win::sidname`).
+#[cfg_attr(any(unix, windows), allow(unreachable_code))]
+pub fn mode_of(meta: &std::fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    return unix_mode_of(meta);
+    #[cfg(not(unix))]
+    return distilled_mode_of(meta);
+    0
+}
+
+#[cfg(unix)]
+fn unix_mode_of(meta: &std::fs::Metadata) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    meta.mode()
+}
+
+#[cfg(not(unix))]
+fn distilled_mode_of(meta: &std::fs::Metadata) -> u32 {
+    let ro = meta.permissions().readonly();
+    if meta.is_dir() {
+        if ro { 0o040555 } else { 0o040755 }
+    } else if meta.file_type().is_symlink() {
+        0o120777
+    } else if ro {
+        0o100444
+    } else {
+        0o100644
+    }
+}
+
 /// A quick "may I write here" hint (permission bits only, like access(2)).
 pub fn can_write(path: &Path) -> bool {
     #[cfg(unix)]
@@ -312,14 +343,7 @@ fn win_same_filesystem(a: &Path, b: &Path) -> bool {
 
 #[cfg(windows)]
 fn volume_root(path: &Path) -> Option<String> {
-    use windows::Win32::Storage::FileSystem::GetVolumePathNameW;
-    let w = crate::win::longpath::wide(path);
-    let mut root = vec![0u16; 32768];
-    if unsafe { GetVolumePathNameW(windows::core::PCWSTR(w.as_ptr()), &mut root) }.is_err() {
-        return None;
-    }
-    let end = root.iter().position(|c| *c == 0).unwrap_or(root.len());
-    Some(String::from_utf16_lossy(&root[..end]))
+    crate::win::volume::volume_root_string(path)
 }
 
 #[cfg(windows)]

@@ -1122,13 +1122,32 @@ pub fn mount_image(w: &Rc<Window>, image: PathBuf) {
     });
 }
 
+#[cfg(unix)] // the udisks2 tracking paths that ask for it are Unix-only until the drives milestone
 async fn managed_objects(conn: &gio::DBusConnection) -> Result<glib::Variant, String> {
     conn.call_future(Some(UDISKS), "/org/freedesktop/UDisks2", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects", None, Some(glib::VariantTy::new("(a{oa{sa{sv}}})").unwrap()), gio::DBusCallFlags::NONE, 5000)
         .await
         .map_err(|e| e.to_string())
 }
 
+/// Mount a disk image as a drive: udisks loop devices on Unix; the Windows twin uses the
+/// native virtual-CD API with the drives milestone.
 async fn attach_and_mount(image: &Path) -> Result<PathBuf, String> {
+    #[cfg(unix)]
+    return udisks_attach_and_mount(image).await;
+    #[cfg(windows)]
+    {
+        let _ = image;
+        Err("Mounting an image file as a drive is not built for Windows yet.".into())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = image;
+        Err("No image mounting on this system.".into())
+    }
+}
+
+#[cfg(unix)]
+async fn udisks_attach_and_mount(image: &Path) -> Result<PathBuf, String> {
     let conn = gio::bus_get_future(gio::BusType::System).await.map_err(|e| e.to_string())?;
     let objects = managed_objects(&conn).await?;
     let loop_object = match drives::loop_for_file(&objects, image) {

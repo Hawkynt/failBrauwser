@@ -11,15 +11,18 @@
 
 use super::job::JobCtx;
 use std::io;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, RawFd};
 
 /// Writeback window for throttled copies.
 const WINDOW: u64 = 8 << 20;
 /// Chunk size for unthrottled `copy_file_range` (keeps cancel and progress responsive).
+#[cfg(unix)]
 const CHUNK: u64 = 32 << 20;
 /// Size of the fallback read/write buffer.
 pub const BUF_SIZE: usize = 1 << 20;
 /// Files at least this large get `fallocate` (less fragmentation, early ENOSPC).
+#[cfg(unix)]
 const PREALLOC_MIN: u64 = 1 << 20;
 
 pub fn cancelled() -> io::Error {
@@ -30,11 +33,13 @@ pub fn is_cancelled_error(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::Interrupted && e.to_string() == "cancelled"
 }
 
+#[cfg(unix)]
 fn cvt(r: libc::c_int) -> io::Result<libc::c_int> {
     if r < 0 { Err(io::Error::last_os_error()) } else { Ok(r) }
 }
 
 /// Tracks what has been written and paces writeback for throttled copies.
+#[cfg(unix)]
 struct Pacer {
     fd: RawFd,
     src: RawFd,
@@ -45,6 +50,7 @@ struct Pacer {
     in_flight: Option<(u64, u64)>,
 }
 
+#[cfg(unix)]
 impl Pacer {
     fn advance(&mut self, pos: u64) {
         if !self.enabled || pos - self.window_start < WINDOW {
@@ -101,6 +107,27 @@ pub enum Method {
 /// Copies `size` bytes from `src` to the freshly created, empty `dst`.
 /// `buf` is the caller's reusable buffer for the read/write fallback.
 pub fn copy_contents(
+    ctx: &JobCtx,
+    src: &std::fs::File,
+    dst: &std::fs::File,
+    size: u64,
+    throttle: bool,
+    buf: &mut Vec<u8>,
+    counted: &mut u64,
+) -> io::Result<Method> {
+    #[cfg(unix)]
+    return unix_copy_contents(ctx, src, dst, size, throttle, buf, counted);
+    #[cfg(windows)]
+    return windows_copy_contents(ctx, src, dst, size, throttle, buf, counted);
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (ctx, src, dst, size, throttle, buf, counted);
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+}
+
+#[cfg(unix)]
+fn unix_copy_contents(
     ctx: &JobCtx,
     src: &std::fs::File,
     dst: &std::fs::File,
@@ -194,10 +221,126 @@ pub fn copy_contents(
     Ok(method)
 }
 
+/// The Windows engine: a plain read/write loop with the same cancel/pause/progress
+/// hooks. Throttled targets get a `FlushFileBuffers` every window so the progress bar
+/// tracks the device and little stays dirty; reflink (ReFS) and the untuned
+/// kernel-side twins arrive with the copy-engine milestone.
+#[cfg(windows)]
+fn windows_copy_contents(
+    ctx: &JobCtx,
+    src: &std::fs::File,
+    dst: &std::fs::File,
+    size: u64,
+    throttle: bool,
+    buf: &mut Vec<u8>,
+    counted: &mut u64,
+) -> io::Result<Method> {
+    use std::io::{Read, Write};
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::FlushFileBuffers;
+    if size == 0 {
+        return Ok(Method::Empty);
+    }
+    if buf.len() < BUF_SIZE {
+        buf.resize(BUF_SIZE, 0);
+    }
+    // The Read/Write traits want &mut; the handles behind these clones are the same ones.
+    let mut r = src.try_clone()?;
+    let mut w = dst.try_clone()?;
+    let dh = HANDLE(dst.as_raw_handle());
+    let flush = || {
+        let _ = unsafe { FlushFileBuffers(dh) };
+    };
+    let mut pos: u64 = 0;
+    let mut window_start = 0u64;
+    loop {
+        ctx.wait_while_paused();
+        if ctx.is_cancelled() {
+            return Err(cancelled());
+        }
+        let want = buf.len().min((size - pos) as usize);
+        let n = match r.read(&mut buf[..want]) {
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if n == 0 {
+            break; // End of file (it may have shrunk while we copied).
+        }
+        let mut off = 0;
+        while off < n {
+            match w.write(&buf[off..n]) {
+                Ok(k) if k > 0 => off += k,
+                Ok(_) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        pos += n as u64;
+        ctx.add_bytes(n as u64);
+        *counted += n as u64;
+        if throttle && pos - window_start >= WINDOW {
+            flush();
+            window_start = pos;
+        }
+    }
+    // The source may have been shorter than promised: end where we actually got to.
+    if pos != size {
+        dst.set_len(pos)?;
+    }
+    if throttle {
+        flush();
+    }
+    Ok(Method::ReadWrite)
+}
+
 /// Flushes everything cached for the filesystem holding `dir` (after copies to slow drives).
+#[cfg_attr(any(unix, windows), allow(unreachable_code))]
 pub fn syncfs(dir: &std::path::Path) -> io::Result<()> {
+    #[cfg(unix)]
+    return unix_syncfs(dir);
+    #[cfg(windows)]
+    return win_syncfs(dir);
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = dir;
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+}
+
+#[cfg(unix)]
+fn unix_syncfs(dir: &std::path::Path) -> io::Result<()> {
     let f = std::fs::File::open(dir)?;
     cvt(unsafe { libc::syncfs(f.as_raw_fd()) }).map(|_| ())
+}
+
+/// No syncfs(2) twin: opening the volume root with backup semantics and flushing it
+/// pushes everything the filesystem has cached for that volume.
+#[cfg(windows)]
+fn win_syncfs(dir: &std::path::Path) -> io::Result<()> {
+    use windows::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE, OPEN_EXISTING,
+    };
+    let root = crate::win::volume::volume_root_path(dir).unwrap_or_else(|| dir.to_path_buf());
+    let w = crate::win::longpath::wide(&root);
+    let h = (unsafe {
+        windows::Win32::Storage::FileSystem::CreateFileW(
+            windows::core::PCWSTR(w.as_ptr()),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAGS_AND_ATTRIBUTES(FILE_FLAG_BACKUP_SEMANTICS.0),
+            None,
+        )
+    })
+    .map_err(crate::win::err::to_io)?;
+    let r = unsafe { windows::Win32::Storage::FileSystem::FlushFileBuffers(h) };
+    unsafe {
+        let _ = windows::Win32::Foundation::CloseHandle(h);
+    }
+    r.map_err(crate::win::err::to_io)
 }
 
 #[cfg(test)]

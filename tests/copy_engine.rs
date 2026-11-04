@@ -1,4 +1,8 @@
 //! Copy / move / delete behaviour on real directories.
+//!
+//! The fixtures carry Unix semantics (symlinks, mode bits, nanosecond timestamps);
+//! the Windows twins of these scenarios come with the copy-engine milestone.
+#![cfg(unix)]
 
 use failbrauwser::ops::copy::{Mode, Options, transfer};
 use failbrauwser::ops::job::{Answer, JobCtx, Question, Reply};

@@ -255,8 +255,12 @@ fn iso_edits_keep_rock_ridge_joliet_and_boot_records() {
     let long = "a name that is much longer than the sixty-four characters Joliet can hold.txt";
     fs::write(src.join(long), "long").unwrap();
     fs::write(src.join("run.sh"), "#!/bin/sh\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(src.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    // The executable bit is what Rock Ridge records on Unix; there is none on Windows.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(src.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
     fs::write(src.join("boot/isolinux.bin"), vec![0x5au8; 4096]).unwrap();
     fs::write(src.join("boot/efi.img"), vec![0xa5u8; 32768]).unwrap();
     let iso = dir.path().join("b.iso");
@@ -322,6 +326,7 @@ fn formats_table() {
 }
 
 #[test]
+#[cfg(unix)] // the stuck stimulus is a FIFO; the Windows abort twin comes with the harness milestone
 fn abort_ends_a_request_that_never_finishes() {
     let Some(h) = helper() else { return };
     let dir = tempfile::tempdir().unwrap();

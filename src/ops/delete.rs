@@ -129,9 +129,13 @@ pub fn trash(ctx: &JobCtx, paths: &[PathBuf]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    // This module is a single Unix scenario; the Windows delete twins come with the
+    // Recycle Bin and copy-engine milestones.
+    #[cfg(unix)]
     use super::*;
 
     #[test]
+    #[cfg(unix)] // the fixture builds a Unix symlink; no-follow delete is what it proves
     fn deletes_trees_without_following_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();

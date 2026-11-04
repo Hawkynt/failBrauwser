@@ -3,3 +3,5 @@
 // `#[cfg(windows)]` call — never through ad-hoc re-derivations.
 pub mod err;
 pub mod longpath;
+pub mod netinfo;
+pub mod volume;

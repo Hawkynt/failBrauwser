@@ -109,6 +109,19 @@ pub fn type_description(content_type: &str) -> String {
 }
 
 fn lookup_name(id: u32, group: bool) -> String {
+    #[cfg(unix)]
+    return unix_lookup_name(id, group);
+    #[cfg(not(unix))]
+    {
+        // Entries carry no uid/gid on Windows (they are 0); the real owner/group names
+        // come from the file's security descriptor with the shell-integration step.
+        let _ = group;
+        id.to_string()
+    }
+}
+
+#[cfg(unix)]
+fn unix_lookup_name(id: u32, group: bool) -> String {
     let mut buf = vec![0u8; 4096];
     unsafe {
         if group {

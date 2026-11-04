@@ -11,7 +11,6 @@ use failbrauwser::ops::job::{Answer, Question};
 use failbrauwser::ops::names::free_name;
 use failbrauwser::trash::{self, TrashItem};
 use gtk::prelude::*;
-use std::os::unix::fs::MetadataExt;
 use std::rc::Rc;
 
 /// The bar at the top of the trash view: how much is in it, Restore and Empty Trash.
@@ -147,8 +146,8 @@ pub fn restore_selection(w: &Window) {
                             dst: item.original.clone(),
                             src_size: here.as_ref().map(|m| m.len()).unwrap_or(0),
                             dst_size: there.as_ref().map(|m| m.len()).unwrap_or(0),
-                            src_mtime: here.as_ref().map(|m| m.mtime()).unwrap_or(0),
-                            dst_mtime: there.as_ref().map(|m| m.mtime()).unwrap_or(0),
+                            src_mtime: here.as_ref().map(|m| failbrauwser::osprim::times(m).1.0).unwrap_or(0),
+                            dst_mtime: there.as_ref().map(|m| failbrauwser::osprim::times(m).1.0).unwrap_or(0),
                             dst_is_dir: there.is_some_and(|m| m.is_dir()),
                         };
                         let parent = item.original.parent().unwrap_or(std::path::Path::new("/")).to_path_buf();

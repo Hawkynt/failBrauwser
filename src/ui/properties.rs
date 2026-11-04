@@ -106,8 +106,7 @@ pub fn show(w: &Window) {
             }
             add("Modified:", &human_time(e.mtime, now));
             if let Some(m) = Some(&e.path).filter(|p| local(p)).and_then(|p| std::fs::metadata(p).ok()) {
-                use std::os::unix::fs::MetadataExt;
-                add("Accessed:", &human_time(m.atime(), now));
+                add("Accessed:", &human_time(failbrauwser::osprim::times(&m).0.0, now));
             }
             add("Permissions:", &format!("{} ({:o})", permissions(e.mode), e.mode & 0o7777));
             add("Owner:", &format!("{} / {}", util::user_name(e.uid), util::group_name(e.gid)));

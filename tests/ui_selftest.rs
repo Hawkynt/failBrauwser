@@ -320,8 +320,11 @@ fn size_column_adds_up_folders() {
         std::fs::write(root.join("with-link/small"), vec![0u8; 10]).unwrap();
         std::fs::write(t.join("big"), vec![0u8; 100_000]).unwrap();
         // A link pointing at a big file outside: its target must not be counted.
+        // (Unix link fixtures; the Windows fixtures of these scenarios come with the harness milestone.)
+        #[cfg(unix)]
         std::os::unix::fs::symlink(t.join("big"), root.join("with-link/big-link")).unwrap();
         // A link back up the tree: following it would go round in circles.
+        #[cfg(unix)]
         std::os::unix::fs::symlink(&root, root.join("with-link/loop")).unwrap();
         std::fs::write(root.join("note.txt"), "hello").unwrap();
     });
@@ -610,8 +613,9 @@ fn status_bar_summary() {
         std::fs::write(s.join("a.bin"), vec![0u8; 1000]).unwrap();
         std::fs::write(s.join("b.bin"), vec![0u8; 500]).unwrap();
         std::fs::write(s.join("sub2/deep/c.bin"), vec![0u8; 2000]).unwrap();
-        // A symlink to something big must not count.
+        // A symlink to something big must not count. (Unix link fixture; see above.)
         std::fs::write(t.join("huge"), vec![0u8; 50_000]).unwrap();
+        #[cfg(unix)]
         std::os::unix::fs::symlink(t.join("huge"), s.join("sub1/link")).unwrap();
     });
 }
