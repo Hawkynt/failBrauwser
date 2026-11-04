@@ -156,7 +156,7 @@ pub fn restore_selection(w: &Window) {
                             Answer::KeepBoth => done.push(trash::restore(item, Some(&parent.join(free_name(&parent, &name, None))))?),
                             Answer::Replace => {
                                 // What is in the way goes to the trash instead of being lost.
-                                if let Err(e) = gtk::gio::File::for_path(&item.original).trash(gtk::gio::Cancellable::NONE) {
+                                if let Err(e) = trash::trash_file(&item.original) {
                                     ctx.record_error(format!("{}: {e}", item.original.display()));
                                     continue;
                                 }
