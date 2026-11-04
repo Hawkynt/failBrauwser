@@ -50,11 +50,7 @@ fn own_prefix() -> Result<PathBuf, String> {
             update::prefix_of(&exe).ok_or_else(|| format!("This copy runs from {}, not from an installation. Update it with git pull and ./install.sh.", exe.display()))?
         }
     };
-    let writable = {
-        use std::os::unix::ffi::OsStrExt;
-        let c = std::ffi::CString::new(prefix.join("bin").as_os_str().as_bytes()).map_err(|e| e.to_string())?;
-        unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
-    };
+    let writable = failbrauwser::osprim::can_write(&prefix.join("bin"));
     if !writable {
         return Err(format!(
             "failBrauwser is installed for everyone in {}. Update it from a terminal: download the release or the source and run ./install.sh --system.",

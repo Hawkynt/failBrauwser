@@ -377,7 +377,7 @@ fn ask_rename(w: &Window, item: Item, initial: String) {
                         w.app.remember(Undoable { what: format!("Rename “{old}”"), step: Step::Moved(vec![(e.path.clone(), target.clone())]) });
                         w.app.refresh_shares();
                     }
-                    Err(err) if err.raw_os_error() == Some(libc::EEXIST) => {
+                    Err(err) if failbrauwser::osprim::is_exists(&err) => {
                         let folder = target.symlink_metadata().is_ok_and(|m| m.is_dir());
                         let place = target.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "/".into());
                         name_taken(&w, item.clone(), new, &place, folder, {

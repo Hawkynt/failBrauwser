@@ -771,15 +771,6 @@ fn status_text(pane: &Pane) -> String {
 }
 
 pub fn free_space(dir: &std::path::Path) -> Option<u64> {
-    use std::os::unix::ffi::OsStrExt;
-    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-        return None;
-    }
     // No size at all: a server that does not tell (FTP, some WebDAV), not a full drive.
-    if st.f_blocks == 0 {
-        return None;
-    }
-    Some(st.f_bavail as u64 * st.f_frsize as u64)
+    failbrauwser::osprim::free_space(dir)
 }

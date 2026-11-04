@@ -17,6 +17,8 @@ pub struct Identity {
     pub nlink: u64,
 }
 
+// the trailing fallback is only reachable on targets that are neither Unix nor Windows
+#[cfg_attr(any(unix, windows), allow(unreachable_code))]
 pub fn identity(path: &Path, meta: &std::fs::Metadata) -> Identity {
     let _ = meta;
     #[cfg(unix)]
@@ -34,6 +36,23 @@ pub fn device_of(path: &Path) -> Option<u64> {
     return unix_device_of(path);
     #[cfg(windows)]
     return win_device_of(path);
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// dev of the entry itself (no symlink following): moving a symlink is decided by
+/// the filesystem the link lives on, not the one its target points to.
+pub fn entry_device(path: &Path) -> Option<u64> {
+    #[cfg(unix)]
+    return std::fs::symlink_metadata(path).ok().map(|m| {
+        use std::os::unix::fs::MetadataExt;
+        m.dev()
+    });
+    #[cfg(windows)]
+    return std::fs::symlink_metadata(path).ok().map(|m| identity(path, &m).dev);
     #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
@@ -66,7 +85,7 @@ pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 /// Swap two directory entries atomically. Filesystems without swap support answer
-/// through `is_swap_unsupported`, so callers can fall back to delete-first.
+/// unsupported (see `is_rename_flag_unsupported`), so callers can fall back to delete-first.
 pub fn rename_swap(from: &Path, to: &Path) -> io::Result<()> {
     let _ = (&from, &to);
     #[cfg(unix)]
@@ -77,6 +96,29 @@ pub fn rename_swap(from: &Path, to: &Path) -> io::Result<()> {
     {
         let _ = (from, to);
         Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+}
+
+/// (atime, mtime) as (seconds, nanoseconds) since the Unix epoch, from metadata.
+pub fn times(meta: &std::fs::Metadata) -> ((i64, i64), (i64, i64)) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        ((meta.atime(), meta.atime_nsec()), (meta.mtime(), meta.mtime_nsec()))
+    }
+    #[cfg(windows)]
+    {
+        let at = |t: std::io::Result<std::time::SystemTime>| -> (i64, i64) {
+            let Ok(t) = t else { return (0, 0) };
+            match t.duration_since(std::time::UNIX_EPOCH) {
+                Ok(d) => (d.as_secs() as i64, d.subsec_nanos() as i64),
+                Err(e) => {
+                    let d = e.duration();
+                    (-(d.as_secs() as i64), -(d.subsec_nanos() as i64))
+                }
+            }
+        };
+        (at(meta.accessed()), at(meta.modified()))
     }
 }
 
@@ -131,7 +173,7 @@ pub fn is_dir_not_empty(e: &io::Error) -> bool {
     codes(e, &NOT_EMPTY_CODES)
 }
 
-pub fn is_swap_unsupported(e: &io::Error) -> bool {
+pub fn is_rename_flag_unsupported(e: &io::Error) -> bool {
     codes(e, &SWAP_UNSUPPORTED_CODES)
 }
 

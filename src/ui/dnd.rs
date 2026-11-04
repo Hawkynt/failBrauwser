@@ -14,7 +14,6 @@ use failbrauwser::ops::copy::Mode;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use std::cell::RefCell;
-use std::os::unix::fs::MetadataExt;
 use std::rc::{Rc, Weak};
 
 const URI_LIST: &str = "text/uri-list";
@@ -128,10 +127,10 @@ fn highlight(view: &gtk::Widget, path: Option<&gtk::TreePath>) {
 
 fn same_filesystem(sources: &[ClipSource], dest: &Location) -> bool {
     let Some(dir) = dest.local_path() else { return false };
-    let Ok(d) = std::fs::metadata(dir) else { return false };
+    let Some(d) = failbrauwser::osprim::entry_device(dir) else { return false };
     !sources.is_empty()
         && sources.iter().all(|s| match s {
-            ClipSource::Local(p) => std::fs::symlink_metadata(p).is_ok_and(|m| m.dev() == d.dev()),
+            ClipSource::Local(p) => failbrauwser::osprim::entry_device(p) == Some(d),
             _ => false,
         })
 }
@@ -226,7 +225,7 @@ fn make_links(w: &Window, sources: &[ClipSource], dest: &Location) {
         if std::fs::symlink_metadata(&link).is_ok() {
             link = dir.join(failbrauwser::ops::names::free_name(dir, name, Some("link")));
         }
-        match std::os::unix::fs::symlink(p, &link) {
+        match failbrauwser::osprim::make_symlink(p, &link, p.is_dir()) {
             Ok(()) => made.push(link),
             Err(e) => super::util::show_error(&w.win, "Cannot create link", &e.to_string()),
         }

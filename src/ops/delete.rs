@@ -60,7 +60,7 @@ fn remove_tree(ctx: &JobCtx, p: &Path) -> io::Result<()> {
             match fs::remove_dir(p) {
                 Ok(()) => break,
                 // Something inside was skipped; the folder stays.
-                Err(e) if e.raw_os_error() == Some(libc::ENOTEMPTY) => break,
+                Err(e) if crate::osprim::is_dir_not_empty(&e) => break,
                 Err(e) => {
                     if !ask_error(ctx, p, &e)? {
                         break;

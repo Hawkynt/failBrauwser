@@ -111,11 +111,7 @@ pub fn location_writable(loc: &Location) -> bool {
         // Not asked on a network share (this runs on the UI thread, and a share that stopped
         // answering would hang it); jobs report what the share refuses.
         Location::Dir(p) if failbrauwser::ops::gvfs::is_gvfs_path(p) => true,
-        Location::Dir(p) => {
-            use std::os::unix::ffi::OsStrExt;
-            let Ok(c) = std::ffi::CString::new(p.as_os_str().as_bytes()) else { return false };
-            unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
-        }
+        Location::Dir(p) => failbrauwser::osprim::can_write(p),
         // Known once the archive was listed (always the case while it is shown).
         Location::Archive(a) => failbrauwser::archive::vfs::Vfs::global().cached(a).is_some_and(|x| x.writable),
         // Nothing can be put into the trash view; items there are restored or deleted.

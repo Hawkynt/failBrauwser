@@ -14,7 +14,8 @@ use super::device::{DeviceClass, classify};
 use super::fastcopy::{self, copy_contents, is_cancelled_error};
 use super::job::{Answer, JobCtx, Phase, Question};
 use super::names::free_name;
-use std::ffi::{CString, OsStr};
+use crate::osprim;
+use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
@@ -84,32 +85,12 @@ fn umask() -> u32 {
     })
 }
 
-fn cpath(p: &Path) -> io::Result<CString> {
-    CString::new(p.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
-}
-
 fn times(m: &fs::Metadata) -> ((i64, i64), (i64, i64)) {
-    ((m.atime(), m.atime_nsec()), (m.mtime(), m.mtime_nsec()))
-}
-
-fn set_times_path(p: &Path, atime: (i64, i64), mtime: (i64, i64), follow: bool) {
-    let Ok(c) = cpath(p) else { return };
-    let ts = [
-        libc::timespec { tv_sec: atime.0, tv_nsec: atime.1 },
-        libc::timespec { tv_sec: mtime.0, tv_nsec: mtime.1 },
-    ];
-    let flags = if follow { 0 } else { libc::AT_SYMLINK_NOFOLLOW };
-    unsafe {
-        libc::utimensat(libc::AT_FDCWD, c.as_ptr(), ts.as_ptr(), flags);
-    }
+    osprim::times(m)
 }
 
 /// rename(2) that refuses to replace an existing target.
-pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
-    let (f, t) = (cpath(from)?, cpath(to)?);
-    let r = unsafe { libc::renameat2(libc::AT_FDCWD, f.as_ptr(), libc::AT_FDCWD, t.as_ptr(), libc::RENAME_NOREPLACE) };
-    if r == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
-}
+pub use crate::osprim::rename_noreplace;
 
 /// Renames `from` to `to`, replacing what is there: a file in one atomic step, a folder (or
 /// a file over a folder) by swapping the two and deleting the old one afterwards.
@@ -121,21 +102,16 @@ pub fn rename_replacing(from: &Path, to: &Path) -> io::Result<()> {
     };
     let source = fs::symlink_metadata(from)?;
     // "a.txt" to "A.txt" on a case-insensitive drive: the same file, just a new spelling.
-    if source.dev() == target.dev() && source.ino() == target.ino() {
+    if osprim::identity(from, &source) == osprim::identity(to, &target) {
         return fs::rename(from, to);
     }
     if !source.is_dir() && !target.is_dir() {
         return fs::rename(from, to);
     }
-    let (f, t) = (cpath(from)?, cpath(to)?);
-    let r = unsafe { libc::renameat2(libc::AT_FDCWD, f.as_ptr(), libc::AT_FDCWD, t.as_ptr(), libc::RENAME_EXCHANGE) };
-    if r == 0 {
-        // The old one now sits under the source's name.
-        return remove_any(from);
-    }
-    let err = io::Error::last_os_error();
-    if !matches!(err.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP)) {
-        return Err(err);
+    match osprim::rename_swap(from, to) {
+        Ok(()) => return remove_any(from), // the old one now sits under the source's name
+        Err(err) if osprim::is_rename_flag_unsupported(&err) => {}
+        Err(err) => return Err(err),
     }
     // Filesystems that cannot swap (FUSE, some network ones): delete first.
     remove_any(to)?;
@@ -227,7 +203,7 @@ pub fn transfer_pairs(ctx: &JobCtx, sources: &[PathBuf], dest_dir: &Path, mode: 
     if let Some(dir) = sources.first().and_then(|s| s.parent()) {
         super::gvfs::check(dir, super::gvfs::TIMEOUT)?;
     }
-    let dest_meta = fs::metadata(dest_dir)?;
+    fs::metadata(dest_dir)?; // fail before any work if the destination folder is gone
     let dest_class = classify(dest_dir);
     let via_gio = is_gvfs_path(dest_dir);
     let mut plan = Plan::default();
@@ -252,7 +228,7 @@ pub fn transfer_pairs(ctx: &JobCtx, sources: &[PathBuf], dest_dir: &Path, mode: 
         }
 
         // Moves within one filesystem are a rename, whatever the size.
-        if mode == Mode::Move && src_meta.dev() == dest_meta.dev() {
+        if mode == Mode::Move && osprim::same_filesystem(src, dest_dir) {
             ctx.set_current(name.to_string_lossy());
             move_by_rename(ctx, src, &src_meta, &dst)?;
             tops.push((src.clone(), dst));
@@ -319,7 +295,7 @@ pub fn transfer_pairs(ctx: &JobCtx, sources: &[PathBuf], dest_dir: &Path, mode: 
                 }
             }
         } else {
-            with_retry(ctx, dst, || std::os::unix::fs::symlink(target, dst))?
+            with_retry(ctx, dst, || osprim::make_symlink(target, dst, fs::metadata(target).is_ok_and(|m| m.is_dir())))?
         };
         if made.is_some() && mode == Mode::Move {
             let _ = fs::remove_file(src);
@@ -330,7 +306,7 @@ pub fn transfer_pairs(ctx: &JobCtx, sources: &[PathBuf], dest_dir: &Path, mode: 
     // Folder metadata last (deepest first); then clean up after cross-device moves.
     for d in plan.dirs.iter().rev().filter(|d| d.created) {
         let _ = fs::set_permissions(&d.dst, fs::Permissions::from_mode(d.mode & 0o7777));
-        set_times_path(&d.dst, d.atime, d.mtime, true);
+        osprim::set_times(&d.dst, d.atime, d.mtime, true);
     }
     if mode == Mode::Move {
         for dir in &plan.move_leftovers {
@@ -356,8 +332,8 @@ fn move_by_rename(ctx: &JobCtx, src: &Path, src_meta: &fs::Metadata, dst: &Path)
             ctx.files_done.fetch_add(1, Ordering::Relaxed);
             return Ok(());
         }
-        Err(e) if e.raw_os_error() == Some(libc::EEXIST) || e.raw_os_error() == Some(libc::ENOTEMPTY) => {}
-        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
+        Err(e) if osprim::is_exists(&e) || osprim::is_dir_not_empty(&e) => {}
+        Err(e) if osprim::is_rename_flag_unsupported(&e) => {
             // Old kernels or filesystems without RENAME_NOREPLACE: check, then rename.
             if fs::symlink_metadata(dst).is_err() {
                 return with_retry(ctx, src, || fs::rename(src, dst)).map(|_| ());
@@ -585,13 +561,7 @@ fn write_file(ctx: &JobCtx, t: &FileTask, dst: &Path, throttle: bool, buf: &mut 
         if perm != (perm & 0o777 & !umask()) {
             out.set_permissions(fs::Permissions::from_mode(perm))?;
         }
-        let ts = [
-            libc::timespec { tv_sec: t.atime.0, tv_nsec: t.atime.1 },
-            libc::timespec { tv_sec: t.mtime.0, tv_nsec: t.mtime.1 },
-        ];
-        unsafe {
-            libc::futimens(out.as_raw_fd(), ts.as_ptr());
-        }
+        osprim::set_times(dst, t.atime, t.mtime, true);
         Ok(())
     })();
     drop(out);
