@@ -38,6 +38,8 @@ thread_local! {
     /// Change notifications from UDisks2 (dropped = unsubscribed).
     static SUBSCRIPTION: RefCell<Option<gio::SignalSubscription>> = const { RefCell::new(None) };
     static PENDING: Cell<bool> = const { Cell::new(false) };
+    /// Windows: the drive-letter poll is already installed (see [`connect_changed`]).
+    static POLLING: Cell<bool> = const { Cell::new(false) };
     /// Stand-ins for USB sticks in the self-test, answering in place of UDisks2.
     static FAKES: RefCell<Vec<FakeDrive>> = const { RefCell::new(Vec::new()) };
 }
@@ -172,8 +174,28 @@ pub fn connect_changed(f: impl Fn() -> bool + 'static) {
             changed();
             true
         });
-        let Ok(conn) = gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE) else { return };
-        *sub.borrow_mut() = Some(conn.subscribe_to_signal(Some(UDISKS), None, None, None, None, gio::DBusSignalFlags::NONE, |_| changed()));
+        #[cfg(windows)]
+        {
+            // Windows has no UDisks2 signals to follow: the drive-letter mask is polled
+            // instead — one cheap call, so sticks coming and going move the panel.
+            if !POLLING.with(|c| !c.replace(true)) {
+                let seen = Rc::new(Cell::new(0u32));
+                let _ = glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+                    let mask = failbrauwser::win::storage::drive_mask();
+                    if seen.get() != 0 && mask != seen.get() {
+                        changed();
+                    }
+                    seen.set(mask);
+                    glib::ControlFlow::Continue
+                });
+            }
+            return;
+        }
+        #[cfg(not(windows))]
+        {
+            let Ok(conn) = gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE) else { return };
+            *sub.borrow_mut() = Some(conn.subscribe_to_signal(Some(UDISKS), None, None, None, None, gio::DBusSignalFlags::NONE, |_| changed()));
+        }
     });
 }
 
@@ -212,6 +234,9 @@ fn set_busy(key: &str, on: bool) {
 
 /// Every volume and phone, with its fill level.
 pub async fn gather() -> Vec<(Volume, Option<Usage>)> {
+    #[cfg(windows)]
+    let vols = gio::spawn_blocking(failbrauwser::win::storage::volumes).await.unwrap_or_default();
+    #[cfg(not(windows))]
     let vols = match query_udisks().await {
         Some(v) => v,
         None => gio::spawn_blocking(drives::read_mountinfo).await.unwrap_or_default(),
@@ -1014,6 +1039,7 @@ pub fn reconnect_device(w: &Rc<Window>, pane: &Rc<Pane>, v: &Volume) {
 /// Unmounts (and for `eject`, powers off / ejects the whole drive, with its other volumes
 /// among `all`). Tabs showing the drive are moved to the drives page first, so they do not
 /// keep it busy.
+#[cfg_attr(windows, allow(unreachable_code))]
 pub fn unmount_volume(w: &Rc<Window>, v: &Volume, eject: bool, all: &[Volume]) {
     if v.is_device() {
         eject_device(w, v);
@@ -1028,6 +1054,8 @@ pub fn unmount_volume(w: &Rc<Window>, v: &Volume, eject: bool, all: &[Volume]) {
         super::shares::eject(w, v, move |mounts| leave(&w2, mounts));
         return;
     }
+    #[cfg(windows)]
+    return win_unmount_volume(w, v, eject);
     let mounts: Vec<PathBuf> = if eject {
         all.iter().filter(|x| x.drive_object == v.drive_object).flat_map(|x| x.mount_points.clone()).collect()
     } else {
@@ -1075,6 +1103,40 @@ pub fn unmount_volume(w: &Rc<Window>, v: &Volume, eject: bool, all: &[Volume]) {
             }
         }
         set_busy(&v.block_object, false);
+    });
+}
+
+/// Windows has no per-volume unmount: like Explorer's "Eject", a stick has its whole device
+/// taken out by PnP (caches flushed first — safe to unplug afterwards) and an optical drive
+/// ejects its disc; both buttons mean that here, so `eject` only picks the wording. The
+/// self-test stand-ins answer in the UDisks2 shape on either system.
+#[cfg(windows)]
+fn win_unmount_volume(w: &Rc<Window>, v: &Volume, eject: bool) {
+    leave(w, &v.mount_points);
+    let win = Rc::downgrade(w);
+    let v = v.clone();
+    set_busy(&v.block_object, true);
+    glib::spawn_future_local(async move {
+        let unmounted = if v.block_object.starts_with("/fake") {
+            call(&v.block_object, "org.freedesktop.UDisks2.Filesystem", "Unmount", empty_options()).await.map(|_| ())
+        } else {
+            Ok(())
+        };
+        let res = if v.block_object.starts_with("/fake") {
+            match unmounted {
+                Ok(()) if !v.crypto_backing.is_empty() => call(&v.crypto_backing, "org.freedesktop.UDisks2.Encrypted", "Lock", empty_options()).await.map(|_| ()),
+                other => other,
+            }
+        } else if v.optical {
+            gio::spawn_blocking(move || failbrauwser::win::storage::eject_media(&v.device)).await.map_err(|_| "the drive went away during the eject".to_string()).and_then(|r| r)
+        } else {
+            let device = v.device.clone();
+            gio::spawn_blocking(move || failbrauwser::win::storage::safe_remove(&device)).await.map_err(|_| "the drive went away during the eject".to_string()).and_then(|r| r)
+        };
+        set_busy(&v.block_object, false);
+        if let Err(e) = res {
+            error(&win, if v.optical || eject { "Cannot eject the drive" } else { "Cannot unmount the drive" }, &e);
+        }
     });
 }
 
@@ -1288,6 +1350,7 @@ fn strip_dbus_prefix(msg: &str) -> String {
     msg.split_once(": ").map(|(_, rest)| rest.to_string()).unwrap_or_else(|| msg.to_string())
 }
 
+#[cfg(not(windows))]
 async fn query_udisks() -> Option<Vec<Volume>> {
     let conn = gio::bus_get_future(gio::BusType::System).await.ok()?;
     let reply = conn

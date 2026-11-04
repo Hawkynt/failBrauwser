@@ -4,4 +4,5 @@
 pub mod err;
 pub mod longpath;
 pub mod netinfo;
+pub mod storage;
 pub mod volume;
