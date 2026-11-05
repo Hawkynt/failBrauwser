@@ -282,14 +282,14 @@ pub fn transfer(w: &Window, sources: Vec<ClipSource>, dest: Location, mode: Mode
         .collect();
     let retry_sources = sources.clone();
     #[cfg(windows)]
-    let touched_servers: Vec<failbrauwser::location::Target> = sources
+    let touched_servers: Vec<failbrauwser::location::RemoteAt> = sources
         .iter()
         .filter_map(|s| match s {
             ClipSource::Remote(t, ..) => Some(t.clone()),
             _ => None,
         })
         .chain(match &dest {
-            Location::Remote(r) => Some(r.target.clone()),
+            Location::Remote(r) => Some(r.at.clone()),
             _ => None,
         })
         .collect();
@@ -368,7 +368,7 @@ fn transfer_work(ctx: &JobCtx, sources: Vec<ClipSource>, dest: &Location, mode: 
         let mut local: Vec<PathBuf> = Vec::new();
         let mut from_archives: Vec<(ArchiveLoc, String)> = Vec::new();
         #[cfg(windows)]
-        let mut from_servers: Vec<(failbrauwser::location::Target, String, bool)> = Vec::new();
+        let mut from_servers: Vec<(failbrauwser::location::RemoteAt, String, bool)> = Vec::new();
         for s in &sources {
             match s {
                 ClipSource::Local(p) => local.push(p.clone()),
@@ -421,7 +421,7 @@ fn transfer_work(ctx: &JobCtx, sources: Vec<ClipSource>, dest: &Location, mode: 
             // the job's own question (see remote_fs::publish_tree).
             #[cfg(windows)]
             Location::Remote(d) => {
-                created.extend(remote_fs::publish_tree(ctx, &local, &d.target, &d.inner)?);
+                created.extend(remote_fs::publish_tree(ctx, &local, &d.at, &d.inner)?);
                 if mode == Mode::Move {
                     let moved_local: Vec<PathBuf> = local.iter().filter(|p| !p.starts_with(&staging)).cloned().collect();
                     delete::delete_permanently(ctx, &moved_local)?;
@@ -596,11 +596,11 @@ fn local_staging() -> std::io::Result<PathBuf> {
 /// Re-read every tab showing a folder on this server (its contents changed at the source
 /// or destination of a transfer).
 #[cfg(windows)]
-fn refresh_remote_tabs(w: &Window, t: &failbrauwser::location::Target) {
+fn refresh_remote_tabs(w: &Window, t: &failbrauwser::location::RemoteAt) {
     for win in w.app.windows() {
         for p in win.panes() {
             if let Location::Remote(r) = p.location() {
-                if r.target == *t {
+                if r.at == *t {
                     p.schedule_refresh();
                 }
             }

@@ -338,7 +338,7 @@ pub mod view {
         if node.is_dir {
             return;
         }
-        let (target, remote) = (loc.target.clone(), loc.entry_path(&node.name));
+        let (target, remote) = (loc.at.clone(), loc.entry_path(&node.name));
         let (name, remote2) = (node.name.clone(), remote.clone());
         let weak = Rc::downgrade(&w.me());
         w.app.jobs.start(
@@ -378,7 +378,7 @@ pub mod view {
                 if !path.is_file() {
                     return;
                 }
-                let (target, remote2, path2) = (loc.target.clone(), remote.clone(), path.clone());
+                let (target, remote2, path2) = (loc.at.clone(), remote.clone(), path.clone());
                 let name = remote.rsplit('/').next().unwrap_or(&remote).to_string();
                 let w2 = Rc::downgrade(&w);
                 w.app.jobs.start(
@@ -411,7 +411,7 @@ pub mod view {
         if entries.is_empty() {
             return;
         }
-        let target = loc.target.clone();
+        let target = loc.at.clone();
         let n = entries.len();
         let pw = Rc::downgrade(pane);
         w.app.jobs.start(
@@ -435,7 +435,7 @@ pub mod view {
     pub fn rename(w: &Window, pane: &Rc<Pane>, item: &Item, new: &str) {
         let (Location::Remote(loc), Item::Remote(node)) = (pane.location(), item) else { return };
         let (from, to, new) = (loc.entry_path(&node.name), loc.entry_path(new), new.to_string());
-        let target = loc.target.clone();
+        let target = loc.at.clone();
         let pw = Rc::downgrade(pane);
         w.app.jobs.start(
             w.win.upcast_ref(),
@@ -455,7 +455,7 @@ pub mod view {
     pub fn rename_replacing(w: &Window, pane: &Rc<Pane>, item: &Item, new: &str) {
         let (Location::Remote(loc), Item::Remote(node)) = (pane.location(), item) else { return };
         let (from, to, new) = (loc.entry_path(&node.name), loc.entry_path(new), new.to_string());
-        let (target, new_in_job) = (loc.target.clone(), new.clone());
+        let (target, new_in_job) = (loc.at.clone(), new.clone());
         let pw = Rc::downgrade(pane);
         w.app.jobs.start(
             w.win.upcast_ref(),
@@ -478,7 +478,7 @@ pub mod view {
 
     pub fn create(w: &Window, loc: &Location, name: &str, folder: bool) {
         let Location::Remote(r) = loc.clone() else { return };
-        let (target, path, name2) = (r.target.clone(), r.entry_path(name), name.to_string());
+        let (target, path, name2) = (r.at.clone(), r.entry_path(name), name.to_string());
         let shown_on = target.clone();
         let weak = Rc::downgrade(&w.me());
         w.app.jobs.start(
@@ -501,7 +501,7 @@ pub mod view {
                 let Some(w) = weak.upgrade() else { return };
                 for p in w.panes() {
                     if let Location::Remote(x) = p.location() {
-                        if x.target == shown_on {
+                        if x.at == shown_on {
                             p.reload();
                         }
                     }

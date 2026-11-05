@@ -118,7 +118,61 @@ impl Target {
     }
 }
 
-/// One folder entry as a remote server describes it: enough to show, sort and stage.
+/// Which of the app's own engines shows a remote folder: a protocol server (SFTP/FTP)
+/// or one storage of a WPD (MTP/PTP) device. Data on every platform, produced on
+/// Windows only — the engines themselves live in `remote_fs` and `wpd`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RemoteAt {
+    Server(Target),
+    /// A WPD device: its PnP instance path plus one of its storages' object ids.
+    Wpd { pnp: String, storage: String },
+}
+
+impl RemoteAt {
+    /// Reads any address the remote engines open (`sftp://`, `ssh://`, `ftp://`, `wpd://`).
+    pub fn parse_uri(uri: &str) -> Option<(RemoteAt, String)> {
+        let (scheme, rest) = uri.trim().split_once("://")?;
+        match scheme.to_ascii_lowercase().as_str() {
+            "sftp" | "ssh" | "ftp" => Target::parse_uri(uri).map(|(t, inner)| (RemoteAt::Server(t), inner)),
+            "wpd" => {
+                // wpd://<PnP instance path>/<storage>/<folder…> — the first two segments
+                // pick the device and its storage; PnP paths use backslashes, never "/".
+                let mut seg = rest.splitn(3, '/');
+                let pnp = seg.next().filter(|s| !s.is_empty())?;
+                let storage = seg.next().filter(|s| !s.is_empty())?;
+                let inner = seg.next().unwrap_or("").trim_matches('/').to_string();
+                Some((RemoteAt::Wpd { pnp: pnp.to_string(), storage: storage.to_string() }, inner))
+            }
+            _ => None,
+        }
+    }
+
+    /// The canonical address, with `path` (a folder inside the server or storage) behind it.
+    pub fn uri(&self, path: &str) -> String {
+        match self {
+            RemoteAt::Server(t) => t.uri(path),
+            RemoteAt::Wpd { pnp, storage } => format!("wpd://{pnp}/{storage}/{path}"),
+        }
+    }
+
+    /// Stable identity: the pool key, the prompt label, the history match.
+    pub fn key(&self) -> String {
+        match self {
+            RemoteAt::Server(t) => t.key(),
+            RemoteAt::Wpd { pnp, storage } => format!("{pnp}/{storage}"),
+        }
+    }
+
+    /// The short label a bare (folder-less) address shows for itself.
+    pub fn label(&self) -> String {
+        match self {
+            RemoteAt::Server(t) => t.host.clone(),
+            RemoteAt::Wpd { storage, .. } => storage.clone(),
+        }
+    }
+}
+
+/// One folder entry as a remote server or device describes it: enough to show, sort and stage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteEntry {
     pub name: String,
@@ -129,22 +183,23 @@ pub struct RemoteEntry {
     pub is_link: bool,
 }
 
-/// A folder on a remote server, addressed like a path is: server plus folder.
+/// A folder on a remote engine (server or device storage), addressed like a path is.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RemoteLoc {
-    pub target: Target,
-    /// Folder on the server; "" is the sign-in folder (the SFTP home, the FTP login folder).
+    pub at: RemoteAt,
+    /// Folder inside it; "" is the engine's own root (the SFTP home, the FTP login
+    /// folder, the device storage's top).
     pub inner: String,
 }
 
 impl RemoteLoc {
-    pub fn root(target: Target) -> Self {
-        RemoteLoc { target, inner: String::new() }
+    pub fn root(at: RemoteAt) -> Self {
+        RemoteLoc { at, inner: String::new() }
     }
 
-    /// The same server, a different folder on it.
+    /// The same engine, a different folder on it.
     pub fn with_inner(&self, inner: &str) -> Self {
-        RemoteLoc { target: self.target.clone(), inner: inner.trim_matches('/').to_string() }
+        RemoteLoc { at: self.at.clone(), inner: inner.trim_matches('/').to_string() }
     }
 
     /// The path of `name` inside the current folder.
@@ -226,7 +281,7 @@ impl Location {
             Location::Search(s) if s.is_listing() => format!("{} — with subfolders", s.root.display()),
             Location::Search(s) => format!("{} — search “{}”", s.root.display(), s.query),
             Location::Network(host) => format!("{NETWORK_URI}{host}"),
-            Location::Remote(r) => r.target.uri(&r.inner),
+            Location::Remote(r) => r.at.uri(&r.inner),
         }
     }
 
@@ -258,7 +313,7 @@ impl Location {
             Location::Search(s) => format!("Search “{}”", s.query),
             Location::Network(host) if host.is_empty() => "Network".into(),
             Location::Network(host) => host.clone(),
-            Location::Remote(r) => r.inner.rsplit('/').find(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| r.target.host.clone()),
+            Location::Remote(r) => r.inner.rsplit('/').find(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| r.at.label()),
         }
     }
 
@@ -335,12 +390,12 @@ impl Location {
             let host = t.trim_start_matches("network:").trim_matches('/');
             return Some(Location::Network(host.to_string()));
         }
-        // Windows reads sftp:// and ftp:// itself (there is no GVfs to hand them to), so
-        // those addresses are locations rather than paths.
+        // Windows reads sftp://, ftp:// and wpd:// itself (there is no GVfs to hand them
+        // to), so those addresses are locations rather than paths.
         #[cfg(windows)]
-        if t.starts_with("sftp://") || t.starts_with("ssh://") || t.starts_with("ftp://") {
-            let (target, inner) = Target::parse_uri(t)?;
-            return Some(Location::Remote(RemoteLoc { target, inner }));
+        if ["sftp://", "ssh://", "ftp://", "wpd://"].iter().any(|p| t.starts_with(p)) {
+            let (at, inner) = RemoteAt::parse_uri(t)?;
+            return Some(Location::Remote(RemoteLoc { at, inner }));
         }
         let path: PathBuf = if let Some(rest) = t.strip_prefix("file://") {
             gtk::glib::filename_from_uri(&format!("file://{rest}")).ok()?.0
@@ -521,6 +576,25 @@ mod tests {
         // The folder behind the address is read too, and IPv6 brackets are dropped.
         assert_eq!(Target::parse_uri("ftp://[fe80::1%25e1]/a/b/"), Some((Target { kind: Kind::Ftp, user: "".into(), host: "fe80::1%25e1".into(), port: 0 }, "a/b".into())));
         assert_eq!(Target::parse_uri("sftp://h").unwrap().1, "");
+    }
+
+    #[test]
+    fn remote_addresses_name_servers_and_devices() {
+        // A WPD device: PnP instance path, one storage, and the folder inside it.
+        let (at, inner) = RemoteAt::parse_uri("wpd://USB\\VID_04E8&PID_6860\\R58M12ABC/0/DCIM/Camera").unwrap();
+        assert_eq!(at, RemoteAt::Wpd { pnp: "USB\\VID_04E8&PID_6860\\R58M12ABC".into(), storage: "0".into() });
+        assert_eq!(inner, "DCIM/Camera");
+        assert_eq!(at.uri("DCIM/Camera"), "wpd://USB\\VID_04E8&PID_6860\\R58M12ABC/0/DCIM/Camera");
+        assert_eq!(at.key(), "USB\\VID_04E8&PID_6860\\R58M12ABC/0");
+        // The storage alone is the openable root of that device.
+        let (root, inner) = RemoteAt::parse_uri("wpd://WPD\\STORAGE/5").unwrap();
+        assert_eq!((root, inner.as_str()), (RemoteAt::Wpd { pnp: "WPD\\STORAGE".into(), storage: "5".into() }, ""));
+        // Protocol servers reach the same door; anything else does not.
+        let (srv, inner) = RemoteAt::parse_uri("sftp://me@nas:2222/files").unwrap();
+        assert_eq!(srv, RemoteAt::Server(Target { kind: Kind::Sftp, user: "me".into(), host: "nas".into(), port: 2222 }));
+        assert_eq!(inner, "files");
+        assert_eq!(RemoteAt::parse_uri("smb://srv/share"), None);
+        assert_eq!(RemoteAt::parse_uri("wpd://onlypnp"), None);
     }
 
     #[cfg(windows)]

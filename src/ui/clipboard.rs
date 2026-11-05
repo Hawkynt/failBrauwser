@@ -15,7 +15,7 @@ pub enum ClipSource {
     Archive(ArchiveLoc, String),
     /// An entry on a remote server: the server, the path from its sign-in folder, and what
     /// kind it is (so the walk does not have to ask).
-    Remote(failbrauwser::location::Target, String, bool),
+    Remote(failbrauwser::location::RemoteAt, String, bool),
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -172,7 +172,7 @@ pub fn selection_sources(pane: &Pane) -> Vec<ClipSource> {
             (Item::Fs(e) | Item::Found(e, _), _) => Some(ClipSource::Local(e.path.clone())),
             (Item::FoundInArchive(a, n, _), _) => Some(ClipSource::Archive(a.clone(), n.path.clone())),
             (Item::Archive(n), Location::Archive(a)) => Some(ClipSource::Archive(a.clone(), n.path.clone())),
-            (Item::Remote(n), Location::Remote(r)) => Some(ClipSource::Remote(r.target.clone(), r.entry_path(&n.name), n.is_dir)),
+            (Item::Remote(n), Location::Remote(r)) => Some(ClipSource::Remote(r.at.clone(), r.entry_path(&n.name), n.is_dir)),
             _ => None,
         })
         .collect()

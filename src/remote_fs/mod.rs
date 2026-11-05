@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 // The address and entry data lives in `location` so the Location::Remote variant is data
 // on every platform; the engine below only ever runs on Windows.
-pub use crate::location::{Kind, RemoteEntry as Entry, Target};
+pub use crate::location::{Kind, RemoteAt, RemoteEntry as Entry, Target};
 
 /// A live connection behind the pool (cheap to hand out: both arms are one Arc).
 #[derive(Clone)]
@@ -96,56 +96,81 @@ fn is_dead(e: &io::Error) -> bool {
     matches!(e.kind(), NotConnected | BrokenPipe | ConnectionReset | ConnectionRefused | ConnectionAborted | TimedOut | UnexpectedEof) || e.to_string().contains("connection lost")
 }
 
+// Each engine call dispatches on the address: a server goes through the session pool
+// above, a device storage goes to `crate::wpd` (which caches and reconnects on its own).
+
 /// Lists `path` (the pane asks again on every navigation; there is no listing cache yet).
-pub fn list(t: &Target, path: &str) -> io::Result<Vec<Entry>> {
-    with_session(t, |s| match s {
-        Session::Sftp(s) => sftp::list(s, path),
-        Session::Ftp(f) => ftp::list(f, path),
-    })
+pub fn list(at: &RemoteAt, path: &str) -> io::Result<Vec<Entry>> {
+    match at {
+        RemoteAt::Server(t) => with_session(t, |s| match s {
+            Session::Sftp(s) => sftp::list(s, path),
+            Session::Ftp(f) => ftp::list(f, path),
+        }),
+        RemoteAt::Wpd { pnp, storage } => crate::wpd::list(pnp, storage, path),
+    }
 }
 
-pub fn mkdir(t: &Target, path: &str) -> io::Result<()> {
-    with_session(t, |s| match s {
-        Session::Sftp(s) => sftp::mkdir(s, path),
-        Session::Ftp(f) => ftp::mkdir(f, path),
-    })
+pub fn mkdir(at: &RemoteAt, path: &str) -> io::Result<()> {
+    match at {
+        RemoteAt::Server(t) => with_session(t, |s| match s {
+            Session::Sftp(s) => sftp::mkdir(s, path),
+            Session::Ftp(f) => ftp::mkdir(f, path),
+        }),
+        RemoteAt::Wpd { pnp, storage } => crate::wpd::mkdir(pnp, storage, path),
+    }
 }
 
-pub fn remove(t: &Target, path: &str, is_dir: bool) -> io::Result<()> {
-    with_session(t, |s| match s {
-        Session::Sftp(s) => sftp::remove(s, path, is_dir),
-        Session::Ftp(f) => ftp::remove(f, path, is_dir),
-    })
+pub fn remove(at: &RemoteAt, path: &str, is_dir: bool) -> io::Result<()> {
+    match at {
+        RemoteAt::Server(t) => with_session(t, |s| match s {
+            Session::Sftp(s) => sftp::remove(s, path, is_dir),
+            Session::Ftp(f) => ftp::remove(f, path, is_dir),
+        }),
+        // WPD deletes one object by id and does not need the kind.
+        RemoteAt::Wpd { pnp, storage } => crate::wpd::remove(pnp, storage, path),
+    }
 }
 
-pub fn rename(t: &Target, from: &str, to: &str) -> io::Result<()> {
-    with_session(t, |s| match s {
-        Session::Sftp(s) => sftp::rename(s, from, to),
-        Session::Ftp(f) => ftp::rename(f, from, to),
-    })
+pub fn rename(at: &RemoteAt, from: &str, to: &str) -> io::Result<()> {
+    match at {
+        RemoteAt::Server(t) => with_session(t, |s| match s {
+            Session::Sftp(s) => sftp::rename(s, from, to),
+            Session::Ftp(f) => ftp::rename(f, from, to),
+        }),
+        RemoteAt::Wpd { pnp, storage } => crate::wpd::rename(pnp, storage, from, to),
+    }
 }
 
-pub fn read_to(t: &Target, path: &str, local_out: &std::path::Path) -> io::Result<u64> {
-    with_session(t, |s| match s {
-        Session::Sftp(s) => sftp::read_to(s, path, local_out),
-        Session::Ftp(f) => ftp::read_to(f, path, local_out),
-    })
+pub fn read_to(at: &RemoteAt, path: &str, local_out: &std::path::Path) -> io::Result<u64> {
+    match at {
+        RemoteAt::Server(t) => with_session(t, |s| match s {
+            Session::Sftp(s) => sftp::read_to(s, path, local_out),
+            Session::Ftp(f) => ftp::read_to(f, path, local_out),
+        }),
+        RemoteAt::Wpd { pnp, storage } => crate::wpd::read_to(pnp, storage, path, local_out),
+    }
 }
 
-pub fn write_from(t: &Target, local_in: &std::path::Path, path: &str) -> io::Result<u64> {
-    with_session(t, |s| match s {
-        Session::Sftp(s) => sftp::write_from(s, local_in, path),
-        Session::Ftp(f) => ftp::write_from(f, local_in, path),
-    })
+pub fn write_from(at: &RemoteAt, local_in: &std::path::Path, path: &str) -> io::Result<u64> {
+    match at {
+        RemoteAt::Server(t) => with_session(t, |s| match s {
+            Session::Sftp(s) => sftp::write_from(s, local_in, path),
+            Session::Ftp(f) => ftp::write_from(f, local_in, path),
+        }),
+        RemoteAt::Wpd { pnp, storage } => crate::wpd::write_from(pnp, storage, local_in, path),
+    }
 }
 
-pub fn exists(t: &Target, path: &str) -> bool {
-    match cached(t) {
-        Some(s) => match &s {
-            Session::Sftp(s) => sftp::exists(s, path),
-            Session::Ftp(f) => ftp::exists(f, path),
+pub fn exists(at: &RemoteAt, path: &str) -> bool {
+    match at {
+        RemoteAt::Server(t) => match cached(t) {
+            Some(s) => match &s {
+                Session::Sftp(s) => sftp::exists(s, path),
+                Session::Ftp(f) => ftp::exists(f, path),
+            },
+            None => false,
         },
-        None => false,
+        RemoteAt::Wpd { pnp, storage } => crate::wpd::exists(pnp, storage, path),
     }
 }
 
@@ -167,15 +192,15 @@ fn split_ext(name: &str) -> (String, String) {
 
 /// `want` is taken in `folder`: the next free "( n)" spelling. Callers reach this only
 /// after the user chose KeepBoth.
-fn free_name(t: &Target, folder: &str, want: &str) -> String {
-    if !exists(t, &join(folder, want)) {
+fn free_name(at: &RemoteAt, folder: &str, want: &str) -> String {
+    if !exists(at, &join(folder, want)) {
         return want.to_string();
     }
     let (stem, ext) = split_ext(want);
     let mut n = 2u32;
     loop {
         let cand = if ext.is_empty() { format!("{stem} ({n})") } else { format!("{stem} ({n}).{ext}") };
-        if !exists(t, &join(folder, &cand)) {
+        if !exists(at, &join(folder, &cand)) {
             return cand;
         }
         n += 1;
@@ -185,7 +210,7 @@ fn free_name(t: &Target, folder: &str, want: &str) -> String {
 /// Copies a remote file or subtree into the local `dest` folder (staging): the walk
 /// follows the listing, files land through the pooled connection, and the job's cancel
 /// button stops it between entries. Returns the top-level local paths created.
-pub fn fetch_tree(ctx: &crate::ops::job::JobCtx, t: &Target, path: &str, is_dir: bool, dest: &std::path::Path) -> io::Result<Vec<std::path::PathBuf>> {
+pub fn fetch_tree(ctx: &crate::ops::job::JobCtx, at: &RemoteAt, path: &str, is_dir: bool, dest: &std::path::Path) -> io::Result<Vec<std::path::PathBuf>> {
     let name = path.rsplit('/').next().unwrap_or(path).to_string();
     let top = dest.join(&name);
     if is_dir {
@@ -195,20 +220,20 @@ pub fn fetch_tree(ctx: &crate::ops::job::JobCtx, t: &Target, path: &str, is_dir:
             if ctx.is_cancelled() {
                 return Err(crate::ops::fastcopy::cancelled());
             }
-            for e in list(t, &rp)? {
+            for e in list(at, &rp)? {
                 let (child_r, child_l) = (join(&rp, &e.name), lp.join(&e.name));
                 if e.is_dir {
                     std::fs::create_dir_all(&child_l)?;
                     queue.push((child_r, child_l));
                 } else {
                     ctx.set_current(e.name.clone());
-                    read_to(t, &child_r, &child_l)?;
+                    read_to(at, &child_r, &child_l)?;
                 }
             }
         }
     } else {
         ctx.set_current(name.clone());
-        read_to(t, path, &top)?;
+        read_to(at, path, &top)?;
     }
     Ok(vec![top])
 }
@@ -217,7 +242,7 @@ pub fn fetch_tree(ctx: &crate::ops::job::JobCtx, t: &Target, path: &str, is_dir:
 /// conflict question per top-level entry; a folder's own contents then overwrite as
 /// plain STOR/write does (matching how the local engine treats files inside a
 /// merged folder). Returns the created entry names.
-pub fn publish_tree(ctx: &crate::ops::job::JobCtx, locals: &[std::path::PathBuf], t: &Target, dest: &str) -> io::Result<Vec<std::path::PathBuf>> {
+pub fn publish_tree(ctx: &crate::ops::job::JobCtx, locals: &[std::path::PathBuf], at: &RemoteAt, dest: &str) -> io::Result<Vec<std::path::PathBuf>> {
     use crate::ops::job::{Answer, Question};
     let mut created = Vec::new();
     for src in locals {
@@ -225,12 +250,12 @@ pub fn publish_tree(ctx: &crate::ops::job::JobCtx, locals: &[std::path::PathBuf]
             return Err(crate::ops::fastcopy::cancelled());
         }
         let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let existing = list(t, dest).unwrap_or_default().into_iter().find(|e| e.name == name);
+        let existing = list(at, dest).unwrap_or_default().into_iter().find(|e| e.name == name);
         let name = match existing {
             None => name,
             Some(e) => match ctx.ask(Question::Conflict {
                 src: src.clone(),
-                dst: std::path::PathBuf::from(t.uri(&join(dest, &name))),
+                dst: std::path::PathBuf::from(at.uri(&join(dest, &name))),
                 src_size: src.metadata().map_or(0, |m| m.len()),
                 dst_size: e.size,
                 src_mtime: src.metadata().ok().and_then(|m| m.modified().ok()).and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64),
@@ -238,10 +263,10 @@ pub fn publish_tree(ctx: &crate::ops::job::JobCtx, locals: &[std::path::PathBuf]
                 dst_is_dir: e.is_dir,
             }) {
                 Answer::Replace => {
-                    remove(t, &join(dest, &name), e.is_dir)?;
+                    remove(at, &join(dest, &name), e.is_dir)?;
                     name
                 }
-                Answer::KeepBoth => free_name(t, dest, &name),
+                Answer::KeepBoth => free_name(at, dest, &name),
                 Answer::Skip => continue,
                 _ => return Err(crate::ops::fastcopy::cancelled()),
             },
@@ -253,8 +278,8 @@ pub fn publish_tree(ctx: &crate::ops::job::JobCtx, locals: &[std::path::PathBuf]
                 if ctx.is_cancelled() {
                     return Err(crate::ops::fastcopy::cancelled());
                 }
-                if !exists(t, &rp) {
-                    mkdir(t, &rp)?;
+                if !exists(at, &rp) {
+                    mkdir(at, &rp)?;
                 }
                 for e in (std::fs::read_dir(&lp).ok()).into_iter().flatten().flatten() {
                     let child_l = e.path();
@@ -263,13 +288,13 @@ pub fn publish_tree(ctx: &crate::ops::job::JobCtx, locals: &[std::path::PathBuf]
                         queue.push((child_l, child_r));
                     } else {
                         ctx.set_current(e.file_name().to_string_lossy().into_owned());
-                        write_from(t, &child_l, &child_r)?;
+                        write_from(at, &child_l, &child_r)?;
                     }
                 }
             }
         } else {
             ctx.set_current(name.clone());
-            write_from(t, src, &rdest)?;
+            write_from(at, src, &rdest)?;
         }
         created.push(std::path::PathBuf::from(name));
     }

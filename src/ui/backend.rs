@@ -39,9 +39,9 @@ pub fn read_location(loc: &Location) -> Result<Vec<Item>, LoadError> {
         // SFTP and FTP folders are read by the app's own stack (the pane's worker thread
         // blocks on the pooled connection; the UI never does).
         #[cfg(windows)]
-        Location::Remote(r) => failbrauwser::remote_fs::list(&r.target, &r.inner)
+        Location::Remote(r) => failbrauwser::remote_fs::list(&r.at, &r.inner)
             .map(|v| v.into_iter().map(Item::Remote).collect())
-            .map_err(|e| format!("Cannot open “{}”: {e}", r.target.key()).into()),
+            .map_err(|e| format!("Cannot open “{}”: {e}", r.at.key()).into()),
         #[cfg(not(windows))]
         // Linux hands those addresses to GVfs; a Remote location is never produced here.
         Location::Remote(_) => Ok(Vec::new()),

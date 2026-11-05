@@ -90,32 +90,33 @@ fn sftp_round_trip(tmp: &Path, xdg: &Path) {
     let sh = ready_rx.recv().unwrap();
 
     let t = Target::from_uri(&format!("sftp://tester@127.0.0.1:{port}/")).unwrap();
+    let at = remote_fs::RemoteAt::Server(t.clone());
 
-    let entries = remote_fs::list(&t, "").expect("listing the fixture root");
+    let entries = remote_fs::list(&at, "").expect("listing the fixture root");
     let names: Vec<(&str, bool, u64)> = entries.iter().map(|e| (e.name.as_str(), e.is_dir, e.size)).collect();
     assert_eq!(names, vec![("emptydir", true, 0), ("hello.txt", false, 18), ("sub", true, 0)], "sorted listing with sizes and types");
     assert!(entries.iter().find(|e| e.name == "hello.txt").unwrap().mtime > 1_700_000_000, "the server's real mtime rides through");
 
     let down = tmp.join("down.txt");
-    assert_eq!(remote_fs::read_to(&t, "/hello.txt", &down).unwrap(), 18);
+    assert_eq!(remote_fs::read_to(&at, "/hello.txt", &down).unwrap(), 18);
     assert_eq!(std::fs::read(&down).unwrap(), b"remote says hello\n");
 
     let up = tmp.join("up.bin");
     std::fs::write(&up, b"uploaded bytes").unwrap();
-    assert_eq!(remote_fs::write_from(&t, &up, "/up.txt").unwrap(), 14);
+    assert_eq!(remote_fs::write_from(&at, &up, "/up.txt").unwrap(), 14);
     assert_eq!(std::fs::read(root.join("up.txt")).unwrap(), b"uploaded bytes", "the write landed on the server's disk");
 
-    remote_fs::mkdir(&t, "/newdir").unwrap();
+    remote_fs::mkdir(&at, "/newdir").unwrap();
     assert!(root.join("newdir").is_dir());
-    remote_fs::rename(&t, "/up.txt", "/moved.txt").unwrap();
+    remote_fs::rename(&at, "/up.txt", "/moved.txt").unwrap();
     assert!(!root.join("up.txt").exists() && root.join("moved.txt").exists());
-    remote_fs::remove(&t, "/moved.txt", false).unwrap();
-    remote_fs::remove(&t, "/newdir", true).unwrap();
+    remote_fs::remove(&at, "/moved.txt", false).unwrap();
+    remote_fs::remove(&at, "/newdir", true).unwrap();
     assert!(!root.join("moved.txt").exists() && !root.join("newdir").exists());
 
-    assert!(remote_fs::exists(&t, "/sub/nested.txt"));
-    assert!(!remote_fs::exists(&t, "/gone.txt"));
-    let err = remote_fs::list(&t, "/nope").unwrap_err();
+    assert!(remote_fs::exists(&at, "/sub/nested.txt"));
+    assert!(!remote_fs::exists(&at, "/gone.txt"));
+    let err = remote_fs::list(&at, "/nope").unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "a missing folder reads as NotFound");
 
     // Whole-tree legs of the copy engine: folders walk down to staging and back up,
@@ -127,16 +128,16 @@ fn sftp_round_trip(tmp: &Path, xdg: &Path) {
     });
     let stage = tmp.join("stage");
     std::fs::create_dir_all(&stage).unwrap();
-    assert_eq!(remote_fs::fetch_tree(&ctx, &t, "/sub", true, &stage).unwrap(), vec![stage.join("sub")], "a walked folder reports its top entry");
+    assert_eq!(remote_fs::fetch_tree(&ctx, &at, "/sub", true, &stage).unwrap(), vec![stage.join("sub")], "a walked folder reports its top entry");
     assert_eq!(std::fs::read(stage.join("sub/nested.txt")).unwrap(), b"nested", "the walk followed the listing down");
-    assert_eq!(remote_fs::fetch_tree(&ctx, &t, "/hello.txt", false, &stage).unwrap(), vec![stage.join("hello.txt")]);
+    assert_eq!(remote_fs::fetch_tree(&ctx, &at, "/hello.txt", false, &stage).unwrap(), vec![stage.join("hello.txt")]);
 
     let out = tmp.join("out");
     std::fs::create_dir_all(out.join("deep")).unwrap();
     std::fs::write(out.join("deep/a.txt"), b"ae").unwrap();
     std::fs::write(out.join("b.txt"), b"bee").unwrap();
     std::fs::write(stage.join("hello.txt"), b"local copy of hello\n").unwrap();
-    let created = remote_fs::publish_tree(&ctx, &[out.clone(), stage.join("hello.txt")], &t, "").unwrap();
+    let created = remote_fs::publish_tree(&ctx, &[out.clone(), stage.join("hello.txt")], &at, "").unwrap();
     assert_eq!(created, vec![std::path::PathBuf::from("out"), std::path::PathBuf::from("hello (2).txt")], "the folder lands; KeepBoth renumbers the clash");
     assert_eq!(std::fs::read(root.join("out/deep/a.txt")).unwrap(), b"ae", "nested locals go out over mkdir+write");
     assert_eq!(std::fs::read(root.join("out/b.txt")).unwrap(), b"bee");
@@ -378,24 +379,25 @@ fn ftp_round_trip(tmp: &Path) {
     let srv = std::thread::spawn(move || ftp_serve(&listening, &root2).unwrap());
 
     let t = Target::from_uri(&format!("ftp://tester@127.0.0.1:{port}")).unwrap();
+    let at = remote_fs::RemoteAt::Server(t.clone());
 
-    let entries = remote_fs::list(&t, "/").expect("the LIST round trip");
+    let entries = remote_fs::list(&at, "/").expect("the LIST round trip");
     // the wire order, with the un*x line, the DOS line and the noise line all handled
     assert_eq!(entries.iter().map(|e| (e.name.as_str(), e.is_dir, e.size)).collect::<Vec<_>>(), vec![("photos", true, 0), ("reports", true, 0), ("hello.txt", false, 15)], "both LIST dialects parse off the wire");
     assert_eq!(entries[0].mtime, 1_673_740_800, "the un*x line's dated year is read");
     assert_eq!(entries[1].mtime, 1_762_333_200, "the DOS line's date and AM time are read");
 
     let down = tmp.join("ftp-down.txt");
-    assert_eq!(remote_fs::read_to(&t, "/hello.txt", &down).unwrap(), 15);
+    assert_eq!(remote_fs::read_to(&at, "/hello.txt", &down).unwrap(), 15);
     assert_eq!(std::fs::read(&down).unwrap(), b"ftp says hello!");
 
     let up = tmp.join("ftp-up.bin");
     std::fs::write(&up, b"ftp uploaded bytes").unwrap();
-    assert_eq!(remote_fs::write_from(&t, &up, "/up.txt").unwrap(), 18);
+    assert_eq!(remote_fs::write_from(&at, &up, "/up.txt").unwrap(), 18);
     assert_eq!(std::fs::read(root.join("stored-up.txt")).unwrap(), b"ftp uploaded bytes", "STOR landed on disk");
 
-    assert!(remote_fs::exists(&t, "/hello.txt"));
-    assert!(!remote_fs::exists(&t, "/gone.txt"));
+    assert!(remote_fs::exists(&at, "/hello.txt"));
+    assert!(!remote_fs::exists(&at, "/gone.txt"));
 
     remote_fs::close_all();
     srv.join().unwrap();
