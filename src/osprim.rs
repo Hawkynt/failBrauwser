@@ -177,6 +177,37 @@ fn distilled_mode_of(meta: &std::fs::Metadata) -> u32 {
     }
 }
 
+/// The attribute names the properties dialog lists: the flags Windows carries on the
+/// file itself (what Explorer's General tab shows); Unix knows no such notion.
+#[cfg(windows)]
+pub fn attribute_names(meta: &std::fs::Metadata) -> Vec<&'static str> {
+    use std::os::windows::fs::MetadataExt;
+    attribute_names_of(meta.file_attributes())
+}
+
+/// Kept as a pure mapping so the names are tested for every flag without needing a
+/// disk that holds one of each.
+#[cfg(windows)]
+pub fn attribute_names_of(attributes: u32) -> Vec<&'static str> {
+    // FILE_ATTRIBUTE_* values, in the order the dialog reads best; the noise flags
+    // (NORMAL, DEVICE, NOT_CONTENT_INDEXED) stay out of the list on purpose.
+    const FLAGS: &[(u32, &str)] = &[
+        (0x1, "Read-only"),
+        (0x2, "Hidden"),
+        (0x4, "System"),
+        (0x10, "Directory"),
+        (0x20, "Archive"),
+        (0x100, "Temporary"),
+        (0x200, "Sparse"),
+        (0x400, "Link"),
+        (0x800, "Compressed"),
+        (0x1000, "Offline"),
+        (0x4000, "Encrypted"),
+        (0x8000, "Integrity"),
+    ];
+    FLAGS.iter().filter(|(bit, _)| attributes & bit != 0).map(|(_, name)| *name).collect()
+}
+
 /// The propagatable file attributes of a source: Windows answers the HIDDEN/SYSTEM/
 /// READONLY mask (the ones a copy can safely re-set); Unix answers 0 because its
 /// engine carries the mode bits instead.
@@ -544,4 +575,20 @@ fn win_can_write(path: &Path) -> bool {
     let w = crate::win::longpath::wide(path);
     let attrs = unsafe { GetFileAttributesW(windows::core::PCWSTR(w.as_ptr())) };
     attrs != INVALID_FILE_ATTRIBUTES && (attrs & windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY.0) == 0
+}
+
+#[cfg(windows)]
+#[cfg(test)]
+mod tests {
+    use super::attribute_names_of;
+
+    #[test]
+    fn attribute_names_follow_the_flags_and_skip_the_noise() {
+        assert_eq!(attribute_names_of(0x80), Vec::<&str>::new(), "a plain NORMAL file lists nothing");
+        assert_eq!(attribute_names_of(0x1 | 0x2), ["Read-only", "Hidden"], "the names follow the bit order the dialog lists");
+        assert_eq!(attribute_names_of(0x400), ["Link"], "a reparse point reads as Link");
+        let all = attribute_names_of(0x1 | 0x2 | 0x4 | 0x10 | 0x20 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 | 0x4000 | 0x8000);
+        assert_eq!(all.len(), 12, "every listed flag gets exactly one name");
+        assert_eq!(attribute_names_of(0x2000), Vec::<&str>::new(), "NOT_CONTENT_INDEXED is noise and stays out");
+    }
 }

@@ -11,9 +11,13 @@ thread_local! {
     static ICONS: RefCell<HashMap<String, gio::Icon>> = RefCell::new(HashMap::new());
     static LINK_ICONS: RefCell<HashMap<String, gio::Icon>> = RefCell::new(HashMap::new());
     static DESCRIPTIONS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    static SPECIAL_DIRS: RefCell<Option<HashMap<PathBuf, &'static str>>> = const { RefCell::new(None) };
+}
+
+#[cfg(unix)]
+thread_local! {
     static USERS: RefCell<HashMap<u32, String>> = RefCell::new(HashMap::new());
     static GROUPS: RefCell<HashMap<u32, String>> = RefCell::new(HashMap::new());
-    static SPECIAL_DIRS: RefCell<Option<HashMap<PathBuf, &'static str>>> = const { RefCell::new(None) };
 }
 
 /// Drops the caches; used when the last window closes and the process idles as a daemon.
@@ -108,16 +112,11 @@ pub fn type_description(content_type: &str) -> String {
     })
 }
 
+/// The account behind an id (Unix only: Windows rows carry their names through the
+/// security descriptor instead — see [`entry_owner`]).
+#[cfg(unix)]
 fn lookup_name(id: u32, group: bool) -> String {
-    #[cfg(unix)]
-    return unix_lookup_name(id, group);
-    #[cfg(not(unix))]
-    {
-        // Entries carry no uid/gid on Windows (they are 0); the real owner/group names
-        // come from the file's security descriptor with the shell-integration step.
-        let _ = group;
-        id.to_string()
-    }
+    unix_lookup_name(id, group)
 }
 
 #[cfg(unix)]
@@ -141,12 +140,31 @@ fn unix_lookup_name(id: u32, group: bool) -> String {
     id.to_string()
 }
 
+#[cfg(unix)]
 pub fn user_name(uid: u32) -> String {
     USERS.with(|c| c.borrow_mut().entry(uid).or_insert_with(|| lookup_name(uid, false)).clone())
 }
 
+#[cfg(unix)]
 pub fn group_name(gid: u32) -> String {
     GROUPS.with(|c| c.borrow_mut().entry(gid).or_insert_with(|| lookup_name(gid, true)).clone())
+}
+
+/// The owner name a row shows: the entry's own name on Windows (the loader asked the
+/// security descriptor), the uid's account name on Unix — what each platform is true by.
+pub fn entry_owner(e: &failbrauwser::fs::FileEntry) -> String {
+    #[cfg(windows)]
+    return e.owner.clone().unwrap_or_default();
+    #[cfg(not(windows))]
+    user_name(e.uid)
+}
+
+/// The group name a row shows (see [`entry_owner`]).
+pub fn entry_group(e: &failbrauwser::fs::FileEntry) -> String {
+    #[cfg(windows)]
+    return e.group.clone().unwrap_or_default();
+    #[cfg(not(windows))]
+    group_name(e.gid)
 }
 
 /// Opens a file with its default application, without blocking the UI.

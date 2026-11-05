@@ -35,6 +35,12 @@ pub struct FileEntry {
     pub nlink: u64,
     /// The Windows Hidden attribute; always false on Unix (there is no such notion).
     pub attr_hidden: bool,
+    /// Owner and group names from the security descriptor (Windows only; Unix answers
+    /// through `uid`/`gid`, which carry no names in the entry).
+    #[cfg(windows)]
+    pub owner: Option<String>,
+    #[cfg(windows)]
+    pub group: Option<String>,
     /// MIME type, guessed from the name only (no content sniffing, no extra I/O).
     pub content_type: String,
 }
@@ -69,6 +75,13 @@ impl FileEntry {
         }
         let content_type = guess_content_type(&name, kind, target_is_dir);
         let ident = osprim::identity(&path, lmeta);
+        // The two names every Windows shell shows next to a file; a descriptor that will
+        // not answer (a drive refusing security queries) leaves them absent, not wrong.
+        #[cfg(windows)]
+        let (owner, group) = match crate::win::sidname::owner_group(&path) {
+            Ok((o, g)) => (Some(o), Some(g)),
+            Err(_) => (None, None),
+        };
         FileEntry {
             name,
             path,
@@ -84,6 +97,10 @@ impl FileEntry {
             ino: ident.id as u64,
             nlink: ident.nlink,
             attr_hidden: hidden_attr(lmeta),
+            #[cfg(windows)]
+            owner,
+            #[cfg(windows)]
+            group,
             content_type,
         }
     }
@@ -226,10 +243,25 @@ mod tests {
             ino: 0,
             nlink: 1,
             attr_hidden: false,
+            #[cfg(windows)]
+            owner: None,
+            #[cfg(windows)]
+            group: None,
             content_type: String::new(),
         };
         assert!(e(".bashrc").is_hidden());
         assert!(e("file~").is_hidden());
         assert!(!e("file").is_hidden());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_entry_off_disk_carries_the_names_explorer_shows() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("named-entry.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let e = FileEntry::stat(&file).unwrap();
+        assert!(e.owner.as_deref().is_some_and(|o| !o.is_empty()), "the entry learned an owner name");
+        assert!(e.group.as_deref().is_some_and(|g| !g.is_empty()), "the entry learned a group name");
     }
 }

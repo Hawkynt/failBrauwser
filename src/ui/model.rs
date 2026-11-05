@@ -168,8 +168,8 @@ pub fn fill_row(store: &gtk::ListStore, iter: &gtk::TreeIter, key: u64, item: &I
             t.deleted_unix(),
             if e.broken { "inode/symlink".to_string() } else { e.content_type.clone() },
             permissions(e.mode),
-            util::user_name(e.uid),
-            util::group_name(e.gid),
+            util::entry_owner(e),
+            util::entry_group(e),
         ),
         Item::Fs(e) | Item::Found(e, _) => (
             util::icon_for_entry(e),
@@ -177,8 +177,8 @@ pub fn fill_row(store: &gtk::ListStore, iter: &gtk::TreeIter, key: u64, item: &I
             e.mtime,
             if e.broken { "inode/symlink".to_string() } else { e.content_type.clone() },
             permissions(e.mode),
-            util::user_name(e.uid),
-            util::group_name(e.gid),
+            util::entry_owner(e),
+            util::entry_group(e),
         ),
         Item::Archive(n) | Item::FoundInArchive(_, n, _) => {
             let ct = item.content_type();
