@@ -6,6 +6,8 @@ use super::model::Item;
 use super::pane::Pane;
 use super::window::Window;
 use super::{archive, dnd, fileops, util};
+#[cfg(windows)]
+use super::remote;
 use failbrauwser::location::Location;
 use failbrauwser::ops::copy::Mode;
 use gtk::gio;
@@ -114,14 +116,21 @@ pub fn location_writable(loc: &Location) -> bool {
         Location::Dir(p) => failbrauwser::osprim::can_write(p),
         // Known once the archive was listed (always the case while it is shown).
         Location::Archive(a) => failbrauwser::archive::vfs::Vfs::global().cached(a).is_some_and(|x| x.writable),
+        // A server folder is taken as writable (asking would mean a round trip per draw);
+        // the job reports whatever the server refuses.
+        Location::Remote(_) => true,
         // Nothing can be put into the trash view; items there are restored or deleted.
         Location::Drives | Location::Trash | Location::Search(_) | Location::Network(_) => false,
     }
 }
 
-/// Items that are not plain local files (entries inside archives).
+/// Items that are not plain local files (entries inside archives or on servers).
 pub fn open_non_local(w: &Window, item: &Item) {
-    archive::open_entry(w, item);
+    match item {
+        #[cfg(windows)]
+        Item::Remote(_) => remote::view::open_entry(w, item),
+        _ => archive::open_entry(w, item),
+    }
 }
 
 pub fn transfer_non_local(w: &Window, sources: Vec<ClipSource>, dest: Location, mode: Mode, after: Box<dyn FnOnce()>) {
@@ -133,15 +142,36 @@ pub fn transfer_non_local(w: &Window, sources: Vec<ClipSource>, dest: Location, 
 }
 
 pub fn delete_non_local(w: &Window, pane: &Rc<Pane>) {
-    archive::delete_selection(w, pane);
+    match pane.location() {
+        #[cfg(windows)]
+        Location::Remote(_) => remote::view::delete_selection(w, pane),
+        _ => archive::delete_selection(w, pane),
+    }
 }
 
 pub fn rename_non_local(w: &Window, pane: &Rc<Pane>, item: &Item, new: &str) {
-    archive::rename(w, pane, item, new);
+    match pane.location() {
+        #[cfg(windows)]
+        Location::Remote(_) => remote::view::rename(w, pane, item, new),
+        _ => archive::rename(w, pane, item, new),
+    }
+}
+
+/// Rename onto a name that is there (asked first — see `fileops::rename`).
+pub fn rename_replacing_non_local(w: &Window, pane: &Rc<Pane>, item: &Item, new: &str) {
+    match pane.location() {
+        #[cfg(windows)]
+        Location::Remote(_) => remote::view::rename_replacing(w, pane, item, new),
+        _ => archive::rename_replacing(w, pane, item, new),
+    }
 }
 
 pub fn create_non_local(w: &Window, loc: &Location, name: &str, folder: bool) {
-    archive::create(w, loc, name, folder);
+    match loc {
+        #[cfg(windows)]
+        Location::Remote(_) => remote::view::create(w, loc, name, folder),
+        _ => archive::create(w, loc, name, folder),
+    }
 }
 
 fn section(menu: &gio::Menu, items: &[(&str, &str)]) {

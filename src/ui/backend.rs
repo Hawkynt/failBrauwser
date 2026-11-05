@@ -36,6 +36,15 @@ pub fn read_location(loc: &Location) -> Result<Vec<Item>, LoadError> {
                 None => Err(format!("“{}” does not exist in this archive.", a.inner).into()),
             }
         }
+        // SFTP and FTP folders are read by the app's own stack (the pane's worker thread
+        // blocks on the pooled connection; the UI never does).
+        #[cfg(windows)]
+        Location::Remote(r) => failbrauwser::remote_fs::list(&r.target, &r.inner)
+            .map(|v| v.into_iter().map(Item::Remote).collect())
+            .map_err(|e| format!("Cannot open “{}”: {e}", r.target.key()).into()),
+        #[cfg(not(windows))]
+        // Linux hands those addresses to GVfs; a Remote location is never produced here.
+        Location::Remote(_) => Ok(Vec::new()),
         // Search results stream in while searching (see the pane).
         Location::Drives | Location::Search(_) | Location::Network(_) => Ok(Vec::new()),
         Location::Trash => Ok(failbrauwser::trash::list(&failbrauwser::trash::trash_dirs())
@@ -57,7 +66,8 @@ pub fn watch_path(loc: &Location) -> Option<PathBuf> {
             let _ = std::fs::create_dir_all(&files);
             Some(files)
         }
-        Location::Drives | Location::Search(_) | Location::Network(_) => None,
+        // A remote folder has nothing local to watch; reloads are manual or navigational.
+        Location::Drives | Location::Search(_) | Location::Network(_) | Location::Remote(_) => None,
     }
 }
 

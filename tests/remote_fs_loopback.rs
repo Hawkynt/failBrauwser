@@ -118,6 +118,31 @@ fn sftp_round_trip(tmp: &Path, xdg: &Path) {
     let err = remote_fs::list(&t, "/nope").unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "a missing folder reads as NotFound");
 
+    // Whole-tree legs of the copy engine: folders walk down to staging and back up,
+    // and a name clash is answered through the job's own question (scripted KeepBoth).
+    use failbrauwser::ops::job::{Answer, JobCtx, Question, Reply};
+    let ctx = JobCtx::with_answers(|q| match q {
+        Question::Conflict { .. } => Reply { answer: Answer::KeepBoth, for_all: false },
+        _ => Reply { answer: Answer::Cancel, for_all: true },
+    });
+    let stage = tmp.join("stage");
+    std::fs::create_dir_all(&stage).unwrap();
+    assert_eq!(remote_fs::fetch_tree(&ctx, &t, "/sub", true, &stage).unwrap(), vec![stage.join("sub")], "a walked folder reports its top entry");
+    assert_eq!(std::fs::read(stage.join("sub/nested.txt")).unwrap(), b"nested", "the walk followed the listing down");
+    assert_eq!(remote_fs::fetch_tree(&ctx, &t, "/hello.txt", false, &stage).unwrap(), vec![stage.join("hello.txt")]);
+
+    let out = tmp.join("out");
+    std::fs::create_dir_all(out.join("deep")).unwrap();
+    std::fs::write(out.join("deep/a.txt"), b"ae").unwrap();
+    std::fs::write(out.join("b.txt"), b"bee").unwrap();
+    std::fs::write(stage.join("hello.txt"), b"local copy of hello\n").unwrap();
+    let created = remote_fs::publish_tree(&ctx, &[out.clone(), stage.join("hello.txt")], &t, "").unwrap();
+    assert_eq!(created, vec![std::path::PathBuf::from("out"), std::path::PathBuf::from("hello (2).txt")], "the folder lands; KeepBoth renumbers the clash");
+    assert_eq!(std::fs::read(root.join("out/deep/a.txt")).unwrap(), b"ae", "nested locals go out over mkdir+write");
+    assert_eq!(std::fs::read(root.join("out/b.txt")).unwrap(), b"bee");
+    assert_eq!(std::fs::read(root.join("hello (2).txt")).unwrap(), b"local copy of hello\n", "the renumbered write landed");
+    assert_eq!(std::fs::read(root.join("hello.txt")).unwrap(), b"remote says hello\n", "KeepBoth left the original alone");
+
     remote_fs::close_all();
     sh.shutdown("test over".into());
     srv.join().unwrap();

@@ -68,6 +68,8 @@ pub enum Item {
     /// A search result inside an archive: the archive folder holding it, the entry, and
     /// where that is (for the Folder column).
     FoundInArchive(failbrauwser::location::ArchiveLoc, ArchiveNode, String),
+    /// A folder entry on a remote server (SFTP/FTP; the pane's location is its folder).
+    Remote(failbrauwser::location::RemoteEntry),
 }
 
 impl Item {
@@ -78,6 +80,7 @@ impl Item {
             Item::Trash(t, _) => t.original_name(),
             Item::Found(e, _) => e.display_name(),
             Item::FoundInArchive(_, n, _) => n.name.clone(),
+            Item::Remote(n) => n.name.clone(),
         }
     }
     pub fn os_name(&self) -> OsString {
@@ -89,6 +92,7 @@ impl Item {
             // Names repeat across folders: results are keyed by their full path.
             Item::Found(e, _) => e.path.clone().into_os_string(),
             Item::FoundInArchive(a, n, _) => OsString::from(format!("{}\0{}", failbrauwser::location::Location::Archive(a.clone()).display(), n.path)),
+            Item::Remote(n) => OsString::from(&n.name),
         }
     }
     pub fn is_dir_like(&self) -> bool {
@@ -97,6 +101,7 @@ impl Item {
             Item::Archive(n) => n.is_dir,
             Item::Trash(_, e) | Item::Found(e, _) => e.is_dir_like(),
             Item::FoundInArchive(_, n, _) => n.is_dir,
+            Item::Remote(n) => n.is_dir,
         }
     }
     pub fn is_hidden(&self) -> bool {
@@ -105,19 +110,21 @@ impl Item {
             Item::Archive(n) => n.name.starts_with('.'),
             // Everything in the trash and every search result is shown.
             Item::Trash(..) | Item::Found(..) | Item::FoundInArchive(..) => false,
+            Item::Remote(n) => n.name.starts_with('.'),
         }
     }
     /// The file on disk (for trashed items: the file inside the trash).
     pub fn path(&self) -> Option<&PathBuf> {
         match self {
             Item::Fs(e) | Item::Trash(_, e) | Item::Found(e, _) => Some(&e.path),
-            Item::Archive(_) | Item::FoundInArchive(..) => None,
+            Item::Archive(_) | Item::FoundInArchive(..) | Item::Remote(_) => None,
         }
     }
     pub fn size(&self) -> u64 {
         match self {
             Item::Fs(e) | Item::Trash(_, e) | Item::Found(e, _) => e.size,
             Item::Archive(n) | Item::FoundInArchive(_, n, _) => n.size,
+            Item::Remote(n) => n.size,
         }
     }
     pub fn content_type(&self) -> String {
@@ -130,6 +137,9 @@ impl Item {
                     gio::content_type_guess(Some(std::path::Path::new(&n.name)), None).0.to_string()
                 }
             }
+            Item::Remote(n) if n.is_dir => "inode/directory".into(),
+            Item::Remote(n) if n.is_link => "inode/symlink".into(),
+            Item::Remote(n) => gio::content_type_guess(Some(std::path::Path::new(&n.name)), None).0.to_string(),
         }
     }
     /// Identity for change detection: two readings with equal keys show the same row.
@@ -140,6 +150,7 @@ impl Item {
             (Item::Trash(a, x), Item::Trash(b, y)) => a == b && x == y,
             (Item::Found(a, _), Item::Found(b, _)) => a == b,
             (Item::FoundInArchive(_, a, _), Item::FoundInArchive(_, b, _)) => a == b,
+            (Item::Remote(a), Item::Remote(b)) => a == b,
             _ => false,
         }
     }
@@ -172,6 +183,11 @@ pub fn fill_row(store: &gtk::ListStore, iter: &gtk::TreeIter, key: u64, item: &I
         Item::Archive(n) | Item::FoundInArchive(_, n, _) => {
             let ct = item.content_type();
             (util::icon_for_type(&ct), n.size, n.mtime.unwrap_or(0), ct, String::new(), String::new(), String::new())
+        }
+        // A remote entry: what the server told us and nothing else — no owner, no mode.
+        Item::Remote(n) => {
+            let ct = item.content_type();
+            (util::icon_for_type(&ct), n.size, n.mtime, ct, String::new(), String::new(), String::new())
         }
     };
     let size_text = if dir { String::new() } else { human_size(size) };

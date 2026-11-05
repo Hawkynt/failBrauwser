@@ -67,6 +67,8 @@ pub fn crumbs_for(loc: &Location) -> Vec<Crumb> {
                 Location::Archive(a) if a.inner.is_empty() => (l.title(), Some("package-x-generic-symbolic")),
                 Location::Network(h) if h.is_empty() => (l.title(), Some("network-workgroup-symbolic")),
                 Location::Network(_) => (l.title(), Some("network-server-symbolic")),
+                // The sign-in folder is a remote tree's root crumb.
+                Location::Remote(r) if r.inner.is_empty() => (l.title(), Some("network-server-symbolic")),
                 _ => (l.title(), None),
             };
             Crumb { label, icon, location: l }

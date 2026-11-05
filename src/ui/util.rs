@@ -232,7 +232,7 @@ pub fn mount_remote(parent: &impl IsA<gtk::Window>, uri: &str, done: impl FnOnce
     let _ = parent;
     let uri = uri.trim();
     let Some(unc) = failbrauwser::win::wnet::unc_for_smb(uri).or_else(|| failbrauwser::win::wnet::unc_for_webdav(uri)) else {
-        done(Err(format!("Windows reaches shares over the network itself, and “{uri}” has no share path behind it (smb:// and WebDAV work; sftp:// and ftp:// open in the remote browser).")));
+        done(Err(format!("Windows reaches shares over the network itself, and “{uri}” has no share path behind it (smb:// and WebDAV become share paths; well-formed sftp:// and ftp:// addresses open in the app's own browser before this is ever reached).")));
         return;
     };
     let path = PathBuf::from(&unc);

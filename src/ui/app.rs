@@ -224,6 +224,9 @@ pub fn run() -> glib::ExitCode {
         super::actions::install_app_actions(&actx);
         super::shares::follow_sleep(&actx);
         super::portal::serve(&actx);
+        // The app's own SFTP/FTP stack asks its sign-in questions through the windows.
+        #[cfg(windows)]
+        super::remote::install_prompts(app);
         let weak = Rc::downgrade(&actx);
         super::clipboard::connect_changed(move || {
             if let Some(a) = weak.upgrade() {

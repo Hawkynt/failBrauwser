@@ -15,6 +15,8 @@ use failbrauwser::location::{ArchiveLoc, Location};
 use failbrauwser::ops::copy::{self, Mode};
 use failbrauwser::ops::job::{Answer, JobCtx, Question};
 use failbrauwser::ops::{delete, names, staging};
+#[cfg(windows)]
+use failbrauwser::remote_fs;
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use std::cell::RefCell;
@@ -279,6 +281,18 @@ pub fn transfer(w: &Window, sources: Vec<ClipSource>, dest: Location, mode: Mode
         .chain(archive_of(&dest).cloned())
         .collect();
     let retry_sources = sources.clone();
+    #[cfg(windows)]
+    let touched_servers: Vec<failbrauwser::location::Target> = sources
+        .iter()
+        .filter_map(|s| match s {
+            ClipSource::Remote(t, ..) => Some(t.clone()),
+            _ => None,
+        })
+        .chain(match &dest {
+            Location::Remote(r) => Some(r.target.clone()),
+            _ => None,
+        })
+        .collect();
     w.app.jobs.start(
         w.win.upcast_ref(),
         title,
@@ -299,6 +313,10 @@ pub fn transfer(w: &Window, sources: Vec<ClipSource>, dest: Location, mode: Mode
             let Some(w) = weak.upgrade() else { return };
             for a in &touched {
                 refresh_archive_tabs(&w, a);
+            }
+            #[cfg(windows)]
+            for t in &touched_servers {
+                refresh_remote_tabs(&w, t);
             }
             if let Outcome::Done(created) = outcome {
                 fileops::select_created(&w, &dest, created);
@@ -349,6 +367,8 @@ fn transfer_work(ctx: &JobCtx, sources: Vec<ClipSource>, dest: &Location, mode: 
     let result = (|| {
         let mut local: Vec<PathBuf> = Vec::new();
         let mut from_archives: Vec<(ArchiveLoc, String)> = Vec::new();
+        #[cfg(windows)]
+        let mut from_servers: Vec<(failbrauwser::location::Target, String, bool)> = Vec::new();
         for s in &sources {
             match s {
                 ClipSource::Local(p) => local.push(p.clone()),
@@ -358,6 +378,16 @@ fn transfer_work(ctx: &JobCtx, sources: Vec<ClipSource>, dest: &Location, mode: 
                     local.extend(got);
                     from_archives.push((a.clone(), e.clone()));
                 }
+                // Remote entries are pulled to staging whole (folders walked), exactly
+                // like archive extractions: from there the destination legs are the usual ones.
+                #[cfg(windows)]
+                ClipSource::Remote(t, e, is_dir) => {
+                    ctx.set_current(format!("Downloading {}", leaf(e)));
+                    local.extend(remote_fs::fetch_tree(ctx, t, e, *is_dir, &staging)?);
+                    from_servers.push((t.clone(), e.clone(), *is_dir));
+                }
+                #[cfg(not(windows))]
+                ClipSource::Remote(..) => return Err(std::io::Error::other("remote copies run where the app's own remote stack runs — on this platform those addresses belong to the desktop's mounts")),
             }
         }
         match dest {
@@ -386,12 +416,31 @@ fn transfer_work(ctx: &JobCtx, sources: Vec<ClipSource>, dest: &Location, mode: 
                     delete::delete_permanently(ctx, &moved_local)?;
                 }
             }
+            // Pasting into a server folder: local sources go out over the wire as-is,
+            // staged ones (from archives or other servers) the same way; conflicts ask
+            // the job's own question (see remote_fs::publish_tree).
+            #[cfg(windows)]
+            Location::Remote(d) => {
+                created.extend(remote_fs::publish_tree(ctx, &local, &d.target, &d.inner)?);
+                if mode == Mode::Move {
+                    let moved_local: Vec<PathBuf> = local.iter().filter(|p| !p.starts_with(&staging)).cloned().collect();
+                    delete::delete_permanently(ctx, &moved_local)?;
+                }
+            }
+            #[cfg(not(windows))]
+            Location::Remote(_) => return Err(std::io::Error::other("remote copies run where the app's own remote stack runs — on this platform those addresses belong to the desktop's mounts")),
             Location::Drives | Location::Trash | Location::Search(_) | Location::Network(_) => {}
         }
         if mode == Mode::Move {
             for (a, e) in &from_archives {
                 ctx.set_current(format!("Removing {} from the archive", leaf(e)));
                 tracked(ctx, || v.remove(a, std::slice::from_ref(e))).map_err(io)?;
+            }
+            // Server-side removals are permanent (no trash on the other machine's folder).
+            #[cfg(windows)]
+            for (t, e, is_dir) in &from_servers {
+                ctx.set_current(format!("Removing {} from the server", leaf(e)));
+                remote_fs::remove(t, e, *is_dir)?;
             }
         }
         Ok(created)
@@ -542,6 +591,21 @@ fn local_staging() -> std::io::Result<PathBuf> {
     let dir = tempfile::Builder::new().prefix("fb-").tempdir_in(&base)?.keep();
     staging::created(&dir);
     Ok(dir)
+}
+
+/// Re-read every tab showing a folder on this server (its contents changed at the source
+/// or destination of a transfer).
+#[cfg(windows)]
+fn refresh_remote_tabs(w: &Window, t: &failbrauwser::location::Target) {
+    for win in w.app.windows() {
+        for p in win.panes() {
+            if let Location::Remote(r) = p.location() {
+                if r.target == *t {
+                    p.schedule_refresh();
+                }
+            }
+        }
+    }
 }
 
 /// Archive files among the selection (local files only).

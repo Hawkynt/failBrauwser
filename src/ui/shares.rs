@@ -209,6 +209,19 @@ pub async fn resumed(app: &Rc<super::app::AppCtx>) {
 pub fn open_remote(w: &Rc<Window>, uri: &str, new_tab: bool) {
     let weak = Rc::downgrade(w);
     let text = uri.trim().to_string();
+    // SFTP and FTP on Windows run through the app's own stack: the address becomes a
+    // location directly — no mount, and no desktop involvement.
+    #[cfg(windows)]
+    if let Some((target, inner)) = failbrauwser::location::Target::parse_uri(&text) {
+        super::remote::remember(&text);
+        let loc = failbrauwser::location::Location::Remote(failbrauwser::location::RemoteLoc { target, inner });
+        if new_tab {
+            w.add_tab(loc, true);
+        } else {
+            w.navigate(loc);
+        }
+        return;
+    }
     util::mount_remote(&w.win, &text.clone(), move |res| {
         let Some(w) = weak.upgrade() else { return };
         match res {

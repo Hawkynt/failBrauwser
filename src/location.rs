@@ -1,7 +1,9 @@
-//! Where a tab is: a folder, a folder inside an archive (possibly nested), or the drives page.
+//! Where a tab is: a folder, a folder inside an archive (possibly nested), a folder on a
+//! remote server, or the drives page.
 //!
 //! Archive locations read like paths that continue through the archive file:
 //! `/home/me/backup.tar.gz/photos/2024` or, nested, `/data/outer.zip/inner.7z/docs`.
+//! Remote locations keep the server address and the folder behind it apart.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -50,6 +52,107 @@ impl ArchiveLoc {
     }
 }
 
+/// What kind of remote a target is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Kind {
+    Sftp,
+    Ftp,
+}
+
+/// A server entry point: whose account, which host, which port (0: the kind's usual one).
+/// Lives here rather than in `remote_fs` so this enum stays data on every platform: the
+/// Remote location compiles everywhere and is only ever produced on Windows.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Target {
+    pub kind: Kind,
+    pub user: String,
+    pub host: String,
+    pub port: u16,
+}
+
+impl Target {
+    /// `sftp://me@host:2222/dir` or `ftp://host` (user empty: the current user's name).
+    pub fn from_uri(uri: &str) -> Option<Target> {
+        Some(Target::parse_uri(uri)?.0)
+    }
+
+    /// Reads the address **and** the folder path behind it ("" for the sign-in folder).
+    pub fn parse_uri(uri: &str) -> Option<(Target, String)> {
+        let (scheme, rest) = uri.trim().split_once("://")?;
+        let kind = match scheme.to_ascii_lowercase().as_str() {
+            "sftp" | "ssh" => Kind::Sftp,
+            "ftp" => Kind::Ftp,
+            _ => return None,
+        };
+        let authority = rest.split('/').next()?;
+        let (user, hostport) = authority.rsplit_once('@').unwrap_or(("", authority));
+        let (host, port) = hostport.rsplit_once(':').filter(|(_, p)| p.parse::<u16>().is_ok()).map_or((hostport, 0), |(h, p)| (h, p.parse::<u16>().unwrap_or(0)));
+        let host = host.trim_matches(['[', ']']);
+        let inner = rest[authority.len()..].trim_matches('/').to_string();
+        (!host.is_empty() && !host.contains('/')).then(|| (Target { kind, user: user.to_string(), host: host.to_string(), port }, inner))
+    }
+
+    pub fn port(&self) -> u16 {
+        if self.port != 0 {
+            return self.port;
+        }
+        match self.kind {
+            Kind::Sftp => 22,
+            Kind::Ftp => 21,
+        }
+    }
+
+    /// The pool key and the address shown in prompts.
+    pub fn key(&self) -> String {
+        format!("{}@{}:{}", if self.user.is_empty() { "?" } else { &self.user }, self.host, self.port())
+    }
+
+    /// The address as servers.rs and history spell it, with `path` (a remote path) behind it.
+    pub fn uri(&self, path: &str) -> String {
+        let scheme = match self.kind {
+            Kind::Sftp => "sftp",
+            Kind::Ftp => "ftp",
+        };
+        let user = if self.user.is_empty() { String::new() } else { format!("{}@", gtk::glib::uri_escape_string(self.user.as_str(), None::<&str>, false)) };
+        format!("{scheme}://{user}{}:{}/{path}", self.host, self.port())
+    }
+}
+
+/// One folder entry as a remote server describes it: enough to show, sort and stage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteEntry {
+    pub name: String,
+    pub size: u64,
+    /// Modification time as seconds since the Unix epoch (0 when the server hides it).
+    pub mtime: i64,
+    pub is_dir: bool,
+    pub is_link: bool,
+}
+
+/// A folder on a remote server, addressed like a path is: server plus folder.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RemoteLoc {
+    pub target: Target,
+    /// Folder on the server; "" is the sign-in folder (the SFTP home, the FTP login folder).
+    pub inner: String,
+}
+
+impl RemoteLoc {
+    pub fn root(target: Target) -> Self {
+        RemoteLoc { target, inner: String::new() }
+    }
+
+    /// The same server, a different folder on it.
+    pub fn with_inner(&self, inner: &str) -> Self {
+        RemoteLoc { target: self.target.clone(), inner: inner.trim_matches('/').to_string() }
+    }
+
+    /// The path of `name` inside the current folder.
+    pub fn entry_path(&self, name: &str) -> String {
+        if self.inner.is_empty() { name.to_string() } else { format!("{}/{}", self.inner, name) }
+    }
+}
+
 /// Search results below a folder.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SearchLoc {
@@ -78,6 +181,9 @@ pub enum Location {
     /// The computers sharing files on the local network (empty), or the shared folders of
     /// one of them (its name or address).
     Network(String),
+    /// A folder on an SFTP or FTP server, read by the app itself (produced on Windows,
+    /// where GVfs would mount these; see `remote_fs`).
+    Remote(RemoteLoc),
 }
 
 pub const DRIVES_URI: &str = "drives:///";
@@ -120,6 +226,7 @@ impl Location {
             Location::Search(s) if s.is_listing() => format!("{} — with subfolders", s.root.display()),
             Location::Search(s) => format!("{} — search “{}”", s.root.display(), s.query),
             Location::Network(host) => format!("{NETWORK_URI}{host}"),
+            Location::Remote(r) => r.target.uri(&r.inner),
         }
     }
 
@@ -151,6 +258,7 @@ impl Location {
             Location::Search(s) => format!("Search “{}”", s.query),
             Location::Network(host) if host.is_empty() => "Network".into(),
             Location::Network(host) => host.clone(),
+            Location::Remote(r) => r.inner.rsplit('/').find(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| r.target.host.clone()),
         }
     }
 
@@ -173,6 +281,12 @@ impl Location {
             Location::Search(s) if s.is_listing() => s.root.parent().map(|p| Location::Dir(p.to_path_buf())),
             Location::Search(s) => Some(Location::Dir(s.root.clone())),
             Location::Network(host) => (!host.is_empty()).then(|| Location::Network(String::new())),
+            // Up from the sign-in folder there is nothing to show: the server page is the
+            // way back, and the path bar's first crumb goes there itself.
+            Location::Remote(r) => (!r.inner.is_empty()).then(|| {
+                let up = r.inner.rfind('/').map(|i| &r.inner[..i]).unwrap_or("");
+                Location::Remote(r.with_inner(up))
+            }),
         }
     }
 
@@ -181,6 +295,7 @@ impl Location {
         match self {
             Location::Dir(p) => Some(Location::Dir(p.join(name))),
             Location::Archive(a) => Some(Location::Archive(a.with_inner(&a.entry_path(name)))),
+            Location::Remote(r) => Some(Location::Remote(r.with_inner(&r.entry_path(name)))),
             Location::Drives | Location::Trash | Location::Search(_) | Location::Network(_) => None,
         }
     }
@@ -198,7 +313,7 @@ impl Location {
             Location::Dir(p) => Some(p.clone()),
             Location::Archive(a) => a.file.parent().map(Path::to_path_buf),
             Location::Search(s) => Some(s.root.clone()),
-            Location::Drives | Location::Trash | Location::Network(_) => None,
+            Location::Drives | Location::Trash | Location::Network(_) | Location::Remote(_) => None,
         }
     }
 
@@ -219,6 +334,13 @@ impl Location {
         if t == "network:" || t.starts_with("network:/") {
             let host = t.trim_start_matches("network:").trim_matches('/');
             return Some(Location::Network(host.to_string()));
+        }
+        // Windows reads sftp:// and ftp:// itself (there is no GVfs to hand them to), so
+        // those addresses are locations rather than paths.
+        #[cfg(windows)]
+        if t.starts_with("sftp://") || t.starts_with("ssh://") || t.starts_with("ftp://") {
+            let (target, inner) = Target::parse_uri(t)?;
+            return Some(Location::Remote(RemoteLoc { target, inner }));
         }
         let path: PathBuf = if let Some(rest) = t.strip_prefix("file://") {
             gtk::glib::filename_from_uri(&format!("file://{rest}")).ok()?.0
@@ -378,5 +500,44 @@ mod tests {
     #[test]
     fn parse_rejects_missing_paths() {
         assert_eq!(Location::parse("/definitely/not/here", |_| true), None);
+    }
+
+    #[test]
+    fn remote_targets_parse_and_print() {
+        let t = Target::from_uri("sftp://me@nas.local:2222/srv/files").unwrap();
+        assert_eq!(t.kind, Kind::Sftp);
+        assert_eq!(t.user, "me");
+        assert_eq!(t.host, "nas.local");
+        assert_eq!(t.port(), 2222);
+        assert_eq!(t.uri("a/b"), "sftp://me@nas.local:2222/a/b");
+        let bare = Target::from_uri("ftp://10.0.0.9").unwrap();
+        assert_eq!(bare.kind, Kind::Ftp);
+        assert_eq!(bare.user, "");
+        assert_eq!(bare.port(), 21);
+        assert_eq!(bare.uri(""), "ftp://10.0.0.9:21/");
+        assert!(Target::from_uri("smb://nas/share").is_none());
+        assert!(Target::from_uri("sftp://").is_none());
+        assert_eq!(Target::from_uri("sftp://me@nas/x").unwrap().key(), "me@nas:22");
+        // The folder behind the address is read too, and IPv6 brackets are dropped.
+        assert_eq!(Target::parse_uri("ftp://[fe80::1%25e1]/a/b/"), Some((Target { kind: Kind::Ftp, user: "".into(), host: "fe80::1%25e1".into(), port: 0 }, "a/b".into())));
+        assert_eq!(Target::parse_uri("sftp://h").unwrap().1, "");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remote_locations_navigate_like_folders() {
+        let l = Location::parse("sftp://me@nas.local:2222/srv/files", |_| false).unwrap();
+        assert_eq!(l.display(), "sftp://me@nas.local:2222/srv/files");
+        assert_eq!(l.title(), "files");
+        let up = l.parent().unwrap();
+        assert_eq!(up.display(), "sftp://me@nas.local:2222/srv");
+        let root = up.parent().unwrap();
+        assert_eq!(root.display(), "sftp://me@nas.local:2222/");
+        assert_eq!(root.title(), "nas.local");
+        assert_eq!(root.parent(), None, "the sign-in folder has no folder above it");
+        assert_eq!(l.child("more").unwrap().display(), "sftp://me@nas.local:2222/srv/files/more");
+        assert_eq!(l.local_path(), None);
+        // ftp:// parses as remote too; the archive fall-through does not swallow it.
+        assert_eq!(Location::parse("ftp://h/d", |_| true).unwrap().title(), "d");
     }
 }

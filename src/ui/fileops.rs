@@ -172,6 +172,7 @@ pub fn selection_sources(pane: &Pane) -> Vec<ClipSource> {
             (Item::Fs(e) | Item::Found(e, _), _) => Some(ClipSource::Local(e.path.clone())),
             (Item::FoundInArchive(a, n, _), _) => Some(ClipSource::Archive(a.clone(), n.path.clone())),
             (Item::Archive(n), Location::Archive(a)) => Some(ClipSource::Archive(a.clone(), n.path.clone())),
+            (Item::Remote(n), Location::Remote(r)) => Some(ClipSource::Remote(r.target.clone(), r.entry_path(&n.name), n.is_dir)),
             _ => None,
         })
         .collect()
@@ -398,7 +399,19 @@ fn ask_rename(w: &Window, item: Item, initial: String) {
                     }
                 });
             }
-            Item::Archive(_) => super::extensions::rename_non_local(&w, &pane, &item, &new),
+            Item::Remote(_) if pane.has_name(&new) => {
+                // The server answers with its own "already exists" (FTP) or replaces (SFTP);
+                // renaming onto a name shown in the pane always asks first.
+                let folder = pane.item_named(&new).is_some_and(|i| i.is_dir_like());
+                let place = pane.location().title();
+                let (p, it) = (Rc::downgrade(&pane), item.clone());
+                name_taken(&w, item.clone(), new, &place, folder, move |w, new| {
+                    if let Some(pane) = p.upgrade() {
+                        super::extensions::rename_replacing_non_local(w, &pane, &it, &new);
+                    }
+                });
+            }
+            Item::Archive(_) | Item::Remote(_) => super::extensions::rename_non_local(&w, &pane, &item, &new),
             Item::Trash(..) | Item::FoundInArchive(..) => {}
         }
     });

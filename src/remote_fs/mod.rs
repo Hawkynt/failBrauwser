@@ -14,76 +14,11 @@ pub mod sftp;
 
 use std::collections::HashMap;
 use std::io;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// What kind of remote a target is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Kind {
-    Sftp,
-    Ftp,
-}
-
-/// A server entry point: whose account, which host, which port (0: the kind's usual one).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Target {
-    pub kind: Kind,
-    pub user: String,
-    pub host: String,
-    pub port: u16,
-}
-
-impl Target {
-    /// `sftp://me@host:2222/dir` or `ftp://host` (user empty: the current user's name).
-    pub fn from_uri(uri: &str) -> Option<Target> {
-        let (scheme, rest) = uri.trim().split_once("://")?;
-        let kind = match scheme.to_ascii_lowercase().as_str() {
-            "sftp" | "ssh" => Kind::Sftp,
-            "ftp" => Kind::Ftp,
-            _ => return None,
-        };
-        let authority = rest.split('/').next()?;
-        let (user, hostport) = authority.rsplit_once('@').unwrap_or(("", authority));
-        let (host, port) = hostport.rsplit_once(':').filter(|(_, p)| p.parse::<u16>().is_ok()).map_or((hostport, 0), |(h, p)| (h, p.parse::<u16>().unwrap_or(0)));
-        (!host.is_empty() && !host.contains('/')).then(|| Target { kind, user: user.to_string(), host: host.to_string(), port })
-    }
-
-    pub fn port(&self) -> u16 {
-        if self.port != 0 {
-            return self.port;
-        }
-        match self.kind {
-            Kind::Sftp => 22,
-            Kind::Ftp => 21,
-        }
-    }
-
-    /// The pool key and the address shown in prompts.
-    pub fn key(&self) -> String {
-        format!("{}@{}:{}", if self.user.is_empty() { "?" } else { &self.user }, self.host, self.port())
-    }
-
-    /// The address as servers.rs and history spell it, with `path` (a remote path) behind it.
-    pub fn uri(&self, path: &str) -> String {
-        let scheme = match self.kind {
-            Kind::Sftp => "sftp",
-            Kind::Ftp => "ftp",
-        };
-        let user = if self.user.is_empty() { String::new() } else { format!("{}@", gtk::glib::uri_escape_string(self.user.as_str(), None::<&str>, false)) };
-        format!("{scheme}://{user}{}:{}/{path}", self.host, self.port())
-    }
-}
-
-/// One folder entry as the row model needs it: enough to sort, show and stage.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Entry {
-    pub name: String,
-    pub size: u64,
-    /// Modification time as seconds since the Unix epoch (0 when the server hides it).
-    pub mtime: i64,
-    pub is_dir: bool,
-    pub is_link: bool,
-}
+// The address and entry data lives in `location` so the Location::Remote variant is data
+// on every platform; the engine below only ever runs on Windows.
+pub use crate::location::{Kind, RemoteEntry as Entry, Target};
 
 /// A live connection behind the pool (cheap to hand out: both arms are one Arc).
 #[derive(Clone)]
@@ -94,7 +29,6 @@ enum Session {
 
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 static SESSIONS: OnceLock<Mutex<HashMap<String, Session>>> = OnceLock::new();
-static EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// The one tokio runtime remote work runs on; built once, never handed out.
 pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
@@ -152,8 +86,6 @@ fn connect(t: &Target) -> io::Result<Session> {
         Kind::Sftp => Session::Sftp(Arc::new(sftp::open(t)?)),
         Kind::Ftp => Session::Ftp(Arc::new(ftp::open(t)?)),
     };
-    // Keep the pool key stable across edits so old probes never hit a new connection.
-    EPOCH.fetch_add(1, Ordering::Relaxed);
     Ok(s)
 }
 
@@ -217,6 +149,133 @@ pub fn exists(t: &Target, path: &str) -> bool {
     }
 }
 
+// ── Whole-folder moves (the copy engine's remote legs) ──────────────────────
+
+/// Joins a remote folder and an entry name the way the servers spell paths.
+fn join(folder: &str, name: &str) -> String {
+    if folder.is_empty() { name.to_string() } else { format!("{folder}/{name}") }
+}
+
+/// (stem, extension) for "name (2)" free-name numbering; hidden and dot-less names keep
+/// the whole name as the stem.
+fn split_ext(name: &str) -> (String, String) {
+    match name.split_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() && !ext.contains('.') && ext.len() <= 8 => (stem.to_string(), ext.to_string()),
+        _ => (name.to_string(), String::new()),
+    }
+}
+
+/// `want` is taken in `folder`: the next free "( n)" spelling. Callers reach this only
+/// after the user chose KeepBoth.
+fn free_name(t: &Target, folder: &str, want: &str) -> String {
+    if !exists(t, &join(folder, want)) {
+        return want.to_string();
+    }
+    let (stem, ext) = split_ext(want);
+    let mut n = 2u32;
+    loop {
+        let cand = if ext.is_empty() { format!("{stem} ({n})") } else { format!("{stem} ({n}).{ext}") };
+        if !exists(t, &join(folder, &cand)) {
+            return cand;
+        }
+        n += 1;
+    }
+}
+
+/// Copies a remote file or subtree into the local `dest` folder (staging): the walk
+/// follows the listing, files land through the pooled connection, and the job's cancel
+/// button stops it between entries. Returns the top-level local paths created.
+pub fn fetch_tree(ctx: &crate::ops::job::JobCtx, t: &Target, path: &str, is_dir: bool, dest: &std::path::Path) -> io::Result<Vec<std::path::PathBuf>> {
+    let name = path.rsplit('/').next().unwrap_or(path).to_string();
+    let top = dest.join(&name);
+    if is_dir {
+        std::fs::create_dir_all(&top)?;
+        let mut queue = vec![(path.to_string(), top.clone())];
+        while let Some((rp, lp)) = queue.pop() {
+            if ctx.is_cancelled() {
+                return Err(crate::ops::fastcopy::cancelled());
+            }
+            for e in list(t, &rp)? {
+                let (child_r, child_l) = (join(&rp, &e.name), lp.join(&e.name));
+                if e.is_dir {
+                    std::fs::create_dir_all(&child_l)?;
+                    queue.push((child_r, child_l));
+                } else {
+                    ctx.set_current(e.name.clone());
+                    read_to(t, &child_r, &child_l)?;
+                }
+            }
+        }
+    } else {
+        ctx.set_current(name.clone());
+        read_to(t, path, &top)?;
+    }
+    Ok(vec![top])
+}
+
+/// Pushes local files and folders into the remote folder `dest`, asking the job's
+/// conflict question per top-level entry; a folder's own contents then overwrite as
+/// plain STOR/write does (matching how the local engine treats files inside a
+/// merged folder). Returns the created entry names.
+pub fn publish_tree(ctx: &crate::ops::job::JobCtx, locals: &[std::path::PathBuf], t: &Target, dest: &str) -> io::Result<Vec<std::path::PathBuf>> {
+    use crate::ops::job::{Answer, Question};
+    let mut created = Vec::new();
+    for src in locals {
+        if ctx.is_cancelled() {
+            return Err(crate::ops::fastcopy::cancelled());
+        }
+        let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let existing = list(t, dest).unwrap_or_default().into_iter().find(|e| e.name == name);
+        let name = match existing {
+            None => name,
+            Some(e) => match ctx.ask(Question::Conflict {
+                src: src.clone(),
+                dst: std::path::PathBuf::from(t.uri(&join(dest, &name))),
+                src_size: src.metadata().map_or(0, |m| m.len()),
+                dst_size: e.size,
+                src_mtime: src.metadata().ok().and_then(|m| m.modified().ok()).and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64),
+                dst_mtime: e.mtime,
+                dst_is_dir: e.is_dir,
+            }) {
+                Answer::Replace => {
+                    remove(t, &join(dest, &name), e.is_dir)?;
+                    name
+                }
+                Answer::KeepBoth => free_name(t, dest, &name),
+                Answer::Skip => continue,
+                _ => return Err(crate::ops::fastcopy::cancelled()),
+            },
+        };
+        let rdest = join(dest, &name);
+        if src.is_dir() {
+            let mut queue = vec![(src.clone(), rdest.clone())];
+            while let Some((lp, rp)) = queue.pop() {
+                if ctx.is_cancelled() {
+                    return Err(crate::ops::fastcopy::cancelled());
+                }
+                if !exists(t, &rp) {
+                    mkdir(t, &rp)?;
+                }
+                for e in (std::fs::read_dir(&lp).ok()).into_iter().flatten().flatten() {
+                    let child_l = e.path();
+                    let child_r = join(&rp, &e.file_name().to_string_lossy());
+                    if child_l.is_dir() {
+                        queue.push((child_l, child_r));
+                    } else {
+                        ctx.set_current(e.file_name().to_string_lossy().into_owned());
+                        write_from(t, &child_l, &child_r)?;
+                    }
+                }
+            }
+        } else {
+            ctx.set_current(name.clone());
+            write_from(t, src, &rdest)?;
+        }
+        created.push(std::path::PathBuf::from(name));
+    }
+    Ok(created)
+}
+
 /// Closes every pooled connection (logout of the app; tests keep the pool tidy).
 pub fn close_all() {
     let pool = sessions().lock().unwrap_or_else(|e| e.into_inner());
@@ -232,25 +291,3 @@ pub fn close_all() {
     let _ = sessions().lock().unwrap_or_else(|e| e.into_inner()).drain();
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn addresses_parse_and_print() {
-        let t = Target::from_uri("sftp://me@nas.local:2222/srv/files").unwrap();
-        assert_eq!(t.kind, Kind::Sftp);
-        assert_eq!(t.user, "me");
-        assert_eq!(t.host, "nas.local");
-        assert_eq!(t.port(), 2222);
-        assert_eq!(t.uri("a/b"), "sftp://me@nas.local:2222/a/b");
-        let bare = Target::from_uri("ftp://10.0.0.9").unwrap();
-        assert_eq!(bare.kind, Kind::Ftp);
-        assert_eq!(bare.user, "");
-        assert_eq!(bare.port(), 21);
-        assert_eq!(bare.uri(""), "ftp://10.0.0.9:21/");
-        assert!(Target::from_uri("smb://nas/share").is_none());
-        assert!(Target::from_uri("sftp://").is_none());
-        assert_eq!(Target::from_uri("sftp://me@nas/x").unwrap().key(), "me@nas:22");
-    }
-}
