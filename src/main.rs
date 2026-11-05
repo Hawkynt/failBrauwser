@@ -14,11 +14,42 @@ Options:
 ";
 
 fn main() -> gtk::glib::ExitCode {
+    // Windows keeps autostart in the per-user Run key (Linux ships an XDG autostart file);
+    // managed from here so no installer magic is needed, and answered without opening GTK.
+    #[cfg(windows)]
+    if let Some(on) = match std::env::args().nth(1).unwrap_or_default().as_str() {
+        "--autostart-on" => Some(true),
+        "--autostart-off" => Some(false),
+        _ => None,
+    } {
+        let outcome = if on {
+            let exe = std::env::current_exe().map(|p| format!("\"{}\" --daemon", p.display())).map_err(std::io::Error::other);
+            match exe {
+                Ok(cmd) => failbrauwser::win::reg::set_autostart(&cmd),
+                Err(e) => Err(e),
+            }
+        } else {
+            failbrauwser::win::reg::clear_autostart()
+        };
+        let ok = match outcome {
+            Ok(()) => {
+                println!("{}", if on { "failBrauwser will start when you sign in." } else { "Autostart removed." });
+                true
+            }
+            Err(e) => {
+                eprintln!("Cannot change autostart: {e}");
+                false
+            }
+        };
+        return if ok { gtk::glib::ExitCode::SUCCESS } else { gtk::glib::ExitCode::FAILURE };
+    }
     // Answered without GTK or D-Bus: never opens a window.
     for a in std::env::args().skip(1) {
         match a.as_str() {
             "-h" | "--help" => {
                 print!("{HELP}");
+                #[cfg(windows)]
+                print!("  --autostart-on / --autostart-off\n                  start failBrauwser at sign-in, or stop it (HKCU Run key)\n");
                 return gtk::glib::ExitCode::SUCCESS;
             }
             "-V" | "--version" => {
