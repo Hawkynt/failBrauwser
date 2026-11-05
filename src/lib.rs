@@ -15,6 +15,8 @@ pub mod location;
 pub mod network;
 pub mod ops;
 pub mod osprim;
+#[cfg(windows)]
+pub mod remote_fs;
 pub mod remote;
 pub mod search;
 pub mod servers;

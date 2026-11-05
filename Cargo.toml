@@ -46,7 +46,12 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_Shell_PropertiesSystem",
 ] }
-# M7 will add the remote stack then: russh (ring backend — aws-lc needs NASM) + russh-sftp + suppaftp + tokio
+# The remote stack (M7). russh without default features: the defaults pull aws-lc-sys, which
+# needs NASM — unbuildable on this toolchain; ring covers what russh needs (M0c verified).
+russh = { version = "0.65", default-features = false, features = ["flate2", "rsa", "ring"] }
+russh-sftp = "2"
+suppaftp = "6"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "macros"] }
 
 [profile.release]
 opt-level = 3
