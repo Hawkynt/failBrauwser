@@ -106,6 +106,18 @@ pub fn start(app: &Rc<AppCtx>, window: &Rc<Window>) {
         .lines()
         .enumerate()
         .map(|(i, l)| (i + 1, l.trim().to_string()))
+        .filter_map(|(i, l)| {
+            // A `!win ` line runs on Windows only, a `!unix ` line on Unix only;
+            // the other platform never sees the line at all.
+            let (marker, mine) = match l.strip_prefix("!win ") {
+                Some(_) => ("!win ", cfg!(windows)),
+                None => match l.strip_prefix("!unix ") {
+                    Some(_) => ("!unix ", cfg!(unix)),
+                    None => ("", true),
+                },
+            };
+            mine.then(|| (i, l[marker.len()..].to_string()))
+        })
         .filter(|(_, l)| !l.is_empty() && !l.starts_with('#'))
         .collect();
     let runner = Rc::new(RefCell::new(Runner { steps, window: window.clone(), app: app.clone(), waiting: None, current: (0, String::new()) }));
@@ -235,12 +247,32 @@ fn find_dialog(text: &str) -> Option<gtk::MessageDialog> {
         .find(|d| d.text().is_some_and(|t| t.contains(text)) || d.secondary_text().is_some_and(|t| t.contains(text)))
 }
 
+/// Path-text equality that ignores separator spelling: scenario lines keep `$T/…`
+/// slashes on Windows while location displays come back with `\`. On Unix the
+/// strings must match exactly (`\` is an ordinary name character there).
+fn same_path_text(got: &str, want: &str) -> bool {
+    let (got, want) = if cfg!(windows) { (got.replace('/', "\\"), want.replace('/', "\\")) } else { (got.to_string(), want.to_string()) };
+    got == want
+}
+
 fn idle(r: &Runner) -> bool {
     !r.app.jobs.is_busy() && r.window.panes().iter().all(|p| !p.is_loading() && !p.refresh_pending())
 }
 
+/// The title the drives page gives the machine's own system volume: Windows scripts
+/// use `$C` for it where Linux scripts name the root filesystem `File System`.
+#[cfg(windows)]
+fn system_drive_title() -> String {
+    let drive = std::env::var("SYSTEMDRIVE").unwrap_or_else(|_| "C:".into());
+    failbrauwser::win::storage::volumes().into_iter().find(|v| v.mount_point().is_some_and(|m| m.starts_with(drive.as_str()))).map(|v| v.title()).unwrap_or_default()
+}
+
 fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
     let (cmd, arg) = step.split_once(' ').map(|(c, a)| (c, a.trim())).unwrap_or((step, ""));
+    let arg_c = arg.to_string();
+    #[cfg(windows)]
+    let arg_c = if arg_c.contains("$C") { arg_c.replace("$C", &system_drive_title()) } else { arg_c };
+    let arg = arg_c.as_str();
     let w = r.window.clone();
     match cmd {
         "open" => {
@@ -457,6 +489,31 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             if !super::trash::click_bar(&w.current_pane(), arg) {
                 return Err(format!("trash bar button {arg:?} is not shown or not clickable"));
             }
+        }
+        "wait-bin" | "wait-no-bin" => {
+            // wait-bin <name> / wait-no-bin <name>: the shell's Recycle Bin holds (or no
+            // longer holds) an item that was deleted from `name` — Windows twin of the
+            // XDG `wait-exists …/Trash/files/…` checks, which have no such paths here.
+            #[cfg(windows)]
+            {
+                let want = arg.to_string();
+                let want2 = want.clone();
+                let holds = move || failbrauwser::win::recyclebin::list().is_ok_and(|b| b.iter().any(|i| i.original.file_name().is_some_and(|n| n.to_string_lossy() == want)));
+                // `cmd`, never `step`: step still carries the argument ("wait-bin a.txt").
+                let want_present = cmd == "wait-bin";
+                let found = holds();
+                if want_present == found {
+                    return Ok(());
+                }
+                // wait() polls until the check answers true, so it must answer for the
+                // state this verb is heading to — present for wait-bin, gone for wait-no-bin.
+                wait(r, move |_| {
+                    let b = failbrauwser::win::recyclebin::list().unwrap_or_default();
+                    Ok(b.iter().any(|i| i.original.file_name().is_some_and(|n| n.to_string_lossy() == want2)) == want_present)
+                });
+            }
+            #[cfg(not(windows))]
+            return Err(format!("{step} is Windows-only"));
         }
         "expect-icon-size" => {
             // expect-icon-size <list|icons> <pixels>
@@ -887,11 +944,11 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         "wait-location" => {
             // For locations reached asynchronously (after probing a file).
             let want = arg.to_string();
-            wait(r, move |r| Ok(r.window.current_location().display() == want && idle(r)));
+            wait(r, move |r| Ok(same_path_text(&r.window.current_location().display(), &want) && idle(r)));
         }
         "expect-location" => {
             let loc = w.current_location().display();
-            if loc != arg {
+            if !same_path_text(&loc, arg) {
                 return Err(format!("location is {loc}"));
             }
         }
@@ -1045,7 +1102,7 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         "expect-tree-root" => {
             let sb = super::sidebar::for_window(&w).ok_or("no sidebar")?;
             let root = sb.root_path().map(|p| p.display().to_string()).unwrap_or_default();
-            if root != arg {
+            if !same_path_text(&root, arg) {
                 return Err(format!("tree root is {root}"));
             }
         }
@@ -1053,7 +1110,7 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             let want = arg.to_string();
             wait(r, move |r| {
                 let sb = super::sidebar::for_window(&r.window).ok_or("no sidebar")?;
-                Ok(sb.selected_path().is_some_and(|p| p.display().to_string() == want))
+                Ok(sb.selected_path().is_some_and(|p| same_path_text(&p.display().to_string(), &want)))
             });
         }
         "tree-expand" => {

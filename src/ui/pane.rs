@@ -725,6 +725,11 @@ impl Pane {
             self.poll_share();
             return;
         }
+        #[cfg(windows)]
+        if matches!(loc, Location::Trash) {
+            self.poll_recycle_bin();
+            return;
+        }
         let Some(path) = backend::watch_path(loc) else { return };
         let file = gio::File::for_path(&path);
         let Ok(monitor) = file.monitor(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE) else {
@@ -756,6 +761,28 @@ impl Pane {
             let busy = { let st = p.st.borrow(); st.reading || st.refresh_scheduled || st.loading };
             if active && p.root.is_mapped() && !busy {
                 p.refresh_incremental();
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    /// The shell's Recycle Bin sends no change notices (its raw `$Recycle.Bin` folders
+    /// are ACL-shut against a monitor), so while its page is shown the bin's own
+    /// (count, size) stamp is re-queried on the share's cadence; any change re-reads it.
+    #[cfg(windows)]
+    fn poll_recycle_bin(&self) {
+        let generation = self.st.borrow().generation;
+        let stamp = Rc::new(std::cell::Cell::new(failbrauwser::win::recyclebin::query().ok()));
+        let weak = self.weak.borrow().clone();
+        glib::timeout_add_local(SHARE_POLL, move || {
+            let Some(p) = weak.upgrade() else { return glib::ControlFlow::Break };
+            if p.st.borrow().generation != generation {
+                return glib::ControlFlow::Break;
+            }
+            if let Ok(now) = failbrauwser::win::recyclebin::query() {
+                if stamp.replace(Some(now)) != Some(now) {
+                    p.schedule_refresh();
+                }
             }
             glib::ControlFlow::Continue
         });

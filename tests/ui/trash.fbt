@@ -1,10 +1,12 @@
 # Trash compatible with other file managers: files/ + info/*.trashinfo in the XDG data dir.
+# On Windows the shell's Recycle Bin is the bin: same names, checked through the shell.
 open $T/w
 select a.txt
 action win.trash
 wait-missing $T/w/a.txt
-wait-exists $T/data/Trash/files/a.txt
-wait-exists $T/data/Trash/info/a.txt.trashinfo
+!unix wait-exists $T/data/Trash/files/a.txt
+!unix wait-exists $T/data/Trash/info/a.txt.trashinfo
+!win wait-bin a.txt
 open trash:///
 expect-crumbs Trash
 wait-row a.txt
@@ -36,11 +38,16 @@ open trash:///
 wait-row b.txt
 select b.txt
 action win.delete
-wait-missing $T/data/Trash/files/b.txt
-wait-missing $T/data/Trash/info/b.txt.trashinfo
-trash-bar Empty Trash
-wait-missing $T/data/Trash/files/c.txt
-wait-no-row c.txt
-expect-rows 0
-expect-disabled win.restore
-expect-disabled win.empty-trash
+!unix wait-missing $T/data/Trash/files/b.txt
+!unix wait-missing $T/data/Trash/info/b.txt.trashinfo
+!win wait-no-bin b.txt
+# Emptying clears the bin on every drive — on Windows that is the machine's own
+# Recycle Bin with its owner's files, so the button and the emptied-bin checks stay
+# Linux-side; the per-item win.delete above covers the Windows permanent-delete path.
+!unix trash-bar Empty Trash
+!unix wait-missing $T/data/Trash/files/c.txt
+!unix wait-no-row c.txt
+!unix expect-rows 0
+!unix expect-disabled win.restore
+!unix expect-disabled win.empty-trash
+!win wait-row c.txt

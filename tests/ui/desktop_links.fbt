@@ -3,33 +3,41 @@
 open $T/files
 select Music | notes.txt
 action win.link-on-desktop
-wait-exists $T/Desktop/Music.desktop
-wait-exists $T/Desktop/notes.txt.desktop
+!unix wait-exists $T/Desktop/Music.desktop
+!win wait-exists $T/Desktop/Music.lnk
+!unix wait-exists $T/Desktop/notes.txt.desktop
+!win wait-exists $T/Desktop/notes.txt.lnk
 select Music
 action win.link-on-desktop
-wait-exists $T/Desktop/Music (2).desktop
+!unix wait-exists $T/Desktop/Music (2).desktop
+!win wait-exists $T/Desktop/Music (2).lnk
 open $T/files/Music
 action win.link-on-desktop
-wait-exists $T/Desktop/Music (3).desktop
+!unix wait-exists $T/Desktop/Music (3).desktop
+!win wait-exists $T/Desktop/Music (3).lnk
 # Not for what is in the trash.
 open trash:///
 expect-disabled win.link-on-desktop
 # A shortcut, under the name it has in the side panel.
 shortcut-menu Projects : Create Link on Desktop
-wait-exists $T/Desktop/Projects.desktop
+!unix wait-exists $T/Desktop/Projects.desktop
+!win wait-exists $T/Desktop/Projects.lnk
 # The drives page has no address outside failBrauwser: its link starts failBrauwser there.
 shortcut-menu Drives : Create Link on Desktop
-wait-exists $T/Desktop/Drives.desktop
+!unix wait-exists $T/Desktop/Drives.desktop
+!win wait-exists $T/Desktop/Drives.lnk
 # A drive: a phone's storage, named after the phone and the storage.
 fake-phone Pixel 7 = $T/phone
 wait-side-drive Pixel 7 : SD card
 side-drive-menu Pixel 7 : SD card : Create Link on Desktop
-wait-exists $T/Desktop/Pixel 7 – SD card.desktop
+!unix wait-exists $T/Desktop/Pixel 7 – SD card.desktop
+!win wait-exists $T/Desktop/Pixel 7 – SD card.lnk
 # The same from the drives page.
 action win.drives
 wait-drive-text Pixel 7 : Internal shared storage
 drive-menu Pixel 7 : Internal shared storage : Create Link on Desktop
-wait-exists $T/Desktop/Pixel 7 – Internal shared storage.desktop
+!unix wait-exists $T/Desktop/Pixel 7 – Internal shared storage.desktop
+!win wait-exists $T/Desktop/Pixel 7 – Internal shared storage.lnk
 # A folder in the tree.
 action win.tree-root current
 open $T/files
@@ -37,4 +45,5 @@ wait-tree-selected $T/files
 tree-expand $T/files
 wait-tree-children $T/files = Music
 tree-menu $T/files/Music : Create Link on Desktop
-wait-exists $T/Desktop/Music (4).desktop
+!unix wait-exists $T/Desktop/Music (4).desktop
+!win wait-exists $T/Desktop/Music (4).lnk

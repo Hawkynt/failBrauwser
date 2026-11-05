@@ -189,7 +189,10 @@ pub async fn volumes() -> Vec<(Volume, Option<Usage>)> {
         };
         let root_path = root.path().unwrap_or_default();
         // An MTP device's top folders are its storages; others show their files right there.
-        let storages = if d.kind == DeviceKind::Phone { subfolders(&root).await } else { vec![(String::new(), root.clone())] };
+        // A fake phone is a plain local folder: only real devices can be unresponsive, and a
+        // timeout there must not silently drop storages of a folder that is merely slow
+        // (an antivirus scanning a freshly written fixture, for example).
+        let storages = if d.kind == DeviceKind::Phone { subfolders(&root, d.fake.is_none()).await } else { vec![(String::new(), root.clone())] };
         if storages.is_empty() {
             out.push((Volume { mount_points: vec![root_path], ..base }, None));
             continue;
@@ -206,7 +209,7 @@ pub async fn volumes() -> Vec<(Volume, Option<Usage>)> {
 /// A device that does not answer must not hold up the page.
 const ASK_TIMEOUT: Duration = Duration::from_secs(5);
 
-async fn subfolders(dir: &gio::File) -> Vec<(String, gio::File)> {
+async fn subfolders(dir: &gio::File, guarded: bool) -> Vec<(String, gio::File)> {
     let list = async {
         let e = dir.enumerate_children_future("standard::name,standard::display-name,standard::type", gio::FileQueryInfoFlags::NONE, glib::Priority::DEFAULT).await.ok()?;
         let mut out = Vec::new();
@@ -223,7 +226,7 @@ async fn subfolders(dir: &gio::File) -> Vec<(String, gio::File)> {
         }
         Some(out)
     };
-    let mut v = glib::future_with_timeout(ASK_TIMEOUT, list).await.ok().flatten().unwrap_or_default();
+    let mut v = if guarded { glib::future_with_timeout(ASK_TIMEOUT, list).await.ok().flatten().unwrap_or_default() } else { list.await.unwrap_or_default() };
     v.sort_by(|a, b| failbrauwser::fs::format::natural_cmp(&a.0, &b.0));
     v
 }
@@ -285,7 +288,8 @@ async fn folder_to_show(kind: DeviceKind, root: gio::File) -> Result<PathBuf, St
     if kind != DeviceKind::Phone {
         return Ok(path);
     }
-    match subfolders(&root).await.as_slice() {
+    // A phone opened by `file://` is one of the tests' fakes: a folder, not a device.
+    match subfolders(&root, !root.uri().starts_with("file://")).await.as_slice() {
         [(_, only)] => Ok(only.path().unwrap_or(path)),
         [] => Err(devices::explain_error(kind, "The phone shows no storage.")),
         _ => Ok(path),

@@ -185,7 +185,36 @@ pub fn guess_content_type(name: &std::ffi::OsStr, kind: Kind, target_is_dir: boo
         return "inode/special".into();
     }
     let (ct, _uncertain) = gtk::gio::content_type_guess(Some(Path::new(name)), None);
-    ct.to_string()
+    let ct = ct.to_string();
+    #[cfg(windows)]
+    return win_content_type(name, ct);
+    #[cfg(not(windows))]
+    ct
+}
+
+/// On win32 GLib asks the registry before its glob table: an extension whose ProgID is
+/// unregistered (or literally the extension, as on many machines) comes back as ".png" —
+/// no freedesktop type. Those bare answers fall to a small extension table so categories,
+/// type descriptions and thumbnails behave like on Linux; anything the registry resolved
+/// properly stays as it is.
+#[cfg(windows)]
+fn win_content_type(name: &std::ffi::OsStr, guessed: String) -> String {
+    if guessed.contains('/') && !guessed.starts_with('.') {
+        return guessed;
+    }
+    const BY_EXT: &[(&str, &str)] = &[
+        ("png", "image/png"), ("jpg", "image/jpeg"), ("jpeg", "image/jpeg"), ("jfif", "image/jpeg"), ("gif", "image/gif"), ("bmp", "image/bmp"),
+        ("webp", "image/webp"), ("svg", "image/svg+xml"), ("tif", "image/tiff"), ("tiff", "image/tiff"), ("ico", "image/vnd.microsoft.icon"), ("heic", "image/heic"),
+        ("mp3", "audio/mpeg"), ("wav", "audio/x-wav"), ("flac", "audio/flac"), ("ogg", "audio/ogg"), ("m4a", "audio/mp4"), ("aac", "audio/aac"),
+        ("mid", "audio/midi"), ("midi", "audio/midi"), ("opus", "audio/opus"),
+        ("mp4", "video/mp4"), ("m4v", "video/mp4"), ("mkv", "video/x-matroska"), ("avi", "video/x-msvideo"), ("mov", "video/quicktime"),
+        ("wmv", "video/x-ms-wmv"), ("webm", "video/webm"), ("mpeg", "video/mpeg"), ("mpg", "video/mpeg"),
+        ("txt", "text/plain"), ("md", "text/markdown"), ("csv", "text/csv"), ("log", "text/plain"), ("ini", "text/plain"), ("conf", "text/plain"),
+        ("cfg", "text/plain"), ("rtf", "text/rtf"), ("html", "text/html"), ("htm", "text/html"), ("xml", "text/xml"), ("json", "application/json"),
+        ("zip", "application/zip"), ("gz", "application/gzip"), ("tar", "application/x-tar"), ("pdf", "application/pdf"),
+    ];
+    let ext = name.to_string_lossy().rsplit_once('.').map(|pair| pair.1.to_ascii_lowercase()).unwrap_or_default();
+    BY_EXT.iter().find(|(e, _)| *e == ext).map(|(_, t)| (*t).to_string()).unwrap_or(guessed)
 }
 
 #[cfg(test)]
@@ -263,5 +292,18 @@ mod tests {
         let e = FileEntry::stat(&file).unwrap();
         assert!(e.owner.as_deref().is_some_and(|o| !o.is_empty()), "the entry learned an owner name");
         assert!(e.group.as_deref().is_some_and(|g| !g.is_empty()), "the entry learned a group name");
+    }
+}
+
+#[cfg(windows)]
+#[cfg(test)]
+mod win_tests {
+    use super::*;
+    use std::ffi::OsStr;
+    #[test]
+    fn content_types_stay_the_freedesktop_ones_here() {
+        for (n, want) in [("a.png", "image/png"), ("a.txt", "text/plain"), ("a.mp3", "audio/mpeg"), ("a.zip", "application/zip")] {
+            assert_eq!(guess_content_type(OsStr::new(n), Kind::File, false), want, "{n}");
+        }
     }
 }

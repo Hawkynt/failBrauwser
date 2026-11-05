@@ -384,3 +384,4 @@ mod tests {
         assert_eq!(remove_message(unknown, &name), "Windows refused to remove it. (explorer.exe)");
     }
 }
+

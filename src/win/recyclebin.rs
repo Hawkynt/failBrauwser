@@ -185,14 +185,34 @@ where
     outcome.map_err(io_err)
 }
 
-/// Everything in the Recycle Bin (across all volumes — the shell aggregates them).
-pub fn list() -> io::Result<Vec<BinItem>> {
+/// A stub (`$I…`) whose payload (`$R…`) is already gone: a stale row of a bin folder
+/// that has not reconciled yet — what Explorer's own delete leaves behind, and what a
+/// folder view is expected to hide. The `$I` file itself carries the original name, so
+/// an unfiltered walk would keep reporting an item the delete already removed.
+fn orphaned(path: &Path) -> bool {
+    let stub = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    match stub.strip_prefix("$I") {
+        None => false,
+        Some(rest) => std::fs::symlink_metadata(path.with_file_name(format!("$R{rest}"))).is_err(),
+    }
+}
+
+/// Every bin entry, including stubs whose payload is gone. Housekeeping needs to see
+/// those (a `delete` can leave one for a while), the user-facing views must not.
+pub fn list_unfiltered() -> io::Result<Vec<BinItem>> {
     on_com(|| {
         let date_key = prop_key("System.Recycle.DateDeleted", FALLBACK_DATE_DELETED);
         let mut out = Vec::new();
         enumerate(|item| out.push(describe(item, &date_key)))?;
         Ok(out)
     })
+}
+
+/// Everything in the Recycle Bin (across all volumes — the shell aggregates them).
+/// Entries whose payload is gone stay hidden, so rows never double-count an item a
+/// delete has already taken.
+pub fn list() -> io::Result<Vec<BinItem>> {
+    Ok(list_unfiltered()?.into_iter().filter(|b| !orphaned(&b.path)).collect())
 }
 
 /// The item whose bin location is exactly `parser` (the `$Recycle.Bin` path from `list`).

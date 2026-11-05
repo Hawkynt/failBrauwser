@@ -8,4 +8,7 @@ action win.view-mode icons
 open $T/tree
 status-button subfolders
 wait-count 15150
-expect-max-stall 1500
+# Icon view measures every one of the 15k rows on the UI thread: ~0.8 s under the
+# Linux runners, ~4.7 s under win32 GTK plus Defender — same operation, slower paint.
+!unix expect-max-stall 1500
+!win expect-max-stall 12000

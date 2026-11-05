@@ -277,7 +277,8 @@ pub fn is_dir_not_empty(e: &io::Error) -> bool {
 }
 
 pub fn is_rename_flag_unsupported(e: &io::Error) -> bool {
-    codes(e, &SWAP_UNSUPPORTED_CODES)
+    // Platform twins that never support a flag answer with a synthetic error (no raw code).
+    matches!(e.kind(), io::ErrorKind::Unsupported) || codes(e, &SWAP_UNSUPPORTED_CODES)
 }
 
 /// Another holder is using the file (Explorer previews, running editors, AV scans).
@@ -590,5 +591,22 @@ mod tests {
         let all = attribute_names_of(0x1 | 0x2 | 0x4 | 0x10 | 0x20 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 | 0x4000 | 0x8000);
         assert_eq!(all.len(), 12, "every listed flag gets exactly one name");
         assert_eq!(attribute_names_of(0x2000), Vec::<&str>::new(), "NOT_CONTENT_INDEXED is noise and stays out");
+    }
+}
+
+#[cfg(windows)]
+#[cfg(test)]
+mod queue_key_tests {
+    use super::*;
+    #[test]
+    fn one_folder_answers_the_same_device_key_every_time() {
+        let base = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().parent().unwrap().join("tmp");
+        let d = tempfile::tempdir_in(&base).unwrap();
+        let k1 = device_of(d.path());
+        let k2 = device_of(d.path());
+        assert_eq!(k1, k2, "same folder, same key");
+        let sub = d.path().join("out");
+        std::fs::create_dir(&sub).unwrap();
+        assert_eq!(k1, device_of(&sub), "two folders on one volume agree");
     }
 }

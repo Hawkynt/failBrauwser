@@ -6,8 +6,11 @@ expect-location $T/a/b
 # Going up drops the deeper steps.
 crumb-click a
 expect-location $T/a
-crumb-click /
-expect-location /
+# The root step: "/" on Unix, the volume root on Windows ($TROOT: the drive $T is on).
+!unix crumb-click /
+!unix expect-location /
+!win crumb-click $TROOT
+!win expect-location $TROOT
 open $T/x
 crumb-click x
 expect-location $T/x
