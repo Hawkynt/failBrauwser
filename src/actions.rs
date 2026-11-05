@@ -123,9 +123,9 @@ impl CustomAction {
             })
     }
 
-    /// The command line for these targets, ready for `sh -c`.
+    /// The command line for these targets, ready for `sh -c` (Unix) or `cmd /C` (Windows).
     pub fn expand(&self, targets: &[Target]) -> String {
-        let q = |s: &str| gtk::glib::shell_quote(s).to_string_lossy().into_owned();
+        let q = quote;
         let paths: Vec<String> = targets.iter().map(|t| t.path.to_string_lossy().into_owned()).collect();
         let dirs: Vec<String> = targets.iter().map(|t| t.path.parent().unwrap_or(Path::new("/")).to_string_lossy().into_owned()).collect();
         let names: Vec<String> = targets.iter().map(|t| t.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).collect();
@@ -160,7 +160,25 @@ impl CustomAction {
     }
 }
 
+/// One placeholder value quoted for the shell that will run the command: POSIX single
+/// quotes on Unix, cmd's double quotes on Windows (a `%` inside a Windows path stays
+/// one expansion deeper than cmd reads — a documented, rare limitation).
+fn quote(s: &str) -> String {
+    #[cfg(windows)]
+    {
+        // cmd reads a quoted run literally — backslashes included — so only an embedded
+        // double quote needs escaping.
+        if s.is_empty() || s.chars().any(char::is_whitespace) || s.contains('"') {
+            return format!("\"{}\"", s.replace('"', "\\\""));
+        }
+        s.to_string()
+    }
+    #[cfg(not(windows))]
+    gtk::glib::shell_quote(s).to_string_lossy().into_owned()
+}
+
 /// A terminal that exists on this system, for the built-in "Open Terminal Here".
+/// The answer is the command template: `%f` names the folder to open it in.
 pub fn terminal_command() -> Option<String> {
     let exists = |cmd: &str| gtk::glib::find_program_in_path(cmd).is_some();
     if let Ok(t) = std::env::var("TERMINAL") {
@@ -168,6 +186,11 @@ pub fn terminal_command() -> Option<String> {
             return Some(t);
         }
     }
+    terminal_from(&exists)
+}
+
+#[cfg(not(windows))]
+fn terminal_from(exists: &dyn Fn(&str) -> bool) -> Option<String> {
     [
         ("xdg-terminal-exec", "xdg-terminal-exec"),
         ("exo-open", "exo-open --launch TerminalEmulator"),
@@ -182,7 +205,26 @@ pub fn terminal_command() -> Option<String> {
     ]
     .iter()
     .find(|(bin, _)| exists(bin))
-    .map(|(_, cmd)| cmd.to_string())
+    .map(|(_, cmd)| (*cmd).to_string())
+}
+
+#[cfg(windows)]
+fn terminal_from(exists: &dyn Fn(&str) -> bool) -> Option<String> {
+    // Windows Terminal hosts every profile and starts in the folder asked for; plain
+    // cmd.exe is on every install and its `start` opens a window of its own there.
+    // A bare `cmd /k` child would share the app's console instead of opening one.
+    [("wt.exe", "wt -d %f".to_string()), ("cmd.exe", "start \"\" /d %f cmd /k".to_string())]
+        .iter()
+        .find(|(bin, _)| exists(bin))
+        .map(|(_, cmd)| cmd.clone())
+}
+
+/// The built-in action's command out of a found terminal's template.
+fn builtin_command(term: &str) -> String {
+    #[cfg(windows)]
+    return term.to_string(); // the Windows templates carry the folder themselves
+    #[cfg(not(windows))]
+    format!("cd %f && exec {term}")
 }
 
 /// Thunar's actions, then ours (same name: ours wins), then the built-ins nobody replaced.
@@ -201,7 +243,7 @@ pub fn load_all(thunar: &Path, own: &Path) -> Vec<CustomAction> {
                     name: "Open Terminal Here".into(),
                     icon: "utilities-terminal".into(),
                     // The terminal starts in the folder (the command runs there).
-                    command: format!("cd %f && exec {term}"),
+                    command: builtin_command(&term),
                     patterns: vec!["*".into()],
                     directories: true,
                     ..Default::default()
@@ -220,12 +262,15 @@ pub fn own_file() -> PathBuf {
     gtk::glib::user_config_dir().join("failbrauwser/actions.xml")
 }
 
-/// A starting point for the user's own actions file.
+/// A starting point for the user's own actions file: the example speaks the shell the
+/// actions run in (`sh -c` on Unix, `cmd /C` on Windows).
+#[cfg(not(windows))]
 pub const TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!-- failBrauwser custom actions, in Thunar's uca.xml format (Thunar's own
      ~/.config/Thunar/uca.xml is read too). Placeholders in <command>:
      %f/%F first/all paths, %d/%D their folders, %n/%N names, %u/%U URIs.
-     File kinds: directories, audio-files, image-files, text-files, video-files, other-files. -->
+     File kinds: directories, audio-files, image-files, text-files, video-files, other-files.
+     Commands run through sh -c. -->
 <actions>
 <action>
 	<icon>edit-find</icon>
@@ -234,6 +279,25 @@ pub const TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 	<description>Example: counts the lines of the selected text files</description>
 	<patterns>*</patterns>
 	<text-files/>
+</action>
+</actions>
+"#;
+
+#[cfg(windows)]
+pub const TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!-- failBrauwser custom actions, in Thunar's uca.xml format. Placeholders in <command>:
+     %f/%F first/all paths, %d/%D their folders, %n/%N names, %u/%U URIs.
+     File kinds: directories, audio-files, image-files, text-files, video-files, other-files.
+     Commands run through cmd /C, so any command cmd understands works: start, copy,
+     assoc'd programs. Paths are quoted for you. -->
+<actions>
+<action>
+	<icon>edit-find</icon>
+	<name>Show Properties</name>
+	<command>start "" powershell -Command "Get-Item %f | Format-List *"</command>
+	<description>Example: lists everything cmd knows about the selected file</description>
+	<patterns>*</patterns>
+	<other-files/>
 </action>
 </actions>
 "#;
@@ -284,12 +348,29 @@ mod tests {
         assert!(!a[1].applies_to(&[]));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn placeholders_are_quoted() {
         let a = parse(UCA);
         let cmd = a[1].expand(&[t("/p/my photo.jpg", false, "image/jpeg"), t("/p/it's.png", false, "image/png")]);
         assert_eq!(cmd, "convert '/p/my photo.jpg' '/p/it'\\''s.png' -resize 50% out-'my photo.jpg'; echo 100%");
         assert_eq!(a[0].expand(&[t("/home/me", true, "inode/directory")]), "exo-open --working-directory '/home/me' --launch TerminalEmulator");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_placeholders_use_cmd_quoting() {
+        let a = parse(r#"<actions><action><name>T</name><command>start "" /d %f cmd /k</command><directories/></action></actions>"#);
+        let got = a[0].expand(&[t("C:\\My Tools", true, "inode/directory")]);
+        assert_eq!(got, "start \"\" /d \"C:\\My Tools\" cmd /k", "cmd sees double quotes around a path with spaces");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_builtin_terminal_prefers_the_modern_host() {
+        assert_eq!(terminal_from(&|b| b == "wt.exe").as_deref(), Some("wt -d %f"), "Windows Terminal starts in the folder asked for");
+        assert_eq!(terminal_from(&|b| b == "cmd.exe").as_deref(), Some("start \"\" /d %f cmd /k"), "bare cmd opens its own window there, not the app's console");
+        assert_eq!(terminal_from(&|_| false), None, "no host answers, no built-in appears");
     }
 
     #[test]
