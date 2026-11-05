@@ -6,6 +6,7 @@ pub mod longpath;
 pub mod netinfo;
 pub mod recyclebin;
 pub mod reg;
+pub mod shelllink;
 pub mod storage;
 pub mod volume;
 pub mod wnet;
