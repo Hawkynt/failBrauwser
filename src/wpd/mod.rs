@@ -340,10 +340,11 @@ fn split_path(path: &str) -> (String, String) {
 
 // ── the public surface: blocking calls from any job thread ──────────────────
 
-/// The devices WPD currently knows about (names already resolved).
+/// The devices WPD currently knows about (names already resolved). The manager's list
+/// follows PnP arrivals on its own; forcing a bus rescan here would stall the UI page
+/// that calls this for every refresh.
 pub fn devices() -> io::Result<Vec<Device>> {
     call(|ctx| unsafe {
-        ctx.manager.RefreshDeviceList().map_err(map)?;
         let mut count = 0u32;
         ctx.manager.GetDevices(std::ptr::null_mut(), &raw mut count).map_err(map)?;
         if count == 0 {

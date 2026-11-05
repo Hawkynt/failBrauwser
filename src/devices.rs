@@ -143,6 +143,18 @@ pub fn no_storage_hint(kind: DeviceKind) -> &'static str {
 /// with the name to show for it. Kept up to date by the UI from GVfs's volume monitor, read
 /// by tab titles and the path bar.
 static NAMED_ROOTS: Mutex<Option<HashMap<PathBuf, (String, DeviceKind)>>> = Mutex::new(None);
+static NAMED_STORAGES: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+/// Replaces the friendly names of the WPD storages currently seen (their addresses carry
+/// the device's object ids, which no one should have to read).
+pub fn set_named_storages(storages: Vec<(String, String)>) {
+    *NAMED_STORAGES.lock().unwrap() = Some(storages.into_iter().collect());
+}
+
+/// The name a WPD storage object id stands for, when the phones page has learned it.
+pub fn named_storage(id: &str) -> Option<String> {
+    NAMED_STORAGES.lock().unwrap().as_ref().and_then(|map| map.get(id).cloned())
+}
 
 /// Replaces the known device folders.
 pub fn set_named_roots(roots: Vec<(PathBuf, String, DeviceKind)>) {
@@ -214,5 +226,14 @@ mod tests {
         assert_eq!(named_root(&fuse).unwrap().1, "Pixel 7");
         assert_eq!(named_root(Path::new("/tmp/fake-phone/Card")).unwrap().0, PathBuf::from("/tmp/fake-phone"));
         set_named_roots(Vec::new());
+    }
+
+    #[test]
+    fn wpd_storage_object_ids_learn_friendly_names() {
+        set_named_storages(vec![("s13".into(), "Pixel 7 · Internal".into())]);
+        assert_eq!(named_storage("s13").as_deref(), Some("Pixel 7 · Internal"));
+        assert_eq!(named_storage("no-such-id"), None, "an id nobody saw stays unread");
+        set_named_storages(Vec::new());
+        assert_eq!(named_storage("s13"), None, "the registry follows the devices");
     }
 }

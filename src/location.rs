@@ -163,11 +163,12 @@ impl RemoteAt {
         }
     }
 
-    /// The short label a bare (folder-less) address shows for itself.
+    /// The short label a bare (folder-less) address shows for itself. WPD addresses carry
+    /// the device's storage object id; the phones page teaches the app its friendly name.
     pub fn label(&self) -> String {
         match self {
             RemoteAt::Server(t) => t.host.clone(),
-            RemoteAt::Wpd { storage, .. } => storage.clone(),
+            RemoteAt::Wpd { storage, .. } => crate::devices::named_storage(storage).unwrap_or_else(|| storage.clone()),
         }
     }
 }

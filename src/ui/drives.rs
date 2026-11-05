@@ -1015,7 +1015,7 @@ fn open_device(w: &Rc<Window>, v: &Volume, show: impl Fn(Location) + 'static) {
     super::phones::open(w.win.upcast_ref(), &v.device, move |res| {
         set_busy(&key, false);
         match res {
-            Ok(path) => show(Location::Dir(path)),
+            Ok(loc) => show(loc),
             Err(msg) if msg.is_empty() => {}
             Err(msg) => error(&win, "Cannot open the device", &msg),
         }
@@ -1287,6 +1287,11 @@ fn eject_device(w: &Rc<Window>, v: &Volume) {
     if let Some(root) = super::phones::root_path(&v.device) {
         leave(w, &[root]);
     }
+    // A WPD device has no fuse folder to leave — its tabs show wpd:// addresses instead.
+    #[cfg(windows)]
+    if let Some(pnp) = super::phones::wpd_pnp(&v.device) {
+        leave_device_remotes(w, &pnp);
+    }
     let win = Rc::downgrade(w);
     let key = busy_key(v);
     set_busy(&key, true);
@@ -1307,7 +1312,19 @@ pub fn can_unmount(v: &Volume) -> bool {
 
 /// Whether the volume can be ejected: a USB or ejectable drive, or an open phone.
 pub fn can_eject(v: &Volume) -> bool {
-    (v.usb || v.ejectable) && !v.drive_object.is_empty() || v.is_device() && v.mount_point().is_some() || !v.loop_object.is_empty() || !v.share_uri.is_empty()
+    (v.usb || v.ejectable) && !v.drive_object.is_empty() || v.is_device() && v.mount_point().is_some() || !v.loop_object.is_empty() || !v.share_uri.is_empty() || wpd_storage(v)
+}
+
+/// A WPD row whose storage answered (rows for a storage-less device stay inert — ejecting
+/// a phone that only has its screen locked would remove it until the next replug).
+#[cfg(windows)]
+fn wpd_storage(v: &Volume) -> bool {
+    v.device.starts_with("wpd://") && !v.label.is_empty()
+}
+
+#[cfg(not(windows))]
+fn wpd_storage(_: &Volume) -> bool {
+    false
 }
 
 /// What marks a volume as busy: its UDisks2 object, or a device's address.
@@ -1326,6 +1343,21 @@ fn leave(w: &Window, mounts: &[PathBuf]) {
         for p in win.panes() {
             if p.location().nearest_dir().is_some_and(|d| mounts.iter().any(|m| d.starts_with(m))) {
                 p.navigate(Location::Drives);
+            }
+        }
+    }
+}
+
+/// The Windows twin of `leave`: tabs browsing one WPD device go to the drives page by
+/// the device's PnP path instead of by a mount folder (there is no fuse mount to match).
+#[cfg(windows)]
+fn leave_device_remotes(w: &Window, pnp: &str) {
+    for win in w.app.windows() {
+        for p in win.panes() {
+            if let Location::Remote(r) = p.location() {
+                if matches!(&r.at, failbrauwser::location::RemoteAt::Wpd { pnp: device, .. } if device == pnp) {
+                    p.navigate(Location::Drives);
+                }
             }
         }
     }
