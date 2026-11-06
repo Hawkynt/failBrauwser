@@ -75,6 +75,10 @@ and the new program started. The *build from source* channel is Linux-only there
   without it.
 - **Recycle Bin quirks**: a permanent delete can leave a stub entry the shell keeps
   reporting; those orphans never appear in the bin view (filtered in `win::recyclebin`).
+- **Archives whose entries differ only in case** (`a.txt` and `A.TXT` side by side) can
+  be listed but not edit-rebuilt on default NTFS: the helper stages entries through the
+  volume, and NTFS separates such names only when per-directory case sensitivity is
+  enabled. `Remove_IsCaseSensitive` therefore answers inconclusive on Windows.
 - **Copying**: NTFS alternate data streams are not carried by the raw copy loop, ACLs
   inherit rather than travel, and ReFS block-cloning is attempted where available. Copies
   to removable media are paced by flush windows (there is no `sync_file_range` twin).
