@@ -96,8 +96,8 @@ as one file — run it once and it unpacks itself into your Programs folder and 
 single file is all that folder needs (see [docs/WINDOWS.md](docs/WINDOWS.md)).
 
 `winpack\bootstrap.ps1` fetches the pinned GTK stack (list in `winpack\packages.txt`) into
-`winpack\sysroot` from the MSYS2 repository named in `winpack\mirror.txt` — here the company
-Artifactory's mirror of `repo.msys2.org`; point it at any reachable MSYS2 tree — and
+`winpack\sysroot` from the MSYS2 repository named in `winpack\mirror.txt` — `repo.msys2.org`;
+point it at any reachable mirror of it — and
 `winpack\genimports.ps1` makes its MSVC import libraries; `winpack\build.ps1 -Release` is the
 plain build without packaging. Uninstalling is deleting that folder and the Start Menu entry.
 See [docs/WINDOWS.md](docs/WINDOWS.md) for the full picture of how the two systems line up.

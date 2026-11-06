@@ -21,6 +21,29 @@ libraries for it; `winpack\env.ps1` points a shell at that sysroot. The toolchai
 Visual Studio's C++ tools (link, dumpbin) and, for archives, the .NET SDK (NativeAOT — no
 clang required).
 
+### Cross-building from Linux
+
+`winpack/cross.sh` builds the same program from Linux: the `x86_64-pc-windows-gnu` Rust
+target with the MinGW-w64 cross GCC as linker, against the very sysroot `bootstrap.ps1`
+pins (`cross.sh bootstrap` fetches the packages listed in `bootstrap-lock.txt`). Tests and
+the package run under Wine:
+
+```sh
+winpack/cross.sh bootstrap        # once: the pinned GTK stack into winpack/sysroot
+winpack/cross.sh build            # debug build
+winpack/cross.sh test             # cargo test under Wine, on a private X server
+winpack/cross.sh test-each        # every test alone, with a time limit (one hang hides nothing)
+winpack/cross.sh package          # the zip and the single-file exe into winpack/out
+```
+
+The cross build embeds the manifest with `windres` instead of the MSVC linker's flags, and
+ships the archive helper as a self-contained single-file .NET program (NativeAOT does not
+compile across operating systems). PowerShell does not run under Wine, so the UI scenarios
+are driven by the test binary itself there (`FB_UI_HARNESS=builtin`, the same contract as
+`tests/ui/harness.ps1`). Wine is a stand-in, not Windows: the shell recycle bin, WNet,
+WPD, the virtual disk service and PowerShell are missing or partial in it, and the tests
+of exactly those parts need a real Windows (see *Test suite state* below).
+
 A `failbrauwser.exe` straight out of `target` only runs from a shell that sourced
 `winpack\env.ps1` — its GTK DLLs live in `winpack\sysroot\bin`, and double-clicking it
 from Explorer (a clean PATH) fails with "libcairo-2.dll not found". The package, the
@@ -64,6 +87,8 @@ and the new program started. The *build from source* channel is Linux-only there
 | Network folders | GVfs `smb://`; a typed `\\host\share` becomes its `smb://` address | real UNC paths via WNet — a typed `\\host\share` is opened as what it already is |
 | Servers (SFTP/FTP) | system tools | in-app VFS (`src/remote_fs/`, russh/suppaftp) — browsable like archives, not mapped drives |
 | Phones and cameras | GVfs MTP/gPhoto2 | WPD COM (`win::wpd`) |
+| Disk images as drives | UDisks2 loop devices (raw file system images, ISO) | the shell's own Mount verb, else the virtual disk API (`win::vdisk`): ISO, IMG, VHD, VHDX |
+| Searching below a server or phone folder | the GVfs mount is a folder on disk | the folders are listed over the app's own connection (`search::search_listed`) |
 | Desktop links | `.desktop` files | `.lnk` (`win::shelllink`) |
 | Owner/group columns | passwd | SID → name |
 | Dark mode | org.gnome…ColorScheme | `AppsUseLightTheme` registry feed |
@@ -91,9 +116,12 @@ and the new program started. The *build from source* channel is Linux-only there
 - **Machine policy**: this project's updater hands PowerShell the swap script as a command,
   never as a file, because software-restriction policies can block script files below the
   temp folder. Same reason `install.ps1` lives in the repo.
-- **Search on remote folders** (SFTP/FTP VFS) does not crawl yet.
-- **Loop-mounted disk images**: Linux shows them through UDisks; on Windows they stay plain
-  files (a virtual-CD story of its own).
+- **Search on remote folders** lists folder by folder over the connection, so it is as
+  fast as the server answers listings; it does not look inside archives on the server
+  (each would be downloaded first) — the *Inside archives* switch is off there.
+- **Disk images**: Windows mounts ISO, IMG, VHD and VHDX itself; raw file system images
+  Linux loop-mounts (`.ntfs`, `.ext4`, …) are not offered there. Without the shell's Mount
+  verb, attaching needs administrator rights.
 - **Serving and consuming the file chooser via XDG portal** is a Linux desktop feature;
   Windows has its own picker story and failBrauwser does not hook it.
 - **Speed-chart background tint** comes from the window manager theme on Linux; on Windows
@@ -119,9 +147,30 @@ and the new program started. The *build from source* channel is Linux-only there
 
 `cargo test` runs everything; the `.fbt` UI suite runs through `tests/ui/harness.ps1`.
 Scenarios that need Linux-only services skip with a printed reason:
-`portal.fbt`, `portal_frontend.fbt` (XDG portal), `mount_image.fbt` (UDisks loop),
+`portal.fbt`, `portal_frontend.fbt` (XDG portal),
 `desktop_links.fbt` (roaming-profile Desktop, see above), `summary.fbt` (symlink fixture),
 and the portal/default-app parts elsewhere. Timing budgets for the big-listing paints are
 widened for win32 GTK plus Defender (`big_listings.fbt`) — measured here, not guessed.
 All 42 scenarios pass on this host as of this writing, run serially
 (`RUST_TEST_THREADS=1 cargo test`).
+
+Under Wine (`winpack/cross.sh test-each`, Wine 11) everything that does not need a
+Windows service Wine lacks passes — 36 of the 43 UI scenarios among them. What fails there,
+and why it says nothing about Windows:
+
+| Wine lacks | Tests |
+|---|---|
+| the shell Recycle Bin (`IFileOperation` answers E_NOTIMPL) | `win::recyclebin::*`, the delete-to-trash steps of `trash`, `file_ops`, `search`, `find_duplicates`, `undo_operations` |
+| the hidden file attribute (`attrib +h` reads back as R) | `readonly_and_hidden_travel_through_a_copy`, `copies_tree_with_attributes_and_times` |
+| case-only renames (its own `ren a.txt A.txt` keeps `a.txt`) | `case_only_rename_keeps_one_file` |
+| a network (WNet answers ERROR_NO_NETWORK), WPD devices | `the_local_machine_answers_a_share_probe`, `wpd::tests::the_worker_answers_a_device_enumeration` |
+| PowerShell, `curl.exe`, `tar.exe` | the updater's swap test and `update.fbt`, `remove_is_exact_and_folders_go_completely` |
+| cmd joining `"…".done` in a redirection | `custom_actions.fbt` |
+
+`files_with_the_same_bytes` and `verify_option_reads_every_copy_back` hung in one full
+Wine run (right after a recycle bin test had to be killed) and passed in every other.
+
+The single-file launcher cannot be exercised under Wine with Xvfb either: GTK started
+without a console of its own dies on an X error inside Wine's X11 driver there (Notepad in
+the same setup does not), so the launcher is checked for unpacking, the version stamp and
+`--version` only; the program it starts runs the UI scenarios directly.
