@@ -1191,15 +1191,15 @@ async fn managed_objects(conn: &gio::DBusConnection) -> Result<glib::Variant, St
         .map_err(|e| e.to_string())
 }
 
-/// Mount a disk image as a drive: udisks loop devices on Unix; the Windows twin uses the
-/// native virtual-CD API with the drives milestone.
+/// Mount a disk image as a drive: udisks loop devices on Unix; on Windows the system's own
+/// image mounting (`win::vdisk`), which gives the image a drive letter.
 async fn attach_and_mount(image: &Path) -> Result<PathBuf, String> {
     #[cfg(unix)]
     return udisks_attach_and_mount(image).await;
     #[cfg(windows)]
     {
-        let _ = image;
-        Err("Mounting an image file as a drive is not built for Windows yet.".into())
+        let image = image.to_path_buf();
+        gio::spawn_blocking(move || failbrauwser::win::vdisk::mount(&image)).await.unwrap_or_else(|_| Err("The mount stopped unexpectedly.".into()))
     }
     #[cfg(not(any(unix, windows)))]
     {

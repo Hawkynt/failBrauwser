@@ -231,14 +231,11 @@ fn undo_operations() {
 
 #[test]
 fn disk_image_as_drive() {
-    if cfg!(windows) {
-        eprintln!("image loop-mounting belongs to udisks on Linux; the Windows twin would be a virtual-CD story of its own, skipping");
-        return;
-    }
     run("mount_image.fbt", |t| {
         std::fs::create_dir_all(t.join("inside")).unwrap();
         std::fs::write(t.join("inside/report.txt"), "r").unwrap();
-        std::fs::write(t.join("backup.ntfs"), "not really").unwrap();
+        // an ISO: an image kind both Linux (loop device) and Windows (native) mount
+        std::fs::write(t.join("backup.iso"), "not really").unwrap();
         std::fs::write(t.join("photos.zip"), "PK").unwrap();
     });
 }

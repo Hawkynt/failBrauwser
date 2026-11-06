@@ -9,5 +9,6 @@ pub mod reg;
 pub mod shelllink;
 pub mod sidname;
 pub mod storage;
+pub mod vdisk;
 pub mod volume;
 pub mod wnet;
