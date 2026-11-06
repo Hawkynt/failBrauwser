@@ -61,7 +61,23 @@ fn main() -> gtk::glib::ExitCode {
     }
     #[cfg(unix)]
     raise_open_file_limit();
+    #[cfg(windows)]
+    release_own_console();
     ui::app::run()
+}
+
+/// The program is a console program on Windows, so a terminal it is started from shows
+/// its messages. Started from Explorer or the Start menu, Windows makes a console just
+/// for it: when nothing else shares that console, it is let go before the window opens,
+/// so no empty console window stays beside the application. (The single-file launcher
+/// starts it without any console in the first place.)
+#[cfg(windows)]
+fn release_own_console() {
+    use windows::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
+    let mut ids = [0u32; 2];
+    if unsafe { GetConsoleProcessList(&mut ids) } == 1 {
+        let _ = unsafe { FreeConsole() };
+    }
 }
 
 /// Lifts the soft limit on open files (often 1024) to the hard limit: GLib aborts the whole

@@ -41,7 +41,13 @@ fn main() {
         }
         refresh_loader_cache(&prefix.join("bin"));
     }
-    let status = match Command::new(&exe).args(std::env::args_os().skip(1)).status() {
+    // CREATE_NO_WINDOW: the program is a console program, and this launcher has no
+    // console to share; without the flag Windows would open an empty one beside the window.
+    let mut command = Command::new(&exe);
+    command.args(std::env::args_os().skip(1));
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000);
+    let status = match command.status() {
         Ok(s) => s,
         Err(e) => {
             let _ = writeln!(std::io::stderr(), "{} could not start: {e}", exe.display());
