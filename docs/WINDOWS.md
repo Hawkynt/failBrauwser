@@ -119,6 +119,9 @@ and the new program started. The *build from source* channel is Linux-only there
 - **Search on remote folders** lists folder by folder over the connection, so it is as
   fast as the server answers listings; it does not look inside archives on the server
   (each would be downloaded first) — the *Inside archives* switch is off there.
+- **Encrypted drives**: unlocking LUKS sticks, and the LVM volumes inside them, is the
+  Linux side's (UDisks2, device-mapper); Windows unlocks BitLocker drives itself, and
+  failBrauwser lists them once Windows has.
 - **Disk images**: Windows mounts ISO, IMG, VHD and VHDX itself; raw file system images
   Linux loop-mounts (`.ntfs`, `.ext4`, …) are not offered there. Without the shell's Mount
   verb, attaching needs administrator rights.
