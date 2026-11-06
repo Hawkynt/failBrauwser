@@ -69,6 +69,8 @@ pub enum Item {
     /// where that is (for the Folder column).
     FoundInArchive(failbrauwser::location::ArchiveLoc, ArchiveNode, String),
     /// A folder entry on a remote server (SFTP/FTP; the pane's location is its folder).
+    /// Only Windows browses servers in-app; Linux mounts them through GVfs.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Remote(failbrauwser::location::RemoteEntry),
 }
 

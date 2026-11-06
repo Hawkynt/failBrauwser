@@ -809,7 +809,7 @@ pub fn display_name(p: &Path) -> String {
     p.file_name().unwrap_or(OsStr::new("/")).to_string_lossy().into_owned()
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))] // the engine's Unix scenarios live in tests/copy_engine.rs
 mod tests {
     use super::*;
 

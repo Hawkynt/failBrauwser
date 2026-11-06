@@ -211,7 +211,7 @@ pub fn trash_file(p: &Path) -> io::Result<()> {
     #[cfg(windows)]
     return crate::win::recyclebin::trash(p);
     #[cfg(not(windows))]
-    match gtk::gio::File::for_path(p).trash(gtk::gio::Cancellable::NONE) {
+    match gtk::gio::prelude::FileExt::trash(&gtk::gio::File::for_path(p), gtk::gio::Cancellable::NONE) {
         Ok(()) => Ok(()),
         Err(e) if e.matches(gtk::gio::IOErrorEnum::NotFound) => Err(io::Error::new(io::ErrorKind::NotFound, e.to_string())),
         Err(e) => Err(io::Error::other(e.to_string())),

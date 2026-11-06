@@ -4,6 +4,7 @@
 //! processes, and paths beyond 260 characters served by the embedded longPathAware
 //! manifest. Symlinks are absent here on purpose: unprivileged link creation is a
 //! Developer-Mode feature, and the scenario for links runs on Unix.
+#![cfg(windows)]
 
 use failbrauwser::ops::copy::{Mode, Options, rename_replacing, transfer};
 use failbrauwser::ops::job::{Answer, JobCtx, Reply};
