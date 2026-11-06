@@ -39,11 +39,27 @@ $env:FB_SELFTEST = $scriptFbt
 # private bus belongs to this run.
 $out = Join-Path $T 'harness.out'
 $err = Join-Path $T 'harness.err'
-$p = Start-Process -FilePath $BIN -NoNewWindow -PassThru `
-    -RedirectStandardOutput $out -RedirectStandardError $err -WorkingDirectory $UI
+# .NET Process rather than Start-Process: on policy-managed machines a Start-Process
+# object started without -Wait stops being able to read the child's exit code at all
+# (even cmd.exe comes back blank), which would turn a killed run into a false zero.
+$psi = [System.Diagnostics.ProcessStartInfo]::new()
+$psi.FileName = $BIN
+$psi.WorkingDirectory = $UI
+$psi.UseShellExecute = $false
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$p = [System.Diagnostics.Process]::Start($psi)
+$outRead = $p.StandardOutput.ReadToEndAsync()
+$errRead = $p.StandardError.ReadToEndAsync()
 $rc = 124
 if ($p.WaitForExit(60000)) { $rc = $p.ExitCode } else { & taskkill /PID $p.Id /T /F | Out-Null; Start-Sleep -Milliseconds 500 }
 $lock.Close()
+$outText = if ($outRead.Wait(5000)) { $outRead.Result } else { '' }
+$errText = if ($errRead.Wait(5000)) { $errRead.Result } else { '' }
+[IO.File]::WriteAllText($out, $outText)
+[IO.File]::WriteAllText($err, $errText)
 # Same noise filter as harness.sh.
-Get-Content $out, $err -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch 'dbus-daemon|SpiRegistry|fusermount' } | Out-Host
+foreach ($line in ($outText + "`n" + $errText) -split "`r?`n") {
+    if ($line -notmatch 'dbus-daemon|SpiRegistry|fusermount') { $line | Out-Host }
+}
 exit $rc

@@ -277,28 +277,42 @@ fn file_chooser_through_xdg_desktop_portal() {
 
 #[test]
 fn update_from_release_or_source() {
-    if cfg!(windows) {
-        eprintln!("the Linux update channel runs install.sh; the Windows zip channel ships with the packaging milestone, skipping");
-        return;
-    }
     run_checked(
         "update.fbt",
         &[],
         |t| {
-            let fake = |dir: &Path, record: &str| {
-                std::fs::create_dir_all(dir).unwrap();
-                let script = format!("#!/bin/sh\necho \"$@\" > {}/{record}\necho installed\n", t.display());
-                std::fs::write(dir.join("install.sh"), script).unwrap();
-                std::process::Command::new("chmod").arg("+x").arg(dir.join("install.sh")).status().unwrap();
-            };
-            let pkg = format!("failbrauwser-99.0-{}-linux.tar.gz", std::env::consts::ARCH);
-            fake(&t.join("pkgroot/failbrauwser-99.0"), "installed-args");
-            assert!(std::process::Command::new("tar").args(["czf"]).arg(t.join(&pkg)).arg("-C").arg(t.join("pkgroot")).arg("failbrauwser-99.0").status().unwrap().success());
-            fake(&t.join("srcroot/failBrauwser-main"), "built-args");
-            assert!(std::process::Command::new("tar").args(["czf"]).arg(t.join("source.tar.gz")).arg("-C").arg(t.join("srcroot")).arg("failBrauwser-main").status().unwrap().success());
+            // The stand-in package is named by the very formula the updater matches on,
+            // and laid out like package.ps1: a folder holding the payload to swap in.
+            let pkg = failbrauwser::update::package_name("v99.0");
+            let root = t.join("pkgroot/failbrauwser-99.0");
+            // The base keeps its trailing slash: the asset URL is this base plus the
+            // package name, and a join without one names the sibling of the folder.
+            let url = |p: &str| if cfg!(windows) { format!("file:///{}/", p.replace('\\', "/")) } else { format!("file://{p}/") };
+            if cfg!(windows) {
+                std::fs::create_dir_all(root.join("bin")).unwrap();
+                std::fs::create_dir_all(root.join("share")).unwrap();
+                std::fs::write(root.join("bin/failbrauwser.exe"), "NEW-EXE").unwrap();
+                std::fs::write(root.join("share/payload.txt"), "NEW-DATA").unwrap();
+                // Packed like package.ps1 does: the folder itself, so the zip holds one
+                // failbrauwser-* root with bin/ and share/ inside.
+                let pack = format!("Compress-Archive -Path '{}' -DestinationPath '{}'", root.display(), t.join(&pkg).display());
+                let zip = std::process::Command::new("powershell").args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &pack]).output().unwrap();
+                assert!(zip.status.success(), "{}{}", String::from_utf8_lossy(&zip.stdout), String::from_utf8_lossy(&zip.stderr));
+            } else {
+                let fake = |dir: &Path, record: &str| {
+                    std::fs::create_dir_all(dir).unwrap();
+                    let script = format!("#!/bin/sh\necho \"$@\" > {}/{record}\necho installed\n", t.display());
+                    std::fs::write(dir.join("install.sh"), script).unwrap();
+                    std::process::Command::new("chmod").arg("+x").arg(dir.join("install.sh")).status().unwrap();
+                };
+                fake(&root, "installed-args");
+                assert!(std::process::Command::new("tar").args(["czf"]).arg(t.join(&pkg)).arg("-C").arg(t.join("pkgroot")).arg("failbrauwser-99.0").status().unwrap().success());
+                fake(&t.join("srcroot/failBrauwser-main"), "built-args");
+                assert!(std::process::Command::new("tar").args(["czf"]).arg(t.join("source.tar.gz")).arg("-C").arg(t.join("srcroot")).arg("failBrauwser-main").status().unwrap().success());
+            }
             std::fs::write(
                 t.join("release.json"),
-                format!(r#"{{"tag_name": "v99.0", "name": "failBrauwser 99.0", "published_at": "2026-10-30T19:00:00Z", "assets": [{{"name": "{pkg}", "browser_download_url": "file://{}/{pkg}"}}]}}"#, t.display()),
+                format!(r#"{{"tag_name": "v99.0", "name": "failBrauwser 99.0", "published_at": "2026-10-30T19:00:00Z", "assets": [{{"name": "{pkg}", "browser_download_url": "{}{pkg}"}}]}}"#, url(&t.display().to_string())),
             )
             .unwrap();
             std::fs::create_dir_all(t.join("prefix/bin")).unwrap();

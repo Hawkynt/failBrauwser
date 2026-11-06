@@ -1,7 +1,9 @@
 # Help > Check for Updates with a stand-in release and source: both ways run their
 # install.sh with the options of the last install, and nothing downloaded stays behind.
+# On Windows the release arrives as a zip whose bin/lib/share contents replace the
+# install folder's, and the source channel is switched off (see the update window).
 setenv FB_UPDATE_API=file://$T/release.json
-setenv FB_UPDATE_SOURCE=file://$T/source.tar.gz
+!unix setenv FB_UPDATE_SOURCE=file://$T/source.tar.gz
 setenv FB_UPDATE_PREFIX=$T/prefix
 action win.check-updates
 wait-update-checked
@@ -10,9 +12,11 @@ update-choose release
 update-start
 wait-update-done
 expect-update-status Updated.
-wait-file-text $T/installed-args = --prebuilt --prefix $T/prefix --default --reopen
-update-choose source
-update-start
-wait-update-done
-expect-update-status Updated.
-wait-file-text $T/built-args = --prefix $T/prefix --default --reopen
+!unix wait-file-text $T/installed-args = --prebuilt --prefix $T/prefix --default --reopen
+!unix update-choose source
+!unix update-start
+!unix wait-update-done
+!unix expect-update-status Updated.
+!unix wait-file-text $T/built-args = --prefix $T/prefix --default --reopen
+!win wait-file-text $T/prefix/bin/failbrauwser.exe = NEW-EXE
+!win wait-file-text $T/prefix/share/payload.txt = NEW-DATA

@@ -28,15 +28,24 @@ pub struct Release {
     pub page: String,
 }
 
-/// The name of the ready-built package for a version and this machine.
+/// The name of the ready-built package for a version and this machine. One formula:
+/// `package.ps1` names the zip it produces exactly this way.
 pub fn package_name(version: &str) -> String {
-    format!("failbrauwser-{}-{}-linux.tar.gz", version.trim_start_matches('v'), std::env::consts::ARCH)
+    let v = version.trim_start_matches('v');
+    #[cfg(windows)]
+    let name = format!("failbrauwser-{v}-{}-windows.zip", std::env::consts::ARCH);
+    #[cfg(not(windows))]
+    let name = format!("failbrauwser-{v}-{}-linux.tar.gz", std::env::consts::ARCH);
+    name
 }
 
 /// Reads GitHub's answer for the latest release.
 pub fn parse_release(json: &str) -> Option<Release> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
     let tag = v["tag_name"].as_str()?.to_string();
+    #[cfg(windows)]
+    let suffix = format!("-{}-windows.zip", std::env::consts::ARCH);
+    #[cfg(not(windows))]
     let suffix = format!("-{}-linux.tar.gz", std::env::consts::ARCH);
     let package = v["assets"].as_array().and_then(|a| {
         a.iter().find(|x| x["name"].as_str().is_some_and(|n| n.ends_with(&suffix))).and_then(|x| x["browser_download_url"].as_str()).map(str::to_string)
@@ -63,7 +72,11 @@ pub fn is_newer(tag: &str, current: &str) -> bool {
     a > b
 }
 
-/// The installation this program runs from: `~/.local` for `~/.local/bin/failbrauwser`.
+/// The installation this program runs from: the folder whose `bin` holds it —
+/// `~/.local` for `~/.local/bin/failbrauwser`, the install folder for its Windows twin
+/// `<install>\bin\failbrauwser.exe` (where `bin`, `lib` and `share` sit side by side as
+/// `install.sh` and `package.ps1` lay them out). A build still under `target` — folder
+/// `debug` or `release`, never `bin` — is not an installation.
 pub fn prefix_of(exe: &Path) -> Option<PathBuf> {
     let bin = exe.parent()?;
     (bin.file_name()? == "bin").then(|| bin.parent().map(Path::to_path_buf)).flatten()
@@ -82,9 +95,35 @@ pub fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// `'text'` for PowerShell: single quotes need doubling, not a shell escape.
+#[cfg(windows)]
+fn ps_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// The PowerShell swap: download, unpack, move the running program's file aside (Windows
+/// allows renaming it, only not overwriting), copy the fresh files in, drop the old file and
+/// start the new program. Nothing needs to outlive this one, so no detached script.
+/// The package unpacks to its `failbrauwser-*` folder holding `bin`, `lib` and `share`;
+/// their contents are copied into the install folder, whose stale extra files stay (the
+/// same-named ones — the program and its DLL closure — are all replaced, which is what
+/// matters).
+#[cfg(windows)]
+pub fn script(package: Option<&str>, prefix: &Path, _options: &[String], cache: &Path) -> String {
+    let (cache_q, prefix_q) = (ps_quote(&cache.display().to_string()), ps_quote(&prefix.display().to_string()));
+    let get = match package {
+        Some(url) => format!("curl.exe -fsSL --retry 2 -o (Join-Path $work 'package.zip') {}\nExpand-Archive (Join-Path $work 'package.zip') -DestinationPath (Join-Path $work 'files')", ps_quote(url)),
+        None => "Write-Error 'On Windows updates come as the ready-built release; this one has no package.'; exit 1".to_string(),
+    };
+    format!(
+        "$ErrorActionPreference = 'Stop'\n# failBrauwser update (Help > Check for Updates)\n$cache = {cache_q}\nNew-Item -ItemType Directory -Force -Path $cache | Out-Null\n$work = Join-Path $cache ('failbrauwser-update-' + [guid]::NewGuid().ToString('N'))\nNew-Item -ItemType Directory -Path $work | Out-Null\ntry {{\n{get}\n$target = {prefix_q}\n$bin = Join-Path $target 'bin'\nNew-Item -ItemType Directory -Force -Path $bin | Out-Null\n$exe = Join-Path $bin 'failbrauwser.exe'\n$old = \"$exe.old\"\nif (Test-Path $old) {{ Remove-Item $old -Force }}\nif (Test-Path $exe) {{ Move-Item $exe $old -Force }}\n$src = Join-Path $work 'files'\n$inner = Get-ChildItem $src -Directory -Filter 'failbrauwser-*' | Select-Object -First 1\nif ($inner) {{ $src = $inner.FullName }}\nCopy-Item (Join-Path $src '*') $target -Recurse -Force\nRemove-Item $old -Force -ErrorAction SilentlyContinue\nWrite-Output 'UPDATE FINISHED'\ntry {{ Start-Process $exe }} catch {{ }}\n}} finally {{\nRemove-Item $work -Recurse -Force -ErrorAction SilentlyContinue\nWrite-Output 'Removed the downloaded files.'\n}}\n"
+    )
+}
+
 /// The shell script that installs a downloaded release package, or builds the source
 /// (`package: None`), into `prefix` with `options`; the download goes into a folder of its own
 /// below `cache` that is removed at the end, whatever happened.
+#[cfg(not(windows))]
 pub fn script(package: Option<&str>, prefix: &Path, options: &[String], cache: &Path) -> String {
     let opts: String = options.iter().map(|o| format!(" {}", quote(o))).collect();
     let fetch = |url: &str, into: &str| format!("curl -fL --retry 2 -o {into} {} || wget -O {into} {}", quote(url), quote(url));
@@ -111,6 +150,9 @@ mod tests {
     #[test]
     fn releases_and_versions() {
         let pkg = package_name("v0.6");
+        #[cfg(windows)]
+        assert_eq!(pkg, format!("failbrauwser-0.6-{}-windows.zip", std::env::consts::ARCH));
+        #[cfg(not(windows))]
         assert_eq!(pkg, format!("failbrauwser-0.6-{}-linux.tar.gz", std::env::consts::ARCH));
         let json = format!(
             r#"{{"tag_name": "v0.6", "name": "failBrauwser 0.6", "published_at": "2026-10-30T19:00:00Z", "html_url": "https://github.com/{REPO}/releases/tag/v0.6",
@@ -126,6 +168,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn installs_and_scripts() {
         assert_eq!(prefix_of(Path::new("/home/me/.local/bin/failbrauwser")), Some(PathBuf::from("/home/me/.local")));
         assert_eq!(prefix_of(Path::new("/home/me/src/target/release/failbrauwser")), None);
@@ -140,5 +183,52 @@ mod tests {
         assert!(s.contains("trap 'cd /; rm -rf \"$work\"") && s.contains("mktemp -d '/home/me/.cache'/failbrauwser-update.XXXXXX"));
         let s = script(None, Path::new("/opt/fb"), &[], Path::new("/c"));
         assert!(s.contains("tar xzf source.tar.gz -C source --strip-components=1") && s.contains("./install.sh --prefix '/opt/fb' --reopen"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn the_install_folder_is_the_prefix_and_a_debug_build_is_not() {
+        assert_eq!(prefix_of(Path::new(r"C:\Users\me\AppData\Local\Programs\failbrauwser\bin\failbrauwser.exe")), Some(PathBuf::from(r"C:\Users\me\AppData\Local\Programs\failbrauwser")));
+        assert_eq!(prefix_of(Path::new(r"A:\src\target\debug\failbrauwser.exe")), None);
+        assert_eq!(prefix_of(Path::new(r"A:\src\target\release\failbrauwser.exe")), None);
+        // An exe loose in some folder is not an installation either: the swap would
+        // scatter bin/lib/share into wherever it happens to run.
+        assert_eq!(prefix_of(Path::new(r"A:\misc\failbrauwser.exe")), None);
+    }
+
+    /// Runs the made swap against a fake install laid out like `package.ps1`: the program
+    /// file in `bin` is renamed aside, the packaged one takes its place, the payload under
+    /// the package's `failbrauwser-*` folder arrives (the new DLL in `bin`, the data tree
+    /// in `share`), and the download leaves nothing behind.
+    #[test]
+    #[cfg(windows)]
+    fn the_swap_script_replaces_the_running_program() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("inst");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::create_dir_all(target.join("bin")).unwrap();
+        std::fs::write(target.join("bin\\failbrauwser.exe"), b"OLD-EXE").unwrap();
+        let pack_root = d.path().join("failbrauwser-9.9-x86_64-windows");
+        std::fs::create_dir_all(pack_root.join("bin")).unwrap();
+        std::fs::create_dir_all(pack_root.join("share")).unwrap();
+        std::fs::write(pack_root.join("bin\\failbrauwser.exe"), b"NEW-EXE").unwrap();
+        std::fs::write(pack_root.join("bin\\new.dll"), b"NEW-DLL").unwrap();
+        std::fs::write(pack_root.join("share\\thing.txt"), b"NEW-DATA").unwrap();
+        // Same shapes the app itself uses: policy may stop PowerShell from loading script
+        // files below the temp folder, so the text goes in as a command.
+        let zip = d.path().join("package.zip");
+        let pack = format!("Compress-Archive -Path '{}\\*' -DestinationPath '{}'", pack_root.display(), zip.display());
+        let mk = std::process::Command::new("powershell").args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &pack]).output().unwrap();
+        assert!(mk.status.success(), "{}{}", String::from_utf8_lossy(&mk.stdout), String::from_utf8_lossy(&mk.stderr));
+        let url = format!("file:///{}", zip.display().to_string().replace('\\', "/"));
+        let swap = script(Some(&url), &target, &[], &d.path().join("cache"));
+        let out = std::process::Command::new("powershell").args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &swap]).output().unwrap();
+        let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success() && log.contains("UPDATE FINISHED"), "{log}");
+        assert_eq!(std::fs::read(target.join("bin\\failbrauwser.exe")).unwrap(), b"NEW-EXE");
+        assert_eq!(std::fs::read(target.join("bin\\new.dll")).unwrap(), b"NEW-DLL");
+        assert_eq!(std::fs::read(target.join("share\\thing.txt")).unwrap(), b"NEW-DATA");
+        assert!(!target.join("bin\\failbrauwser.exe.old").exists(), "the renamed old program is dropped: {log}");
+        assert_eq!(std::fs::read_dir(d.path().join("cache")).map(|r| r.count()).unwrap_or(0), 0, "the download folder is gone: {log}");
     }
 }
