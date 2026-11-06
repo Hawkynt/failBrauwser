@@ -116,6 +116,14 @@ fn sftp_round_trip(tmp: &Path, xdg: &Path) {
 
     assert!(remote_fs::exists(&at, "/sub/nested.txt"));
     assert!(!remote_fs::exists(&at, "/gone.txt"));
+
+    // Searching below a server folder walks it over the same connection: the deep search
+    // the pane runs for a remote base (folder of each hit relative to the server root).
+    let mut hits = Vec::new();
+    let q = failbrauwser::search::Query::new("*.txt");
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    assert!(failbrauwser::search::search_listed("", &q, false, &cancel, |dir| remote_fs::list(&at, dir), |dir, e| hits.push(format!("{dir}|{}", e.name))));
+    assert_eq!(hits, vec!["|hello.txt", "sub|nested.txt"], "matches of a folder, then of its subfolders");
     let err = remote_fs::list(&at, "/nope").unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "a missing folder reads as NotFound");
 

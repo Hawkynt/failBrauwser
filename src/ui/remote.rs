@@ -345,7 +345,7 @@ pub mod view {
     }
 
     pub fn open_entry(w: &Window, item: &Item) {
-        let (Item::Remote(node), Location::Remote(loc)) = (item, w.current_location()) else { return };
+        let Some((loc, node)) = item.remote_of(&w.current_location()) else { return };
         if node.is_dir {
             return;
         }

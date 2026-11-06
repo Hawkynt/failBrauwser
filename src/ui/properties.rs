@@ -58,7 +58,7 @@ pub fn show(w: &Window) {
             Item::Archive(_) => util::icon_for_type(&one.content_type()),
             Item::Trash(_, e) | Item::Found(e, _) => util::icon_for_entry(e),
             Item::FoundInArchive(..) => util::icon_for_type(&one.content_type()),
-            Item::Remote(_) => util::icon_for_type(&one.content_type()),
+            Item::Remote(_) | Item::FoundRemote(..) => util::icon_for_type(&one.content_type()),
         }),
         many => (format!("{} items", many.len()), gio::ThemedIcon::new("edit-select-all").upcast()),
     };

@@ -30,7 +30,7 @@ pub fn install_actions(w: &Rc<Window>) {
         let pane = w.current_pane();
         match (on, pane.location()) {
             (true, Location::Dir(d)) => pane.navigate(Location::with_subfolders(d)),
-            (false, Location::Search(s)) if s.is_listing() => pane.navigate_exactly(Location::Dir(s.root)),
+            (false, Location::Search(s)) if s.is_listing() => pane.navigate_exactly(s.base()),
             _ => {}
         }
     }));

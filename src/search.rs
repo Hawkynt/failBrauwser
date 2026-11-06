@@ -125,10 +125,81 @@ pub fn search(root: &Path, q: &Query, opts: Options, helper: Option<&Helper>, ca
     true
 }
 
+/// Walks a folder tree that only answers listings — a server or a device storage (on Windows
+/// those are browsed by the app itself, not mounted) — and reports every match through
+/// `found` with the folder it is in (`""` is `root` itself; paths use `/`). `list` answers one
+/// folder's entries. Same order and rules as [`search`]: a folder's own matches first, then
+/// its subfolders by name; links are not followed; unreadable folders are skipped. Returns
+/// false when cancelled.
+pub fn search_listed(
+    root: &str,
+    q: &Query,
+    hidden: bool,
+    cancel: &AtomicBool,
+    mut list: impl FnMut(&str) -> std::io::Result<Vec<crate::location::RemoteEntry>>,
+    mut found: impl FnMut(&str, crate::location::RemoteEntry),
+) -> bool {
+    let root = root.trim_matches('/').to_string();
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        if cancel.load(Ordering::Relaxed) {
+            return false;
+        }
+        let Ok(mut entries) = list(&dir) else { continue };
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut subdirs = Vec::new();
+        for e in entries {
+            if e.name.is_empty() || e.name == "." || e.name == ".." || (!hidden && e.name.starts_with('.')) {
+                continue;
+            }
+            let path = if dir.is_empty() { e.name.clone() } else { format!("{dir}/{}", e.name) };
+            if e.is_dir && !e.is_link {
+                subdirs.push(path);
+            }
+            if q.matches(&e.name) {
+                found(&dir, e);
+            }
+        }
+        subdirs.reverse();
+        stack.extend(subdirs);
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    fn entry(name: &str, is_dir: bool, is_link: bool) -> crate::location::RemoteEntry {
+        crate::location::RemoteEntry { name: name.into(), size: 1, mtime: 0, is_dir, is_link }
+    }
+
+    /// A server tree: home/{report.txt, .hidden-report, a/{b/REPORT-2.txt, notes}, loop -> .}
+    fn server(dir: &str) -> std::io::Result<Vec<crate::location::RemoteEntry>> {
+        Ok(match dir {
+            "home" => vec![entry("a", true, false), entry("report.txt", false, false), entry(".hidden-report", false, false), entry("loop", true, true)],
+            "home/a" => vec![entry("notes", false, false), entry("b", true, false)],
+            "home/a/b" => vec![entry("REPORT-2.txt", false, false)],
+            "home/loop" => panic!("a link was followed"),
+            _ => return Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+        })
+    }
+
+    #[test]
+    fn listed_trees_are_searched_like_folders_on_disk() {
+        let q = Query::new("report");
+        let mut hits = Vec::new();
+        assert!(search_listed("/home/", &q, false, &AtomicBool::new(false), server, |dir, e| hits.push(format!("{dir}|{}", e.name))));
+        assert_eq!(hits, vec!["home|report.txt", "home/a/b|REPORT-2.txt"], "own matches first, then subfolders; no hidden, no links");
+        let mut all = Vec::new();
+        search_listed("home", &Query::new(""), true, &AtomicBool::new(false), server, |dir, e| all.push(format!("{dir}|{}", e.name)));
+        assert_eq!(all.len(), 7, "an empty query lists everything, hidden names and the link itself included: {all:?}");
+        assert!(!search_listed("home", &q, false, &AtomicBool::new(true), server, |_, _| {}), "cancelled");
+        let mut none = 0;
+        assert!(search_listed("gone", &q, false, &AtomicBool::new(false), server, |_, _| none += 1), "an unreadable root is an empty result");
+        assert_eq!(none, 0);
+    }
 
     #[test]
     fn substring_and_wildcards() {

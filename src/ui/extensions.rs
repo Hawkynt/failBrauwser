@@ -128,7 +128,7 @@ pub fn location_writable(loc: &Location) -> bool {
 pub fn open_non_local(w: &Window, item: &Item) {
     match item {
         #[cfg(windows)]
-        Item::Remote(_) => remote::view::open_entry(w, item),
+        Item::Remote(_) | Item::FoundRemote(..) => remote::view::open_entry(w, item),
         _ => archive::open_entry(w, item),
     }
 }

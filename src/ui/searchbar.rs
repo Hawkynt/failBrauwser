@@ -7,7 +7,7 @@ use super::window::Window;
 use failbrauwser::location::{Location, SearchLoc};
 use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 
 struct Bar {
@@ -17,7 +17,8 @@ struct Bar {
     deep: gtk::CheckButton,
     archives: gtk::CheckButton,
     /// The folder the search started in.
-    base: RefCell<Option<PathBuf>>,
+    /// The folder searched below: on disk, or on a server or device the app browses itself.
+    base: RefCell<Option<Location>>,
     /// Set while the bar itself changes the location.
     steering: Cell<bool>,
     /// What was applied last: the same text and options do not search again.
@@ -67,7 +68,9 @@ pub fn attach(pane: &Rc<Pane>) {
     let w = Rc::downgrade(&b);
     b.deep.connect_toggled(move |d| {
         if let Some(b) = w.upgrade() {
-            b.archives.set_sensitive(d.is_active());
+            // archives on a server are not opened while searching (each would be downloaded)
+            let remote = matches!(b.base.borrow().as_ref(), Some(Location::Remote(_)));
+            b.archives.set_sensitive(d.is_active() && !remote);
             b.apply();
         }
     });
@@ -107,7 +110,10 @@ impl Bar {
         match (&base, self.deep.is_active() && !text.trim().is_empty()) {
             (Some(root), true) => {
                 pane.set_filter("");
-                let target = Location::Search(SearchLoc { root: root.clone(), query: text, archives: self.archives.is_active() });
+                let target = Location::Search(match root {
+                    Location::Remote(r) => SearchLoc { root: PathBuf::new(), query: text, archives: false, remote: Some(r.clone()) },
+                    other => SearchLoc { root: other.local_path().map(Path::to_path_buf).unwrap_or_default(), query: text, archives: self.archives.is_active(), remote: None },
+                });
                 if matches!(pane.location(), Location::Search(_)) {
                     pane.replace_location(target);
                 } else {
@@ -117,7 +123,7 @@ impl Bar {
             }
             _ => {
                 if let (Some(root), Location::Search(_)) = (&base, pane.location()) {
-                    pane.replace_location(Location::Dir(root.clone()));
+                    pane.replace_location(root.clone());
                 }
                 pane.set_filter(&text);
             }
@@ -131,7 +137,7 @@ impl Bar {
         self.steering.set(true);
         pane.set_filter("");
         if let (Some(root), Location::Search(_)) = (self.base.borrow().clone(), pane.location()) {
-            pane.replace_location(Location::Dir(root));
+            pane.replace_location(root);
         }
         self.steering.set(false);
         self.entry.set_text("");
@@ -144,11 +150,15 @@ pub fn open(w: &Window) {
     let pane = w.current_pane();
     let Some(b) = bar_for(&pane) else { return };
     let base = match pane.location() {
-        Location::Search(s) => Some(s.root),
-        other => other.local_path().map(|p| p.to_path_buf()),
+        Location::Search(s) => Some(s.base()),
+        Location::Dir(p) => Some(Location::Dir(p)),
+        Location::Remote(r) => Some(Location::Remote(r)),
+        _ => None,
     };
-    // Searching below works from folders on disk; elsewhere the bar filters only.
+    // Searching below works from folders on disk and on servers or devices the app browses
+    // itself; elsewhere the bar filters only.
     b.deep.set_sensitive(base.is_some());
+    b.archives.set_sensitive(b.deep.is_active() && !matches!(base, Some(Location::Remote(_))));
     *b.base.borrow_mut() = base;
     b.bar.set_search_mode(true);
     b.entry.grab_focus();
@@ -160,7 +170,7 @@ pub fn location_changed(pane: &Rc<Pane>) {
     if b.steering.get() || !b.bar.is_search_mode() {
         return;
     }
-    let base = b.base.borrow().clone().map(Location::Dir);
+    let base = b.base.borrow().clone();
     let loc = pane.location();
     if matches!(loc, Location::Search(_)) || Some(&loc) == base.as_ref() {
         return;

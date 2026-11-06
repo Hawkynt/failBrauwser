@@ -172,7 +172,7 @@ pub fn selection_sources(pane: &Pane) -> Vec<ClipSource> {
             (Item::Fs(e) | Item::Found(e, _), _) => Some(ClipSource::Local(e.path.clone())),
             (Item::FoundInArchive(a, n, _), _) => Some(ClipSource::Archive(a.clone(), n.path.clone())),
             (Item::Archive(n), Location::Archive(a)) => Some(ClipSource::Archive(a.clone(), n.path.clone())),
-            (Item::Remote(n), Location::Remote(r)) => Some(ClipSource::Remote(r.at.clone(), r.entry_path(&n.name), n.is_dir)),
+            (Item::Remote(n), Location::Remote(r)) | (Item::FoundRemote(r, n, _), _) => Some(ClipSource::Remote(r.at.clone(), r.entry_path(&n.name), n.is_dir)),
             _ => None,
         })
         .collect()
@@ -412,7 +412,8 @@ fn ask_rename(w: &Window, item: Item, initial: String) {
                 });
             }
             Item::Archive(_) | Item::Remote(_) => super::extensions::rename_non_local(&w, &pane, &item, &new),
-            Item::Trash(..) | Item::FoundInArchive(..) => {}
+            // search results inside archives and on servers are renamed where they are
+            Item::Trash(..) | Item::FoundInArchive(..) | Item::FoundRemote(..) => {}
         }
     });
 }
