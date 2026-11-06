@@ -1,0 +1,23 @@
+# The single-file Windows release (src/portable.rs), packaged on its own so the launcher
+# stays free of the GTK lib crate: it must have no DLL imports next to the embedded
+# payload. winpack\package.ps1 builds it with FB_PAYLOAD (the staging zip) and FB_VERSION
+# (the version stamped into it) set; that version, not this placeholder, is what the
+# payload stamp compares against.
+[package]
+name = "failbrauwser-onefile"
+version = "0.0.0"
+edition = "2024"
+description = "Single-file Windows build of failBrauwser: unpacks its embedded runtime and starts it"
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "failbrauwser-onefile"
+path = "../../src/portable.rs"
+
+[dependencies]
+# just enough to read the payload: stored and deflated entries, verified by CRC
+flate2 = "1"
+crc32fast = "1"
+
+[dev-dependencies]
+tempfile = "3"

@@ -9,6 +9,10 @@ license = "GPL-3.0-or-later"
 name = "failbrauwser"
 path = "src/main.rs"
 
+# The single-file Windows build (src/portable.rs) lives in its own tiny crate
+# winpack\onefile: the launcher must carry no DLL imports of its own, so it never links
+# this GTK crate, and enabling it here would rebuild the whole library on every build.
+
 [lib]
 name = "failbrauwser"
 path = "src/lib.rs"

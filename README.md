@@ -1,6 +1,6 @@
 # failBrauwser
 
-A fast, native GTK 3 file manager in the spirit of Thunar — that opens archives like folders.
+A fast, native GTK 3 file manager for Linux and Windows, in the spirit of Thunar — that opens archives like folders.
 
 ![failBrauwser showing a home folder with folder sizes, shortcuts and folder tree](docs/screenshots/main.png)
 
@@ -83,16 +83,36 @@ that; windows then take a moment longer the first time). It also makes failBrauw
 and save dialog of applications that ask the desktop portal for one (`--no-file-chooser` to
 keep the desktop's; see *File chooser for other applications* below).
 
+On Windows (PowerShell, in a checkout with the [toolchain below](#requirements) set up):
+
+```powershell
+winpack\package.ps1           # build release and pack failbrauwser-<version>-x86_64-windows.zip
+winpack\install.ps1           # install it for your user (default %LOCALAPPDATA%\Programs)
+winpack\install.ps1 -Prefix D:\Apps\failBrauwser
+```
+
+`package.ps1` also builds `failbrauwser-<version>-x86_64-windows.exe`: the whole application
+as one file — run it once and it unpacks itself into your Programs folder and starts; that
+single file is all that folder needs (see [docs/WINDOWS.md](docs/WINDOWS.md)).
+
+`winpack\bootstrap.ps1` fetches the pinned GTK stack (list in `winpack\packages.txt`) into
+`winpack\sysroot` from the MSYS2 repository named in `winpack\mirror.txt` — here the company
+Artifactory's mirror of `repo.msys2.org`; point it at any reachable MSYS2 tree — and
+`winpack\genimports.ps1` makes its MSVC import libraries; `winpack\build.ps1 -Release` is the
+plain build without packaging. Uninstalling is deleting that folder and the Start Menu entry.
+See [docs/WINDOWS.md](docs/WINDOWS.md) for the full picture of how the two systems line up.
+
 ### Updating
 
 *Help → Check for Updates* says whether GitHub has a newer release and installs either the
 newest **release** — its ready-built package (`failbrauwser-<version>-<arch>-linux.tar.gz`,
-installed with `install.sh --prebuilt`) — or builds the current **source** (needs what a build
-needs, below). Both install into the same place with the options of the last install (kept in
+installed with `install.sh --prebuilt`; on Windows `failbrauwser-<version>-x86_64-windows.zip`,
+whose files replace the install folder while the program runs) — or builds the current
+**source** (needs what a build needs, below; Linux only, since it runs `install.sh`). Both install into the same place with the options of the last install (kept in
 `~/.config/failbrauwser/install-options`); the download, source included, is deleted when it is
 done, and failBrauwser restarts as the new version. The window shows the installer's output. A
-copy installed for everyone (`--system`) is updated from a terminal. `scripts/package.sh`
-makes the release package.
+copy installed for everyone (`--system`) is updated from a terminal. `scripts/package.sh` and
+`winpack\package.ps1` make the release packages.
 
 ### Requirements
 

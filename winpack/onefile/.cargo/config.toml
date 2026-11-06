@@ -1,0 +1,5 @@
+# The single-file promise starts with the launcher itself: static CRT, so the exe needs
+# only the OS loader (KERNEL32/ntdll + the virtual api-set schemas) - no VC++ runtime
+# redistributable, nothing to install.
+[build]
+rustflags = ["-C", "target-feature=+crt-static"]

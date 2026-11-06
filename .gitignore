@@ -8,3 +8,5 @@
 /winpack/sysroot
 /winpack/dl
 /winpack/probe
+/winpack/out
+/winpack/onefile/target
