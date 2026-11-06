@@ -11,6 +11,15 @@ pub fn wide(path: &Path) -> Vec<u16> {
     extended(path).as_os_str().encode_wide().chain(std::iter::once(0)).collect()
 }
 
+/// Plain absolute UTF-16 (NUL-terminated) form — the few APIs that parse the drive
+/// themselves, like `GetVolumeInformationW`, answer `ERROR_INVALID_NAME` for the
+/// `\\?\` form and would silently turn their results into "unknown".
+pub fn plain_wide(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    let absolute = if path.is_absolute() { path.to_path_buf() } else { relativize(path) };
+    absolute.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+}
+
 pub fn extended(path: &Path) -> std::ffi::OsString {
     let absolute = if path.is_absolute() { path.to_path_buf() } else { relativize(path) };
     let text = absolute.to_string_lossy().replace('/', "\\");

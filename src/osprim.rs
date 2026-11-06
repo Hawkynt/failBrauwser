@@ -433,13 +433,35 @@ fn win_movefile(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
 #[cfg(windows)]
 fn win_device_of(path: &Path) -> Option<u64> {
     use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
-    let w = crate::win::longpath::wide(path);
+    // The probe names a volume by its root — a drive letter or the server\share of a
+    // UNC path — and plain, not `\\?\`: anything else answers ERROR_INVALID_NAME, which
+    // here would turn every queue key into "unknown" and run same-drive copies at once.
+    let root = win_volume_root(path)?;
+    let w = crate::win::longpath::plain_wide(Path::new(&root));
     let mut serial = 0u32;
     if unsafe { GetVolumeInformationW(windows::core::PCWSTR(w.as_ptr()), None, Some(&raw mut serial), None, None, None) }.is_ok() {
         Some(serial as u64)
     } else {
         None
     }
+}
+
+/// The volume root of `path` as a plain string: `C:\` or `\\server\share\`.
+fn win_volume_root(path: &Path) -> Option<String> {
+    let text = path.to_string_lossy().replace('/', "\\");
+    if text.starts_with("\\\\?\\") {
+        return None; // an already-extended path is no volume name to probe
+    }
+    if text.as_bytes().get(1) == Some(&b':') {
+        return Some(format!("{}:\\", text[..1].to_uppercase()));
+    }
+    if text.starts_with("\\\\") {
+        let share: Vec<&str> = text[2..].split('\\').filter(|s| !s.is_empty()).take(2).collect();
+        if !share.is_empty() {
+            return Some(format!("\\\\{}\\", share.join("\\")));
+        }
+    }
+    None
 }
 
 #[cfg(windows)]
@@ -603,10 +625,19 @@ mod queue_key_tests {
         let base = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().parent().unwrap().join("tmp");
         let d = tempfile::tempdir_in(&base).unwrap();
         let k1 = device_of(d.path());
+        assert!(k1.is_some(), "a folder on a real volume answers with a key at all — without one nothing ever queues");
         let k2 = device_of(d.path());
         assert_eq!(k1, k2, "same folder, same key");
         let sub = d.path().join("out");
         std::fs::create_dir(&sub).unwrap();
         assert_eq!(k1, device_of(&sub), "two folders on one volume agree");
+    }
+
+    #[test]
+    fn volume_roots_name_the_volume_not_the_folder() {
+        assert_eq!(win_volume_root(Path::new(r"c:\users\me")).unwrap(), r"C:\");
+        assert_eq!(win_volume_root(Path::new("a:/mixed/seps")).unwrap(), r"A:\");
+        assert_eq!(win_volume_root(Path::new(r"\\srv\share\dir\f.bin")).unwrap(), r"\\srv\share\");
+        assert_eq!(win_volume_root(Path::new(r"\\?\C:\x")), None, "the extended form is not a volume name");
     }
 }
