@@ -49,6 +49,8 @@ struct FakeDrive {
     /// A disk image instead of a stick: it shows only while "mounted".
     image: Option<PathBuf>,
     passphrase: Option<String>,
+    /// Encrypted, with LVM volumes inside instead of a file system.
+    lvm: bool,
     unlocked: bool,
     mounted: bool,
 }
@@ -101,21 +103,26 @@ impl FakeDrive {
         if self.passphrase.is_none() {
             return vec![contents(self.object(), String::new())];
         }
-        let container = Volume { device: format!("/dev/fake-{}-luks", self.label), label: self.label.clone(), fs_type: "crypto_LUKS".into(), block_object: self.object(), unlocked: self.unlocked, ..base.clone() };
+        let container = Volume { device: format!("/dev/fake-{}-luks", self.label), label: self.label.clone(), fs_type: "crypto_LUKS".into(), block_object: self.object(), unlocked: self.unlocked, lvm_inside: self.unlocked && self.lvm, ..base.clone() };
+        if self.lvm {
+            // The LVM volume shows once opened ("mounted").
+            let lv = Volume { lvm_backing: self.object(), ..contents(format!("{}/lv", self.object()), String::new()) };
+            return if self.unlocked && self.mounted { vec![container, lv] } else { vec![container] };
+        }
         if self.unlocked { vec![container, contents(format!("{}/clear", self.object()), self.object())] } else { vec![container] }
     }
 }
 
 /// A stand-in USB stick (self-test), not mounted; with a passphrase it is encrypted and locked.
-pub fn add_fake(label: &str, dir: PathBuf, passphrase: Option<String>) {
-    FAKES.with(|f| f.borrow_mut().push(FakeDrive { label: label.into(), dir, image: None, passphrase, unlocked: false, mounted: false }));
+pub fn add_fake(label: &str, dir: PathBuf, passphrase: Option<String>, lvm: bool) {
+    FAKES.with(|f| f.borrow_mut().push(FakeDrive { label: label.into(), dir, image: None, passphrase, lvm, unlocked: false, mounted: false }));
     changed();
 }
 
 /// A stand-in disk image (self-test): mounting it shows `dir`.
 pub fn add_fake_image(image: PathBuf, dir: PathBuf) {
     let label = image.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    FAKES.with(|f| f.borrow_mut().push(FakeDrive { label, dir, image: Some(image), passphrase: None, unlocked: false, mounted: false }));
+    FAKES.with(|f| f.borrow_mut().push(FakeDrive { label, dir, image: Some(image), passphrase: None, lvm: false, unlocked: false, mounted: false }));
 }
 
 /// Answers a UDisks2 call on a stand-in stick like UDisks2 would.
@@ -148,6 +155,12 @@ fn fake_call(object: &str, method: &str, args: &glib::Variant) -> Result<glib::V
                 d.unlocked = true;
                 Ok(glib::Variant::tuple_from_iter([format!("{}/clear", d.object()).to_variant()]))
             }
+            "Get" => {
+                // Properties.Get of the unlocked contents' IdType.
+                let kind = if d.lvm { failbrauwser::lvm::PV_TYPE } else { "ext4" };
+                Ok(glib::Variant::tuple_from_iter([glib::Variant::from_variant(&kind.to_variant())]))
+            }
+            "Lock" if d.lvm && d.mounted => Err("Error locking: Device is busy".to_string()),
             "Lock" => {
                 d.unlocked = false;
                 Ok(glib::Variant::tuple_from_iter(std::iter::empty::<glib::Variant>()))
@@ -572,6 +585,7 @@ impl DrivesPage {
             (None, None) if v.is_device() => "Connected — open it to see its files".to_string(),
             (Some(u), Some(m)) => format!("{} free of {} — {:.0} % used — {}", human_size(u.free), human_size(u.total), u.fraction() * 100.0, m.display()),
             (None, Some(m)) => format!("Mounted at {}", m.display()),
+            _ if v.lvm_closed() => format!("Encrypted, unlocked, LVM volumes not open — {}", human_size(v.size)),
             _ if v.unlocked => format!("Encrypted, unlocked — {}", human_size(v.size)),
             _ if v.fs_type.starts_with("crypto") => format!("Encrypted, locked — {}", human_size(v.size)),
             _ => format!("Not mounted — {}", human_size(v.size)),
@@ -607,6 +621,8 @@ impl DrivesPage {
             add("_Mount", "Mount and open this drive", Box::new(move |p| p.open(&vol)));
         } else if v.is_locked() {
             add("_Unlock", "Unlock with the passphrase, mount and open this drive", Box::new(move |p| p.open(&vol)));
+        } else if v.lvm_closed() {
+            add("_Open", "Open the LVM volumes on this drive (asks for the administrator password)", Box::new(move |p| p.open(&vol)));
         }
         if can_unmount(v) {
             let vol = v.clone();
@@ -667,6 +683,8 @@ impl DrivesPage {
             add("_Mount", Box::new(move |p| p.open(&vol)));
         } else if v.is_locked() {
             add("_Unlock", Box::new(move |p| p.open(&vol)));
+        } else if v.lvm_closed() {
+            add("_Open", Box::new(move |p| p.open(&vol)));
         }
         if can_unmount(&v) {
             let vol = v.clone();
@@ -901,6 +919,25 @@ pub fn open_volume(w: &Rc<Window>, pane: &Rc<Pane>, v: &Volume, new_tab: bool) {
         unlock_and_open(w, v, Rc::new(show));
         return;
     }
+    if v.lvm_closed() {
+        let win = Rc::downgrade(w);
+        let (obj, dev) = (v.block_object.clone(), v.device.clone());
+        set_busy(&obj, true);
+        glib::spawn_future_local(async move {
+            let res = lvm_helper("open", &dev).await;
+            set_busy(&obj, false);
+            match res {
+                Ok(mounts) => {
+                    if let Some(m) = first_mount(mounts) {
+                        show(Location::Dir(m));
+                    }
+                }
+                Err(e) if e.is_empty() => {}
+                Err(e) => error(&win, "Cannot open the drive's LVM volumes", &e),
+            }
+        });
+        return;
+    }
     if !v.mountable || v.block_object.is_empty() {
         return;
     }
@@ -937,11 +974,25 @@ fn unlock_and_open(w: &Rc<Window>, v: &Volume, show: Rc<dyn Fn(Location)>) {
             let opened = match res {
                 Ok(reply) => {
                     let clear = reply.child_value(0).str().unwrap_or_default().to_string();
-                    // GNOME and others may already have mounted it on unlocking.
-                    match mount(&clear).await {
-                        Ok(p) => Ok(Some(p)),
-                        Err(e) if e.contains("already mounted") => Ok(None),
-                        Err(e) => Err(("Unlocked, but cannot mount it", e)),
+                    if holds_lvm(&clear).await {
+                        // LVM volumes instead of a file system (a Linux installation).
+                        match lvm_helper("open", &v2.device).await {
+                            Ok(mounts) => Ok(first_mount(mounts)),
+                            // The administrator password was not given: it stays unlocked,
+                            // listed to open its volumes later.
+                            Err(e) if e.is_empty() => Ok(None),
+                            Err(e) => {
+                                let _ = call(&obj, "org.freedesktop.UDisks2.Encrypted", "Lock", empty_options()).await;
+                                Err(("Unlocked, but cannot open its LVM volumes", e))
+                            }
+                        }
+                    } else {
+                        // GNOME and others may already have mounted it on unlocking.
+                        match mount(&clear).await {
+                            Ok(p) => Ok(Some(p)),
+                            Err(e) if e.contains("already mounted") => Ok(None),
+                            Err(e) => Err(("Unlocked, but cannot mount it", e)),
+                        }
                     }
                 }
                 Err(e) => Err(("Cannot unlock the drive", e)),
@@ -960,6 +1011,58 @@ fn unlock_and_open(w: &Rc<Window>, v: &Volume, show: Rc<dyn Fn(Location)>) {
             }
         });
     });
+}
+
+/// Whether the unlocked contents of an encrypted drive are an LVM physical volume.
+async fn holds_lvm(cleartext: &str) -> bool {
+    let args = glib::Variant::tuple_from_iter(["org.freedesktop.UDisks2.Block".to_variant(), "IdType".to_variant()]);
+    match call(cleartext, "org.freedesktop.DBus.Properties", "Get", args).await {
+        Ok(r) => r.child_value(0).as_variant().and_then(|v| v.str().map(str::to_string)).as_deref() == Some(failbrauwser::lvm::PV_TYPE),
+        Err(_) => false,
+    }
+}
+
+/// The folder to show of the LVM volumes just mounted: `home` if there is one.
+fn first_mount(mounts: Vec<PathBuf>) -> Option<PathBuf> {
+    mounts.iter().find(|m| m.file_name().is_some_and(|n| n == "home")).cloned().or_else(|| mounts.into_iter().next())
+}
+
+/// Opens (`open`) or closes (`close`) the LVM volumes inside the unlocked encrypted
+/// partition `device`, as root through pkexec (see `failbrauwser::lvm`). Gives the folders
+/// they are mounted on; an empty error when the administrator password was not given.
+async fn lvm_helper(action: &str, device: &str) -> Result<Vec<PathBuf>, String> {
+    if device.starts_with("/dev/fake-") {
+        return fake_lvm(action, device);
+    }
+    if std::env::var_os("FB_NO_AUTH_PROMPTS").is_some() {
+        return Err("Opening LVM volumes needs the administrator password (prompts are turned off).".into());
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = PathBuf::from(exe.to_string_lossy().trim_end_matches(" (deleted)"));
+    let argv: Vec<&std::ffi::OsStr> = vec!["pkexec".as_ref(), exe.as_os_str(), "--lvm".as_ref(), action.as_ref(), device.as_ref()];
+    let proc = gio::Subprocess::newv(&argv, gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_PIPE).map_err(|e| format!("cannot run pkexec: {e}"))?;
+    let (out, err) = proc.communicate_utf8_future(None).await.map_err(|e| e.to_string())?;
+    let out = out.map(|s| s.to_string()).unwrap_or_default();
+    let err = err.map(|s| s.to_string()).unwrap_or_default();
+    // pkexec: 126 the dialog was dismissed, 127 not authorized.
+    match proc.exit_status() {
+        0 => Ok(out.lines().filter_map(|l| l.strip_prefix("MOUNT ")).map(PathBuf::from).collect()),
+        126 => Err(String::new()),
+        127 => Err("Not authorized.".into()),
+        _ => Err(Some(err.trim().to_string()).filter(|e| !e.is_empty()).unwrap_or_else(|| "The LVM volumes could not be opened.".into())),
+    }
+}
+
+/// The self-test's stand-in for the LVM helper on a fake encrypted stick.
+fn fake_lvm(action: &str, device: &str) -> Result<Vec<PathBuf>, String> {
+    let res = FAKES.with(|f| {
+        let mut f = f.borrow_mut();
+        let d = f.iter_mut().find(|d| format!("/dev/fake-{}-luks", d.label) == device && d.lvm && d.unlocked).ok_or("the drive is not unlocked")?;
+        d.mounted = action == "open";
+        Ok(if d.mounted { vec![d.dir.clone()] } else { Vec::new() })
+    });
+    changed();
+    res
 }
 
 /// Where opened files go: the pane, or a new tab of the window.
@@ -1028,28 +1131,50 @@ pub fn unmount_volume(w: &Rc<Window>, v: &Volume, eject: bool, all: &[Volume]) {
         super::shares::eject(w, v, move |mounts| leave(&w2, mounts));
         return;
     }
-    let mounts: Vec<PathBuf> = if eject {
+    // Encrypted containers with LVM volumes inside: all their volumes are unmounted and
+    // closed together (by the LVM helper), then the container is locked.
+    let lvm: Vec<(String, String)> = all
+        .iter()
+        .filter(|x| x.lvm_inside && x.unlocked && if eject { x.drive_object == v.drive_object } else { x.block_object == v.lvm_backing })
+        .map(|x| (x.block_object.clone(), x.device.clone()))
+        .collect();
+    let mut mounts: Vec<PathBuf> = if eject {
         all.iter().filter(|x| x.drive_object == v.drive_object).flat_map(|x| x.mount_points.clone()).collect()
     } else {
         v.mount_points.clone()
     };
+    mounts.extend(all.iter().filter(|x| lvm.iter().any(|(o, _)| o == &x.lvm_backing)).flat_map(|x| x.mount_points.clone()));
     leave(w, &mounts);
     // Unmounted, and encrypted ones locked again (as other file managers do).
     let targets: Vec<(String, String)> = if eject {
-        all.iter().filter(|x| x.drive_object == v.drive_object && !x.mount_points.is_empty()).map(|x| (x.block_object.clone(), x.crypto_backing.clone())).collect()
-    } else {
+        all.iter().filter(|x| x.drive_object == v.drive_object && !x.mount_points.is_empty() && x.lvm_backing.is_empty()).map(|x| (x.block_object.clone(), x.crypto_backing.clone())).collect()
+    } else if v.lvm_backing.is_empty() {
         vec![(v.block_object.clone(), v.crypto_backing.clone())]
+    } else {
+        Vec::new()
     };
     // Unlocked but not mounted: still to be locked before powering off.
     let mut lock: Vec<String> = if eject {
         all.iter().filter(|x| x.drive_object == v.drive_object && x.unlocked && !targets.iter().any(|(_, b)| b == &x.block_object)).map(|x| x.block_object.clone()).collect()
     } else {
-        Vec::new()
+        lvm.iter().map(|(o, _)| o.clone()).collect()
     };
     let win = Rc::downgrade(w);
     let v = v.clone();
     set_busy(&v.block_object, true);
     glib::spawn_future_local(async move {
+        for (_, dev) in &lvm {
+            match lvm_helper("close", dev).await {
+                Ok(_) => {}
+                Err(e) => {
+                    set_busy(&v.block_object, false);
+                    if !e.is_empty() {
+                        error(&win, "Cannot unmount drive", &e);
+                    }
+                    return;
+                }
+            }
+        }
         for (obj, backing) in &targets {
             if let Err(e) = call(obj, "org.freedesktop.UDisks2.Filesystem", "Unmount", empty_options()).await {
                 set_busy(&v.block_object, false);
@@ -1275,5 +1400,7 @@ async fn query_udisks() -> Option<Vec<Volume>> {
         .call_future(Some(UDISKS), "/org/freedesktop/UDisks2", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects", None, Some(glib::VariantTy::new("(a{oa{sa{sv}}})").unwrap()), gio::DBusCallFlags::NONE, 5000)
         .await
         .ok()?;
-    Some(drives::parse_udisks(&reply))
+    let mut vols = drives::parse_udisks(&reply);
+    drives::link_lvm_volumes(&mut vols, Path::new("/sys"));
+    Some(vols)
 }

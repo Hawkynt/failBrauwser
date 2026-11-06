@@ -34,6 +34,10 @@ pub struct Volume {
     /// For the contents of an unlocked container: the container's UDisks2 object, locked
     /// again after unmounting.
     pub crypto_backing: String,
+    /// An unlocked encrypted container holding LVM volumes rather than a file system.
+    pub lvm_inside: bool,
+    /// For an LVM volume inside an unlocked container: the container's UDisks2 object.
+    pub lvm_backing: String,
     pub uuid: String,
     /// File system version ("1.0" for ext4, "FAT32", …).
     pub fs_version: String,
@@ -144,6 +148,11 @@ impl Volume {
         self.fs_type.starts_with("crypto") && !self.unlocked && !self.block_object.is_empty()
     }
 
+    /// An unlocked container whose LVM volumes are not open yet: opening it opens them.
+    pub fn lvm_closed(&self) -> bool {
+        self.unlocked && self.lvm_inside
+    }
+
     /// A phone or camera rather than a block device.
     pub fn is_device(&self) -> bool {
         !self.protocol.is_empty()
@@ -192,8 +201,10 @@ pub fn user_volumes(all: &[Volume], home: &Path) -> Vec<Volume> {
             if v.is_device() {
                 return true;
             }
+            // An unlocked container is shown by its contents; one with LVM volumes inside
+            // that are not open yet stays, to open them.
             if v.unlocked {
-                return false;
+                return v.lvm_inside && !v.system && !all.iter().any(|x| x.lvm_backing == v.block_object);
             }
             if v.mount_points.is_empty() {
                 return !is_system_partition(&v.partition_type);
@@ -361,6 +372,7 @@ pub fn parse_udisks(reply: &glib::Variant) -> Vec<Volume> {
         let d = drive.unwrap_or(&empty);
         let part = ifaces.get("org.freedesktop.UDisks2.Partition").unwrap_or(&empty);
         let cleartext = ifaces.get("org.freedesktop.UDisks2.Encrypted").map(|e| o(e, "CleartextDevice")).unwrap_or_default();
+        let lvm_inside = all.get(&cleartext).and_then(|c| c.get("org.freedesktop.UDisks2.Block")).is_some_and(|c| s(c, "IdType") == crate::lvm::PV_TYPE);
         let (drive_name, removable, usb, optical, ejectable) = match drive {
             Some(d) => {
                 let name = [s(d, "Vendor"), s(d, "Model")].iter().filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join(" ");
@@ -392,6 +404,8 @@ pub fn parse_udisks(reply: &glib::Variant) -> Vec<Volume> {
             system: b(block, "HintSystem"),
             unlocked: !cleartext.is_empty() && cleartext != "/",
             crypto_backing,
+            lvm_inside,
+            lvm_backing: String::new(),
             uuid: s(block, "IdUUID"),
             fs_version: s(block, "IdVersion"),
             read_only: b(block, "ReadOnly"),
@@ -413,6 +427,34 @@ pub fn parse_udisks(reply: &glib::Variant) -> Vec<Volume> {
     out
 }
 
+/// Puts the LVM volumes failBrauwser opened from an unlocked, removable container on the
+/// container's drive (UDisks2 sees them as volumes of no drive, belonging to the system).
+pub fn link_lvm_volumes(vols: &mut [Volume], sys: &Path) {
+    let containers: Vec<(String, String)> = vols.iter().filter(|v| v.lvm_inside && v.unlocked && !v.system).map(|v| (v.block_object.clone(), v.device.clone())).collect();
+    if containers.is_empty() {
+        return;
+    }
+    let devices: Vec<String> = vols.iter().map(|v| v.device.clone()).collect();
+    let found = crate::lvm::lvm_containers(sys, &devices, &containers);
+    for (i, obj) in found.into_iter().enumerate() {
+        let Some(obj) = obj else { continue };
+        let Some(c) = vols.iter().find(|v| v.block_object == obj).cloned() else { continue };
+        let v = &mut vols[i];
+        v.lvm_backing = obj;
+        v.system = false;
+        v.drive_object = c.drive_object;
+        v.drive_name = c.drive_name;
+        v.removable = c.removable;
+        v.usb = c.usb;
+        v.ejectable = c.ejectable;
+        v.bus = c.bus;
+        v.serial = c.serial;
+        v.revision = c.revision;
+        v.rotation_rate = c.rotation_rate;
+        v.drive_size = c.drive_size;
+    }
+}
+
 /// Fixed first (root first), then removable; by device name within.
 pub fn sort_volumes(v: &mut [Volume]) {
     v.sort_by(|a, b| {
@@ -422,7 +464,7 @@ pub fn sort_volumes(v: &mut [Volume]) {
 }
 
 /// Unescapes the octal escapes of /proc/self/mountinfo ("\040" is a space).
-fn unescape_mount(s: &str) -> String {
+pub(crate) fn unescape_mount(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -614,6 +656,17 @@ mod tests {
         let unlocked = |dev: &str| vols.iter().find(|v| v.device == dev).unwrap().unlocked;
         assert!(unlocked("/dev/sda2"));
         assert!(!unlocked("/dev/sdb1"));
+        assert!(!vols.iter().any(|v| v.lvm_inside));
+    }
+
+    #[test]
+    fn lvm_inside_an_unlocked_container() {
+        // The contents are an LVM physical volume: no file system of their own (not listed).
+        let text = "({objectpath '/o/b/sda2': {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sda2'>, 'IdUsage': <'crypto'>, 'IdType': <'crypto_LUKS'>, 'HintIgnore': <false>}, 'org.freedesktop.UDisks2.Encrypted': {'CleartextDevice': <objectpath '/o/b/dm_2d3'>}}, objectpath '/o/b/dm_2d3': {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/dm-3'>, 'IdUsage': <'raid'>, 'IdType': <'LVM2_member'>, 'HintIgnore': <false>, 'CryptoBackingDevice': <objectpath '/o/b/sda2'>}}},)";
+        let v = glib::Variant::parse(Some(glib::VariantTy::new("(a{oa{sa{sv}}})").unwrap()), text).unwrap();
+        let vols = parse_udisks(&v);
+        assert_eq!(vols.len(), 1);
+        assert!(vols[0].unlocked && vols[0].lvm_inside);
     }
 
     #[test]
@@ -647,7 +700,12 @@ mod tests {
         let efi = Volume { device: "/dev/nvme0n1p1".into(), partition_type: "C12A7328-F81F-11D2-BA4B-00A0C93EC93B".into(), ..Default::default() };
         let swap = Volume { device: "/dev/nvme0n1p3".into(), partition_type: "0x82".into(), ..Default::default() };
         let windows = Volume { device: "/dev/sda1".into(), partition_type: "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7".into(), ..Default::default() };
-        let container = Volume { device: "/dev/nvme0n1p2".into(), fs_type: "crypto_LUKS".into(), unlocked: true, ..Default::default() };
+        let container = Volume { device: "/dev/nvme0n1p2".into(), fs_type: "crypto_LUKS".into(), unlocked: true, system: true, lvm_inside: true, ..Default::default() };
+        // A USB disk with LVM inside: listed while its volumes are not open, then they are.
+        let usb_lvm = Volume { device: "/dev/sde2".into(), fs_type: "crypto_LUKS".into(), unlocked: true, lvm_inside: true, block_object: "/o/sde2".into(), ..Default::default() };
+        assert_eq!(shown(std::slice::from_ref(&usb_lvm)), ["/dev/sde2"]);
+        let opened = Volume { lvm_backing: "/o/sde2".into(), ..mounted("/dev/dm-7", &["/run/media/me/root"]) };
+        assert_eq!(shown(&[usb_lvm, opened]), ["/dev/dm-7"]);
         let locked = Volume { device: "/dev/sdc1".into(), fs_type: "crypto_LUKS".into(), ..Default::default() };
         let phone = Volume { device: "mtp://Pixel/".into(), protocol: "mtp".into(), label: "Internal shared storage".into(), mount_points: vec!["/run/user/1000/gvfs/mtp:host=Pixel/Internal shared storage".into()], ..Default::default() };
         let all = vec![

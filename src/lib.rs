@@ -12,6 +12,7 @@ pub mod desktoplink;
 pub mod devices;
 pub mod drives;
 pub mod location;
+pub mod lvm;
 pub mod network;
 pub mod ops;
 pub mod remote;
