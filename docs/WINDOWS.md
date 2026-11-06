@@ -21,6 +21,12 @@ libraries for it; `winpack\env.ps1` points a shell at that sysroot. The toolchai
 Visual Studio's C++ tools (link, dumpbin) and, for archives, the .NET SDK (NativeAOT — no
 clang required).
 
+A `failbrauwser.exe` straight out of `target` only runs from a shell that sourced
+`winpack\env.ps1` — its GTK DLLs live in `winpack\sysroot\bin`, and double-clicking it
+from Explorer (a clean PATH) fails with "libcairo-2.dll not found". The package, the
+installed tree and the single-file exe below all carry the DLLs where the loader finds
+them.
+
 The packaged layout is `bin` (program, `fb-archive` helper, all DLLs), `lib` (gdk-pixbuf
 loaders) and `share` (icons, fonts, schemas, licenses) side by side — GTK finds the loaders
 relative to the binaries, which is why the folders keep that shape. `install.ps1` rewrites
@@ -55,7 +61,7 @@ and the new program started. The *build from source* channel is Linux-only there
 | System calls under copy/delete/trash | `osprim` errno predicates | same file, Win32 codes through `raw_os_error` |
 | Drives, mount state | UDisks2 / GVfs | `win::storage` (drive types, geometry, SSD/HDD), WNet for shares |
 | Trash | freedesktop `$Trashdir` | Recycle Bin through `IFileOperation` (`win::recyclebin`) |
-| Network folders | GVfs `smb://` | real UNC paths via WNet — the whole engine works on them |
+| Network folders | GVfs `smb://`; a typed `\\host\share` becomes its `smb://` address | real UNC paths via WNet — a typed `\\host\share` is opened as what it already is |
 | Servers (SFTP/FTP) | system tools | in-app VFS (`src/remote_fs/`, russh/suppaftp) — browsable like archives, not mapped drives |
 | Phones and cameras | GVfs MTP/gPhoto2 | WPD COM (`win::wpd`) |
 | Desktop links | `.desktop` files | `.lnk` (`win::shelllink`) |

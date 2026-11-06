@@ -157,8 +157,19 @@ fn on_typed(text: &str) {
     if t.is_empty() || t.starts_with('/') || t.starts_with('~') {
         return;
     }
-    scan();
-    if let Some(host) = remote::smb_host(t) {
+    // A test does not go looking through the real network.
+    if !super::selftest::active() {
+        scan();
+    }
+    if cfg!(unix) {
+        // Suggestions are smb:// here; a typed \\host\share matches them spelled as such.
+        // On Windows the share list would come over GVfs, which does not serve this - the
+        // typed name is a native path there and the network page is its own story.
+        let unc = remote::unc_as_typed(t);
+        if let Some(host) = remote::smb_host(unc.as_deref().unwrap_or(t)) {
+            list_shares(host);
+        }
+    } else if let Some(host) = remote::smb_host(t) {
         list_shares(host);
     }
 }

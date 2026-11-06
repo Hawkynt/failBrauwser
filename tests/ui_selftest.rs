@@ -652,6 +652,11 @@ fn bin_sweep() {
 }
 
 #[test]
+fn windows_share_names_in_the_location_bar() {
+    run("unc_address.fbt", |_| {});
+}
+
+#[test]
 fn trash() {
     #[cfg(windows)]
     bin_sweep();
