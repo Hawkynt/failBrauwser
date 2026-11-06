@@ -1,9 +1,8 @@
 //! A directory entry with everything the views need, gathered off the UI thread.
 
-use std::ffi::OsString;
+use crate::osprim;
+use std::ffi::{OsStr, OsString};
 use std::fs::Metadata;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +33,14 @@ pub struct FileEntry {
     pub dev: u64,
     pub ino: u64,
     pub nlink: u64,
+    /// The Windows Hidden attribute; always false on Unix (there is no such notion).
+    pub attr_hidden: bool,
+    /// Owner and group names from the security descriptor (Windows only; Unix answers
+    /// through `uid`/`gid`, which carry no names in the entry).
+    #[cfg(windows)]
+    pub owner: Option<String>,
+    #[cfg(windows)]
+    pub group: Option<String>,
     /// MIME type, guessed from the name only (no content sniffing, no extra I/O).
     pub content_type: String,
 }
@@ -67,6 +74,14 @@ impl FileEntry {
             size = 0;
         }
         let content_type = guess_content_type(&name, kind, target_is_dir);
+        let ident = osprim::identity(&path, lmeta);
+        // The two names every Windows shell shows next to a file; a descriptor that will
+        // not answer (a drive refusing security queries) leaves them absent, not wrong.
+        #[cfg(windows)]
+        let (owner, group) = match crate::win::sidname::owner_group(&path) {
+            Ok((o, g)) => (Some(o), Some(g)),
+            Err(_) => (None, None),
+        };
         FileEntry {
             name,
             path,
@@ -74,13 +89,18 @@ impl FileEntry {
             target_is_dir,
             broken,
             size,
-            mtime: lmeta.mtime(),
-            mode: lmeta.mode(),
-            uid: lmeta.uid(),
-            gid: lmeta.gid(),
-            dev: lmeta.dev(),
-            ino: lmeta.ino(),
-            nlink: lmeta.nlink(),
+            mtime: osprim::times(lmeta).1.0,
+            mode: osprim::mode_of(lmeta),
+            uid: owner_id(lmeta),
+            gid: group_id(lmeta),
+            dev: ident.dev,
+            ino: ident.id as u64,
+            nlink: ident.nlink,
+            attr_hidden: hidden_attr(lmeta),
+            #[cfg(windows)]
+            owner,
+            #[cfg(windows)]
+            group,
             content_type,
         }
     }
@@ -97,13 +117,63 @@ impl FileEntry {
     }
 
     pub fn is_hidden(&self) -> bool {
-        let b = self.name.as_bytes();
-        b.first() == Some(&b'.') || b.last() == Some(&b'~')
+        unix_style_hidden(&self.name) || self.attr_hidden
     }
 
     pub fn display_name(&self) -> String {
         self.name.to_string_lossy().into_owned()
     }
+}
+
+// ---- per-platform entry stamps (Unix values verbatim; Windows distilled from what it has) ----
+
+#[cfg(unix)]
+fn owner_id(m: &Metadata) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    m.uid()
+}
+
+#[cfg(not(unix))]
+fn owner_id(_: &Metadata) -> u32 {
+    0
+}
+
+#[cfg(unix)]
+fn group_id(m: &Metadata) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    m.gid()
+}
+
+#[cfg(not(unix))]
+fn group_id(_: &Metadata) -> u32 {
+    0
+}
+
+/// FILE_ATTRIBUTE_HIDDEN (0x2) on Windows; nothing to report elsewhere.
+#[cfg(windows)]
+fn hidden_attr(m: &Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    m.file_attributes() & 0x2 != 0
+}
+
+#[cfg(not(windows))]
+fn hidden_attr(_: &Metadata) -> bool {
+    false
+}
+
+/// The `.prefix` / `tilde.suffix` rule, on bytes on Unix and on the text elsewhere
+/// (the byte view is what the Unix filesystem really stores).
+#[cfg(unix)]
+fn unix_style_hidden(name: &OsStr) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let b = name.as_bytes();
+    b.first() == Some(&b'.') || b.last() == Some(&b'~')
+}
+
+#[cfg(not(unix))]
+fn unix_style_hidden(name: &OsStr) -> bool {
+    let n = name.to_string_lossy();
+    n.starts_with('.') || n.ends_with('~')
 }
 
 /// MIME type from the file name, the way GIO does it but without touching the file.
@@ -115,15 +185,46 @@ pub fn guess_content_type(name: &std::ffi::OsStr, kind: Kind, target_is_dir: boo
         return "inode/special".into();
     }
     let (ct, _uncertain) = gtk::gio::content_type_guess(Some(Path::new(name)), None);
-    ct.to_string()
+    let ct = ct.to_string();
+    #[cfg(windows)]
+    return win_content_type(name, ct);
+    #[cfg(not(windows))]
+    ct
+}
+
+/// On win32 GLib asks the registry before its glob table: an extension whose ProgID is
+/// unregistered (or literally the extension, as on many machines) comes back as ".png" —
+/// no freedesktop type. Those bare answers fall to a small extension table so categories,
+/// type descriptions and thumbnails behave like on Linux; anything the registry resolved
+/// properly stays as it is.
+#[cfg(windows)]
+fn win_content_type(name: &std::ffi::OsStr, guessed: String) -> String {
+    if guessed.contains('/') && !guessed.starts_with('.') {
+        return guessed;
+    }
+    const BY_EXT: &[(&str, &str)] = &[
+        ("png", "image/png"), ("jpg", "image/jpeg"), ("jpeg", "image/jpeg"), ("jfif", "image/jpeg"), ("gif", "image/gif"), ("bmp", "image/bmp"),
+        ("webp", "image/webp"), ("svg", "image/svg+xml"), ("tif", "image/tiff"), ("tiff", "image/tiff"), ("ico", "image/vnd.microsoft.icon"), ("heic", "image/heic"),
+        ("mp3", "audio/mpeg"), ("wav", "audio/x-wav"), ("flac", "audio/flac"), ("ogg", "audio/ogg"), ("m4a", "audio/mp4"), ("aac", "audio/aac"),
+        ("mid", "audio/midi"), ("midi", "audio/midi"), ("opus", "audio/opus"),
+        ("mp4", "video/mp4"), ("m4v", "video/mp4"), ("mkv", "video/x-matroska"), ("avi", "video/x-msvideo"), ("mov", "video/quicktime"),
+        ("wmv", "video/x-ms-wmv"), ("webm", "video/webm"), ("mpeg", "video/mpeg"), ("mpg", "video/mpeg"),
+        ("txt", "text/plain"), ("md", "text/markdown"), ("csv", "text/csv"), ("log", "text/plain"), ("ini", "text/plain"), ("conf", "text/plain"),
+        ("cfg", "text/plain"), ("rtf", "text/rtf"), ("html", "text/html"), ("htm", "text/html"), ("xml", "text/xml"), ("json", "application/json"),
+        ("zip", "application/zip"), ("gz", "application/gzip"), ("tar", "application/x-tar"), ("pdf", "application/pdf"),
+    ];
+    let ext = name.to_string_lossy().rsplit_once('.').map(|pair| pair.1.to_ascii_lowercase()).unwrap_or_default();
+    BY_EXT.iter().find(|(e, _)| *e == ext).map(|(_, t)| (*t).to_string()).unwrap_or(guessed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::fs;
 
     #[test]
+    #[cfg(unix)] // the fixture builds Unix symlinks; the classifications they exercise are Unix notions
     fn classifies_files_dirs_and_links() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
@@ -170,10 +271,39 @@ mod tests {
             dev: 0,
             ino: 0,
             nlink: 1,
+            attr_hidden: false,
+            #[cfg(windows)]
+            owner: None,
+            #[cfg(windows)]
+            group: None,
             content_type: String::new(),
         };
         assert!(e(".bashrc").is_hidden());
         assert!(e("file~").is_hidden());
         assert!(!e("file").is_hidden());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_entry_off_disk_carries_the_names_explorer_shows() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("named-entry.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let e = FileEntry::stat(&file).unwrap();
+        assert!(e.owner.as_deref().is_some_and(|o| !o.is_empty()), "the entry learned an owner name");
+        assert!(e.group.as_deref().is_some_and(|g| !g.is_empty()), "the entry learned a group name");
+    }
+}
+
+#[cfg(windows)]
+#[cfg(test)]
+mod win_tests {
+    use super::*;
+    use std::ffi::OsStr;
+    #[test]
+    fn content_types_stay_the_freedesktop_ones_here() {
+        for (n, want) in [("a.png", "image/png"), ("a.txt", "text/plain"), ("a.mp3", "audio/mpeg"), ("a.zip", "application/zip")] {
+            assert_eq!(guess_content_type(OsStr::new(n), Kind::File, false), want, "{n}");
+        }
     }
 }

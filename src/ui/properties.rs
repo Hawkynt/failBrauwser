@@ -58,6 +58,7 @@ pub fn show(w: &Window) {
             Item::Archive(_) => util::icon_for_type(&one.content_type()),
             Item::Trash(_, e) | Item::Found(e, _) => util::icon_for_entry(e),
             Item::FoundInArchive(..) => util::icon_for_type(&one.content_type()),
+            Item::Remote(_) | Item::FoundRemote(..) => util::icon_for_type(&one.content_type()),
         }),
         many => (format!("{} items", many.len()), gio::ThemedIcon::new("edit-select-all").upcast()),
     };
@@ -106,11 +107,19 @@ pub fn show(w: &Window) {
             }
             add("Modified:", &human_time(e.mtime, now));
             if let Some(m) = Some(&e.path).filter(|p| local(p)).and_then(|p| std::fs::metadata(p).ok()) {
-                use std::os::unix::fs::MetadataExt;
-                add("Accessed:", &human_time(m.atime(), now));
+                add("Accessed:", &human_time(failbrauwser::osprim::times(&m).0.0, now));
             }
             add("Permissions:", &format!("{} ({:o})", permissions(e.mode), e.mode & 0o7777));
-            add("Owner:", &format!("{} / {}", util::user_name(e.uid), util::group_name(e.gid)));
+            #[cfg(windows)]
+            // The octal permission is distilled from the read-only attribute; the flags
+            // themselves are the honest Windows statement beside it.
+            if let Some(m) = std::fs::symlink_metadata(&e.path).ok().filter(|_| local(&e.path)) {
+                let names = failbrauwser::osprim::attribute_names(&m);
+                if !names.is_empty() {
+                    add("Attributes:", &names.join(", "));
+                }
+            }
+            add("Owner:", &format!("{} / {}", util::entry_owner(&e), util::entry_group(&e)));
             if !e.is_dir_like() {
                 add_widget("Opens with:", default_app_chooser(&d, &e.content_type).upcast_ref());
                 if e.kind != failbrauwser::fs::Kind::Symlink || !e.broken {

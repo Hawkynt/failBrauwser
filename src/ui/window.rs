@@ -658,7 +658,9 @@ impl Window {
         self.location_entry.connect_activate(move |e| {
             let Some(w) = weak.upgrade() else { return };
             let text = e.text().to_string();
-            let text = failbrauwser::remote::unc_to_uri(&text).unwrap_or(text);
+            // Linux mounts a typed Windows share name through GVfs as its smb:// address;
+            // on Windows that name is a native path already and needs no translation.
+            let text = if cfg!(unix) { failbrauwser::remote::unc_to_uri(&text).unwrap_or(text) } else { text };
             if util::is_remote_uri(&text) {
                 super::shares::open_remote(&w, &text, false);
                 return;
@@ -772,15 +774,6 @@ fn status_text(pane: &Pane) -> String {
 }
 
 pub fn free_space(dir: &std::path::Path) -> Option<u64> {
-    use std::os::unix::ffi::OsStrExt;
-    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-        return None;
-    }
     // No size at all: a server that does not tell (FTP, some WebDAV), not a full drive.
-    if st.f_blocks == 0 {
-        return None;
-    }
-    Some(st.f_bavail as u64 * st.f_frsize as u64)
+    failbrauwser::osprim::free_space(dir)
 }

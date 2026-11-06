@@ -38,12 +38,20 @@ pub fn follow() {
     let Some(settings) = gtk::Settings::default() else { return };
     let startup_theme = settings.gtk_theme_name().map(|s| s.to_string()).unwrap_or_else(|| "Adwaita".into());
     let gsettings = interface_settings();
+    // Windows spells its preference in the registry (HKCU\...\Personalize); no GNOME
+    // settings, no portal — one quiet poll follows the Settings app switching modes.
+    #[cfg(windows)]
+    let scheme = failbrauwser::win::reg::apps_use_light_theme().map_or(Scheme::Default, |light| if light { Scheme::Light } else { Scheme::Dark });
+    #[cfg(not(windows))]
     let scheme = gsettings.as_ref().map_or(Scheme::Default, |g| Scheme::from_gsettings(&g.string("color-scheme")));
     if let Some(g) = &gsettings {
         g.connect_changed(Some("color-scheme"), |g, _| set_scheme(Scheme::from_gsettings(&g.string("color-scheme"))));
         g.connect_changed(Some("gtk-theme"), |_, _| apply());
     }
     // The portal tells sandboxed and non-GNOME desktops' changes too.
+    #[cfg(windows)]
+    let portal: Option<gio::SignalSubscription> = None;
+    #[cfg(not(windows))]
     let portal = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE).ok().map(|conn| {
         conn.subscribe_to_signal(
             Some("org.freedesktop.portal.Desktop"),
@@ -65,7 +73,22 @@ pub fn follow() {
     });
     STATE.with(|s| *s.borrow_mut() = Some(State { scheme, changes: 0, startup_theme, gsettings, _portal: portal }));
     apply();
+    // Windows has no signal for the theme keys: read the one value on a slow timer.
+    #[cfg(windows)]
+    {
+        let mut last = scheme;
+        glib::timeout_add_local(std::time::Duration::from_millis(2_000), move || {
+            if let Some(now) = failbrauwser::win::reg::apps_use_light_theme().map(|light| if light { Scheme::Light } else { Scheme::Dark }) {
+                if now != last {
+                    last = now;
+                    set_scheme(now);
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
     // The portal knows the scheme where GNOME's settings do not.
+    #[cfg(not(windows))]
     glib::spawn_future_local(async {
         let Ok(conn) = gio::bus_get_future(gio::BusType::Session).await else { return };
         let args = ("org.freedesktop.appearance", "color-scheme").to_variant();

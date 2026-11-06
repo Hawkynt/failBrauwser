@@ -6,8 +6,8 @@
 //! are not entered, like `du -x`. A folder met a second time (a bind mount of a folder
 //! inside itself has the same device) is not entered again, so no walk goes round in circles.
 
+use crate::osprim;
 use std::collections::HashSet;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -37,9 +37,10 @@ pub fn dir_size(root: &Path, cancel: &AtomicBool, mut progress: impl FnMut(&DirS
         total.files = 1;
         return Some(total);
     }
-    let dev = meta.dev();
-    let mut seen_links: HashSet<(u64, u64)> = HashSet::new();
-    let mut seen_dirs: HashSet<(u64, u64)> = HashSet::from([(meta.dev(), meta.ino())]);
+    let ident = osprim::identity(root, &meta);
+    let dev = ident.dev;
+    let mut seen_links: HashSet<(u64, u128)> = HashSet::new();
+    let mut seen_dirs: HashSet<(u64, u128)> = HashSet::from([(dev, ident.id)]);
     let mut stack = vec![root.to_path_buf()];
     let mut last_report = Instant::now();
     while let Some(dir) = stack.pop() {
@@ -62,15 +63,16 @@ pub fn dir_size(root: &Path, cancel: &AtomicBool, mut progress: impl FnMut(&DirS
                 continue;
             };
             let ft = m.file_type();
+            let mi = osprim::identity(&entry.path(), &m);
             if ft.is_dir() {
-                if m.dev() != dev {
+                if mi.dev != dev {
                     total.skipped_mounts = true;
-                } else if seen_dirs.insert((m.dev(), m.ino())) {
+                } else if seen_dirs.insert((mi.dev, mi.id)) {
                     stack.push(entry.path());
                 }
                 continue;
             }
-            if m.nlink() > 1 && !ft.is_symlink() && !seen_links.insert((m.dev(), m.ino())) {
+            if mi.nlink > 1 && !ft.is_symlink() && !seen_links.insert((mi.dev, mi.id)) {
                 continue;
             }
             total.files += 1;
@@ -107,6 +109,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // symlinks and their no-follow rule are the Unix notion of a link
     fn symlinks_are_not_followed_and_loops_end() {
         let d = tempfile::tempdir().unwrap();
         let big = tempfile::tempdir().unwrap();
@@ -121,6 +124,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // needs Linux user namespaces and mount(2)
     fn a_folder_bind_mounted_inside_itself_counts_once() {
         // Mounting needs a private user and mount namespace: the test runs itself again
         // inside one (`unshare -rm`) and does the work there.
@@ -176,6 +180,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // a chmod-000 folder as the unreadable stand-in
     fn unreadable_folder_marks_incomplete() {
         if unsafe { libc::geteuid() } == 0 {
             return;

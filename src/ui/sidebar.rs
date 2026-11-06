@@ -1248,7 +1248,9 @@ impl Sidebar {
         let mode = w.app.settings.borrow().tree_root;
         match mode {
             TreeRoot::Home => Some(glib::home_dir()),
-            TreeRoot::Filesystem => Some(PathBuf::from("/")),
+            // Unix has the one root "/"; Windows has no "/", so the tree of a folder roots
+            // at the root of its volume (the drive page already is the “everything” view).
+            TreeRoot::Filesystem => Some(current.map(|c| c.ancestors().last().unwrap_or(c)).unwrap_or_else(|| Path::new(if cfg!(windows) { "\\" } else { "/" })).to_path_buf()),
             TreeRoot::Current => current.map(Path::to_path_buf),
         }
     }

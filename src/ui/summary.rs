@@ -149,6 +149,8 @@ impl Summary {
                 let dirs: Vec<PathBuf> = failbrauwser::trash::trash_dirs().iter().map(|d| d.files()).collect();
                 self.measure(token, here, dirs);
             }
+            // A server's totals would mean a recursive listing over the wire — not asked for.
+            Location::Remote(_) => self.label.set_text(&here),
         }
     }
 

@@ -2,7 +2,8 @@
 open $T/d
 action win.drives
 expect-location drives:///
-wait-drive File System
+!unix wait-drive File System
+!win wait-drive $C
 action win.back
 expect-location $T/d
 expect-rows 1
@@ -15,8 +16,10 @@ action win.back
 expect-sidebar-drives unselected
 # Drive properties open without trouble.
 action win.drives
-wait-drive File System
-drive-properties File System
+!unix wait-drive File System
+!win wait-drive $C
+!unix drive-properties File System
+!win drive-properties $C
 sleep 300
 action win.properties
 sleep 300
@@ -25,9 +28,12 @@ open $T/d
 expect-sidebar-drives unselected
 # On the drives page a click below the drives deselects and ends path editing.
 action win.drives
-wait-drive File System
-drives-select File System
-expect-drive-selected File System
+!unix wait-drive File System
+!win wait-drive $C
+!unix drives-select File System
+!win drives-select $C
+!unix expect-drive-selected File System
+!win expect-drive-selected $C
 drives-click-empty
 expect-drive-selected none
 path-edit
@@ -37,7 +43,8 @@ expect-path-mode buttons
 # Switching between list and icons keeps the drives shown; folders then use the new view.
 action win.view-mode icons
 expect-page drives
-wait-drive File System
+!unix wait-drive File System
+!win wait-drive $C
 action win.back
 expect-page icons
 action win.view-mode list

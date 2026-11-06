@@ -129,9 +129,7 @@ impl Helper {
     pub fn abort(&self) {
         let pid = self.pid.load(Ordering::SeqCst);
         if pid != 0 {
-            unsafe {
-                libc::kill(pid as libc::pid_t, libc::SIGKILL);
-            }
+            kill_pid(pid);
         }
     }
 
@@ -266,6 +264,35 @@ impl Helper {
     }
 }
 
+/// The helper's executable name(s) to look for.
+#[cfg(windows)]
+fn helper_names() -> [&'static str; 2] {
+    ["fb-archive.exe", "fb-archive"]
+}
+
+#[cfg(not(windows))]
+fn helper_names() -> [&'static str; 1] {
+    ["fb-archive"]
+}
+
+/// Ends the helper process by id (see `Helper::abort`).
+#[cfg(unix)]
+fn kill_pid(pid: u32) {
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    }
+}
+
+#[cfg(windows)]
+fn kill_pid(pid: u32) {
+    use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    let Ok(h) = (unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) }) else { return };
+    unsafe {
+        let _ = TerminateProcess(h, 1);
+        let _ = windows::Win32::Foundation::CloseHandle(h);
+    }
+}
+
 /// Finds the helper binary: `$FB_ARCHIVE_HELPER`, next to our executable,
 /// `../lib/failbrauwser/`, or the development build output.
 pub fn locate_helper() -> PathBuf {
@@ -275,11 +302,15 @@ pub fn locate_helper() -> PathBuf {
     let mut candidates = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("fb-archive"));
-            candidates.push(dir.join("../lib/failbrauwser/fb-archive"));
+            for name in helper_names() {
+                candidates.push(dir.join(name));
+                candidates.push(dir.join("../lib/failbrauwser").join(name));
+            }
         }
     }
-    candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("target/helper/fb-archive"));
+    for name in helper_names() {
+        candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("target/helper").join(name));
+    }
     candidates
         .iter()
         .find(|p| p.is_file())

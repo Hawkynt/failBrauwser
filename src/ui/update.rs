@@ -47,18 +47,18 @@ fn own_prefix() -> Result<PathBuf, String> {
         Some(p) => PathBuf::from(p),
         None => {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            update::prefix_of(&exe).ok_or_else(|| format!("This copy runs from {}, not from an installation. Update it with git pull and ./install.sh.", exe.display()))?
+            update::prefix_of(&exe).ok_or_else(|| format!("This copy runs from {}, not from an installation. Update it with git pull and {}", exe.display(), if cfg!(windows) { r"winpack\build.ps1" } else { "./install.sh" }))?
         }
     };
-    let writable = {
-        use std::os::unix::ffi::OsStrExt;
-        let c = std::ffi::CString::new(prefix.join("bin").as_os_str().as_bytes()).map_err(|e| e.to_string())?;
-        unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
-    };
+    // Both installations keep the program in a bin folder — Unix under ~/.local, Windows
+    // as <install>\bin beside its lib and share — so its writability says for both.
+    let probe = prefix.join("bin");
+    let writable = failbrauwser::osprim::can_write(&probe);
     if !writable {
         return Err(format!(
-            "failBrauwser is installed for everyone in {}. Update it from a terminal: download the release or the source and run ./install.sh --system.",
-            prefix.display()
+            "failBrauwser is installed for everyone in {}. {}",
+            prefix.display(),
+            if cfg!(windows) { "Update it from a terminal: download the release zip and run install.ps1." } else { "Update it from a terminal: download the release or the source and run ./install.sh --system." }
         ));
     }
     Ok(prefix)
@@ -85,6 +85,11 @@ pub fn show(w: &Window) {
     let source = gtk::RadioButton::with_mnemonic_from_widget(&release, "Build from the current _source (a few minutes; needs Rust, GTK's development files and a C compiler; the source is deleted afterwards)");
     if let Some(l) = source.child().and_then(|c| c.downcast::<gtk::Label>().ok()) {
         l.set_line_wrap(true);
+    }
+    #[cfg(windows)]
+    {
+        source.set_sensitive(false);
+        source.set_tooltip_text(Some("On Windows updates come as the ready-built release."));
     }
     let target = gtk::Label::new(None);
     target.set_xalign(0.0);
@@ -185,7 +190,7 @@ impl Updater {
                     let newer = update::is_newer(&r.tag, version());
                     let mut text = if newer { format!("{} ({when}) is newer.", r.name) } else { format!("You have the newest release ({}).", r.name) };
                     if r.package.is_none() {
-                        text.push_str(" It has no ready-built package for this computer: build from the source.");
+                        text.push_str(if cfg!(windows) { " It has no ready-built package for this computer, and there is no other way to update from here." } else { " It has no ready-built package for this computer: build from the source." });
                     }
                     me.status.set_text(&text);
                     if r.package.is_none() || !newer {
@@ -203,6 +208,8 @@ impl Updater {
     fn update_buttons(&self) {
         let package = self.newest.borrow().as_ref().and_then(|r| r.package.clone());
         self.release.set_sensitive(package.is_some());
+        // On Windows the source choice is switched off; without a package there is nothing.
+        #[cfg(not(windows))]
         if package.is_none() && self.release.is_active() {
             self.source.set_active(true);
         }
@@ -220,11 +227,23 @@ impl Updater {
         let dir = cache.join("failbrauwser");
         let res = (|| -> std::io::Result<std::process::Child> {
             std::fs::create_dir_all(&dir)?;
-            let path = dir.join("update.sh");
-            std::fs::write(&path, script)?;
-            let log = std::fs::File::create(dir.join("update.log"))?;
-            // A session of its own: it lives on when the new version replaces this one.
-            std::process::Command::new("setsid").arg("sh").arg(&path).stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log).spawn()
+            // Unix needs a detached session: the script lives on when the new version
+            // replaces this one. Windows swaps files around a running image instead, and
+            // a hidden PowerShell does that in a window that belongs to nobody — handing it
+            // the text directly, because machine policy may stop it from loading a script
+            // file from the cache.
+            #[cfg(not(windows))]
+            {
+                let path = dir.join("update.sh");
+                std::fs::write(&path, script)?;
+                let log = std::fs::File::create(dir.join("update.log"))?;
+                std::process::Command::new("setsid").arg("sh").arg(&path).stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log).spawn()
+            }
+            #[cfg(windows)]
+            {
+                let log = std::fs::File::create(dir.join("update.log"))?;
+                std::process::Command::new("powershell").args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", &script]).stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log).spawn()
+            }
         })();
         let child = match res {
             Ok(c) => c,

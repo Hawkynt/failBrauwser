@@ -11,15 +11,18 @@
 
 use super::job::JobCtx;
 use std::io;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, RawFd};
 
 /// Writeback window for throttled copies.
 const WINDOW: u64 = 8 << 20;
 /// Chunk size for unthrottled `copy_file_range` (keeps cancel and progress responsive).
+#[cfg(unix)]
 const CHUNK: u64 = 32 << 20;
 /// Size of the fallback read/write buffer.
 pub const BUF_SIZE: usize = 1 << 20;
 /// Files at least this large get `fallocate` (less fragmentation, early ENOSPC).
+#[cfg(unix)]
 const PREALLOC_MIN: u64 = 1 << 20;
 
 pub fn cancelled() -> io::Error {
@@ -30,11 +33,38 @@ pub fn is_cancelled_error(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::Interrupted && e.to_string() == "cancelled"
 }
 
+/// Retries after a transient sharing block (an AV scan, an Explorer preview, a laggy
+/// close): four attempts at 100/200/400/800 ms before the caller involves the user.
+/// The attempt counter is the caller's; `true` means "try again now".
+///
+/// A Windows ladder only — Unix engines asked the user straight away and still do.
+pub fn wait_sharing_retry(e: &io::Error, attempt: &mut u32) -> bool {
+    #[cfg(windows)]
+    {
+        if !crate::osprim::is_sharing_violation(e) || *attempt >= SHARING_TRIES {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100 << *attempt));
+        *attempt += 1;
+        true
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (e, attempt);
+        false
+    }
+}
+
+#[cfg(windows)]
+const SHARING_TRIES: u32 = 4;
+
+#[cfg(unix)]
 fn cvt(r: libc::c_int) -> io::Result<libc::c_int> {
     if r < 0 { Err(io::Error::last_os_error()) } else { Ok(r) }
 }
 
 /// Tracks what has been written and paces writeback for throttled copies.
+#[cfg(unix)]
 struct Pacer {
     fd: RawFd,
     src: RawFd,
@@ -45,6 +75,7 @@ struct Pacer {
     in_flight: Option<(u64, u64)>,
 }
 
+#[cfg(unix)]
 impl Pacer {
     fn advance(&mut self, pos: u64) {
         if !self.enabled || pos - self.window_start < WINDOW {
@@ -101,6 +132,27 @@ pub enum Method {
 /// Copies `size` bytes from `src` to the freshly created, empty `dst`.
 /// `buf` is the caller's reusable buffer for the read/write fallback.
 pub fn copy_contents(
+    ctx: &JobCtx,
+    src: &std::fs::File,
+    dst: &std::fs::File,
+    size: u64,
+    throttle: bool,
+    buf: &mut Vec<u8>,
+    counted: &mut u64,
+) -> io::Result<Method> {
+    #[cfg(unix)]
+    return unix_copy_contents(ctx, src, dst, size, throttle, buf, counted);
+    #[cfg(windows)]
+    return windows_copy_contents(ctx, src, dst, size, throttle, buf, counted);
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (ctx, src, dst, size, throttle, buf, counted);
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+}
+
+#[cfg(unix)]
+fn unix_copy_contents(
     ctx: &JobCtx,
     src: &std::fs::File,
     dst: &std::fs::File,
@@ -194,10 +246,251 @@ pub fn copy_contents(
     Ok(method)
 }
 
+/// The Windows engine: reflink by `FSCTL_DUPLICATE_EXTENTS_TO_FILE` (instant on ReFS,
+/// refused elsewhere and then never mentioned again), and a read/write loop with the
+/// same cancel/pause/progress hooks. Throttled (slow, removable) targets get a
+/// `FlushFileBuffers` every window so the progress bar tracks the device and little
+/// stays dirty; fixed targets run from the cache — no `sync_file_range` twin exists,
+/// and stating that honestly beats faking it.
+#[cfg(windows)]
+fn windows_copy_contents(
+    ctx: &JobCtx,
+    src: &std::fs::File,
+    dst: &std::fs::File,
+    size: u64,
+    throttle: bool,
+    buf: &mut Vec<u8>,
+    counted: &mut u64,
+) -> io::Result<Method> {
+    use std::io::{Read, Write};
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::FlushFileBuffers;
+    if size == 0 {
+        return Ok(Method::Empty);
+    }
+    if size >= 4096 && refs_extents(src, dst, size) {
+        ctx.add_bytes(size);
+        *counted += size;
+        return Ok(Method::Reflink);
+    }
+    if buf.len() < BUF_SIZE {
+        buf.resize(BUF_SIZE, 0);
+    }
+    // The Read/Write traits want &mut; the handles behind these clones are the same ones.
+    let mut r = src.try_clone()?;
+    let mut w = dst.try_clone()?;
+    let dh = HANDLE(dst.as_raw_handle());
+    let flush = || {
+        let _ = unsafe { FlushFileBuffers(dh) };
+    };
+    let mut pos: u64 = 0;
+    let mut window_start = 0u64;
+    loop {
+        ctx.wait_while_paused();
+        if ctx.is_cancelled() {
+            return Err(cancelled());
+        }
+        let want = buf.len().min((size - pos) as usize);
+        let n = match r.read(&mut buf[..want]) {
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if n == 0 {
+            break; // End of file (it may have shrunk while we copied).
+        }
+        let mut off = 0;
+        while off < n {
+            match w.write(&buf[off..n]) {
+                Ok(k) if k > 0 => off += k,
+                Ok(_) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        pos += n as u64;
+        ctx.add_bytes(n as u64);
+        *counted += n as u64;
+        if throttle && pos - window_start >= WINDOW {
+            flush();
+            window_start = pos;
+        }
+    }
+    // The source may have been shorter than promised: end where we actually got to.
+    if pos != size {
+        dst.set_len(pos)?;
+    }
+    if throttle {
+        flush();
+    }
+    Ok(Method::ReadWrite)
+}
+
+/// Asks ReFS (and only ReFS — both volumes must be on it) to share the source's
+/// clusters with the freshly created empty destination. Every refusal (wrong
+/// filesystem, compressed or hard-linked source, …) answers false and the
+/// read/write loop takes over; nothing is retried or logged.
+#[cfg(windows)]
+fn refs_extents(src: &std::fs::File, dst: &std::fs::File, size: u64) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Ioctl::{DUPLICATE_EXTENTS_DATA, FSCTL_DUPLICATE_EXTENTS_TO_FILE};
+    if !fs_is_refs(src) || !fs_is_refs(dst) {
+        return false;
+    }
+    let data = DUPLICATE_EXTENTS_DATA { FileHandle: HANDLE(src.as_raw_handle()), SourceFileOffset: 0, TargetFileOffset: 0, ByteCount: size as i64 };
+    unsafe {
+        windows::Win32::System::IO::DeviceIoControl(
+            HANDLE(dst.as_raw_handle()),
+            FSCTL_DUPLICATE_EXTENTS_TO_FILE,
+            Some(&data as *const DUPLICATE_EXTENTS_DATA as *const core::ffi::c_void),
+            std::mem::size_of::<DUPLICATE_EXTENTS_DATA>() as u32,
+            None,
+            0,
+            None,
+            None,
+        )
+    }
+    .is_ok()
+}
+
+#[cfg(windows)]
+fn fs_is_refs(f: &std::fs::File) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Storage::FileSystem::GetVolumeInformationByHandleW;
+    let mut name = [0u16; 26];
+    let h = windows::Win32::Foundation::HANDLE(f.as_raw_handle());
+    unsafe { GetVolumeInformationByHandleW(h, None, None, None, None, Some(&mut name)) }
+        .map(|()| String::from_utf16_lossy(&name).trim_end_matches('\0').eq_ignore_ascii_case("refs"))
+        .unwrap_or(false)
+}
+
+/// Reads a file back through `FILE_FLAG_NO_BUFFERING`, i.e. from the device: the
+/// verification pass then cannot be answered by the very cache the copy just filled.
+/// Only sector-aligned amounts are read; the sub-sector tail is read normally.
+#[cfg(windows)]
+pub struct UncachedReader {
+    h: windows::Win32::Foundation::HANDLE,
+    buf: Vec<u8>,
+    off: usize,
+}
+
+#[cfg(windows)]
+impl UncachedReader {
+    pub const CAP: usize = 1 << 20;
+
+    pub fn open(path: &std::path::Path) -> io::Result<Self> {
+        use windows::Win32::Storage::FileSystem::{
+            CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_NO_BUFFERING, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        };
+        let w = crate::win::longpath::wide(path);
+        let h = unsafe {
+            CreateFileW(
+                windows::core::PCWSTR(w.as_ptr()),
+                FILE_GENERIC_READ.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAGS_AND_ATTRIBUTES(FILE_FLAG_NO_BUFFERING.0),
+                None,
+            )
+        }
+        .map_err(crate::win::err::to_io)?;
+        // malloc gives 8-byte pointers; NO_BUFFERING wants the read buffer sector-aligned.
+        let buf = vec![0u8; Self::CAP + 4096];
+        let off = (buf.as_ptr() as usize).next_multiple_of(4096) - buf.as_ptr() as usize;
+        Ok(Self { h, buf, off })
+    }
+
+    /// Reads `out.len()` bytes (a sector multiple, within one sector of the cap) into `out`.
+    pub fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        use windows::Win32::Storage::FileSystem::ReadFile;
+        debug_assert!(out.len() <= Self::CAP);
+        let block = unsafe { std::slice::from_raw_parts_mut(self.buf.as_mut_ptr().add(self.off), out.len()) };
+        let mut done = 0u32;
+        match unsafe { ReadFile(self.h, Some(&mut *block), Some(&raw mut done), None) } {
+            Ok(()) => {
+                let n = done as usize;
+                out[..n].copy_from_slice(&block[..n]);
+                Ok(n)
+            }
+            // ERROR_HANDLE_EOF: no whole sector left at this offset.
+            Err(e) if e.code().0 as u32 & 0xFFFF == 0x26 => Ok(0),
+            Err(e) => Err(io::Error::other(format!("uncached read failed: {e}"))),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for UncachedReader {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.h);
+        }
+    }
+}
+
+/// The physical sector size of the volume holding `path` (NO_BUFFERING granularity);
+/// 512 when the query fails, which is the minimum NTFS answer.
+#[cfg(windows)]
+pub fn sector_size(path: &std::path::Path) -> u32 {
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceW;
+    let w = crate::win::longpath::wide(path);
+    let mut bytes = 0u32;
+    if unsafe { GetDiskFreeSpaceW(windows::core::PCWSTR(w.as_ptr()), None, Some(&raw mut bytes), None, None) }.is_ok() && bytes > 0 {
+        bytes
+    } else {
+        512
+    }
+}
+
 /// Flushes everything cached for the filesystem holding `dir` (after copies to slow drives).
+#[cfg_attr(any(unix, windows), allow(unreachable_code))]
 pub fn syncfs(dir: &std::path::Path) -> io::Result<()> {
+    #[cfg(unix)]
+    return unix_syncfs(dir);
+    #[cfg(windows)]
+    return win_syncfs(dir);
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = dir;
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+}
+
+#[cfg(unix)]
+fn unix_syncfs(dir: &std::path::Path) -> io::Result<()> {
     let f = std::fs::File::open(dir)?;
     cvt(unsafe { libc::syncfs(f.as_raw_fd()) }).map(|_| ())
+}
+
+/// No syncfs(2) twin: opening the volume root with backup semantics and flushing it
+/// pushes everything the filesystem has cached for that volume.
+#[cfg(windows)]
+fn win_syncfs(dir: &std::path::Path) -> io::Result<()> {
+    use windows::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE, OPEN_EXISTING,
+    };
+    let root = crate::win::volume::volume_root_path(dir).unwrap_or_else(|| dir.to_path_buf());
+    let w = crate::win::longpath::wide(&root);
+    let h = (unsafe {
+        windows::Win32::Storage::FileSystem::CreateFileW(
+            windows::core::PCWSTR(w.as_ptr()),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAGS_AND_ATTRIBUTES(FILE_FLAG_BACKUP_SEMANTICS.0),
+            None,
+        )
+    })
+    .map_err(crate::win::err::to_io)?;
+    let r = unsafe { windows::Win32::Storage::FileSystem::FlushFileBuffers(h) };
+    unsafe {
+        let _ = windows::Win32::Foundation::CloseHandle(h);
+    }
+    r.map_err(crate::win::err::to_io)
 }
 
 #[cfg(test)]
@@ -241,6 +534,45 @@ mod tests {
         let ctx = JobCtx::new();
         copy_contents(&ctx, &src, &dst, 5 << 20, false, &mut Vec::new(), &mut 0).unwrap();
         assert_eq!(std::fs::metadata(dir.path().join("d")).unwrap().len(), 10);
+    }
+
+    #[test]
+    #[cfg(windows)] // the sharing ladder: four waits (100/200/400/800 ms), then the caller decides
+    fn sharing_violations_get_four_fast_retries() {
+        let e = io::Error::from_raw_os_error(32);
+        let mut a = 0u32;
+        for _ in 0..4 {
+            assert!(wait_sharing_retry(&e, &mut a));
+        }
+        assert!(!wait_sharing_retry(&e, &mut a), "after the fourth wait the user is asked");
+        assert_eq!(a, 4);
+        assert!(!wait_sharing_retry(&io::Error::from_raw_os_error(5), &mut 0), "other errors are asked about right away");
+    }
+
+    #[test]
+    #[cfg(windows)] // C: here is NTFS: the extent attempt answers false and the plain loop copies
+    fn the_extent_attempt_is_quiet_on_other_filesystems() {
+        assert_eq!(roundtrip(1 << 12, false), Method::ReadWrite);
+    }
+
+    #[test]
+    #[cfg(windows)] // NO_BUFFERING reads return exactly the file's bytes, sector by sector
+    fn uncached_reader_sees_what_the_device_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("u.bin");
+        let data: Vec<u8> = (0..(5000usize)).map(|i| (i * 31 % 251) as u8).collect();
+        std::fs::write(&p, &data).unwrap();
+        let sector = sector_size(&p).max(1) as usize;
+        let bulk = data.len() - data.len() % sector;
+        let mut r = UncachedReader::open(&p).unwrap();
+        let mut got = vec![0u8; bulk];
+        let mut off = 0;
+        while off < bulk {
+            let n = r.read(&mut got[off..off + (UncachedReader::CAP).min(bulk - off)]).unwrap();
+            assert!(n > 0, "an uncached read inside the bulk must not stop early");
+            off += n;
+        }
+        assert_eq!(got, data[..bulk]);
     }
 
     #[test]

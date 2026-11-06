@@ -121,6 +121,40 @@ pub fn add_fake_share(dir: std::path::PathBuf) {
     FAKE_SHARES.with(|f| f.borrow_mut().push(dir));
 }
 
+/// Searches below a folder on a server or device storage the app browses itself (Windows):
+/// the folders are listed one by one over the pooled connection, results stream in batches.
+#[cfg(windows)]
+fn spawn_remote_search(base: failbrauwser::location::RemoteLoc, query: String, hidden: bool, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>, tx: async_channel::Sender<Option<Vec<Item>>>) {
+    std::thread::Builder::new()
+        .name("fb-search".into())
+        .spawn(move || {
+            let q = failbrauwser::search::Query::new(&query);
+            let mut batch = Vec::new();
+            let mut last = std::time::Instant::now();
+            let root = base.inner.clone();
+            failbrauwser::search::search_listed(&root, &q, hidden, &cancel, |dir| failbrauwser::remote_fs::list(&base.at, dir), |dir, entry| {
+                let rel = dir.strip_prefix(root.as_str()).unwrap_or(dir).trim_start_matches('/');
+                let rel = if rel.is_empty() { ".".to_string() } else { rel.to_string() };
+                batch.push(Item::FoundRemote(base.with_inner(dir), entry, rel));
+                if batch.len() >= 200 || last.elapsed() >= std::time::Duration::from_millis(150) {
+                    let _ = tx.send_blocking(Some(std::mem::take(&mut batch)));
+                    last = std::time::Instant::now();
+                }
+            });
+            if !batch.is_empty() {
+                let _ = tx.send_blocking(Some(batch));
+            }
+            let _ = tx.send_blocking(None);
+        })
+        .expect("spawn search thread");
+}
+
+/// Linux mounts servers and devices (GVfs), so their folders are searched on disk.
+#[cfg(not(windows))]
+fn spawn_remote_search(_: failbrauwser::location::RemoteLoc, _: String, _: bool, _: std::sync::Arc<std::sync::atomic::AtomicBool>, tx: async_channel::Sender<Option<Vec<Item>>>) {
+    let _ = tx.send_blocking(None);
+}
+
 impl Pane {
     pub fn new(settings: Rc<RefCell<Settings>>, location: Location) -> Rc<Pane> {
         let store = model::new_store();
@@ -725,6 +759,11 @@ impl Pane {
             self.poll_share();
             return;
         }
+        #[cfg(windows)]
+        if matches!(loc, Location::Trash) {
+            self.poll_recycle_bin();
+            return;
+        }
         let Some(path) = backend::watch_path(loc) else { return };
         let file = gio::File::for_path(&path);
         let Ok(monitor) = file.monitor(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE) else {
@@ -756,6 +795,28 @@ impl Pane {
             let busy = { let st = p.st.borrow(); st.reading || st.refresh_scheduled || st.loading };
             if active && p.root.is_mapped() && !busy {
                 p.refresh_incremental();
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    /// The shell's Recycle Bin sends no change notices (its raw `$Recycle.Bin` folders
+    /// are ACL-shut against a monitor), so while its page is shown the bin's own
+    /// (count, size) stamp is re-queried on the share's cadence; any change re-reads it.
+    #[cfg(windows)]
+    fn poll_recycle_bin(&self) {
+        let generation = self.st.borrow().generation;
+        let stamp = Rc::new(std::cell::Cell::new(failbrauwser::win::recyclebin::query().ok()));
+        let weak = self.weak.borrow().clone();
+        glib::timeout_add_local(SHARE_POLL, move || {
+            let Some(p) = weak.upgrade() else { return glib::ControlFlow::Break };
+            if p.st.borrow().generation != generation {
+                return glib::ControlFlow::Break;
+            }
+            if let Ok(now) = failbrauwser::win::recyclebin::query() {
+                if stamp.replace(Some(now)) != Some(now) {
+                    p.schedule_refresh();
+                }
             }
             glib::ControlFlow::Continue
         });
@@ -939,49 +1000,53 @@ impl Pane {
         *self.search_cancel.borrow_mut() = Some(cancel.clone());
         let show_hidden = self.settings.borrow().show_hidden;
         let (tx, rx) = async_channel::unbounded::<Option<Vec<Item>>>();
-        let root = s.root.clone();
-        std::thread::Builder::new()
-            .name("fb-search".into())
-            .spawn(move || {
-                use failbrauwser::search::{Hit, Options, Query, search};
-                let q = Query::new(&s.query);
-                let helper = s.archives.then(failbrauwser::archive::Helper::global);
-                let rel = |p: &std::path::Path| -> String {
-                    let parent = p.parent().unwrap_or(p);
-                    match parent.strip_prefix(&root) {
-                        Ok(r) if r.as_os_str().is_empty() => ".".into(),
-                        Ok(r) => r.display().to_string(),
-                        Err(_) => parent.display().to_string(),
-                    }
-                };
-                let mut batch = Vec::new();
-                let mut last = std::time::Instant::now();
-                let opts = Options { hidden: show_hidden, archives: s.archives };
-                search(&root, &q, opts, helper, &cancel, |hit| {
-                    let item = match hit {
-                        Hit::File(p) => failbrauwser::fs::FileEntry::stat(&p).ok().map(|e| Item::Found(e, rel(&p))),
-                        Hit::InArchive { archive, entry, is_dir, size, mtime } => {
-                            let inner = entry.rfind('/').map(|i| entry[..i].to_string()).unwrap_or_default();
-                            let loc = failbrauwser::location::ArchiveLoc::root(archive.clone()).with_inner(&inner);
-                            let name = entry.rsplit('/').next().unwrap_or(&entry).to_string();
-                            let node = failbrauwser::archive::ArchiveNode { path: entry.clone(), name, is_dir, size, compressed: size, mtime, encrypted: false, implied: false };
-                            let folder = format!("{}/{}", rel(&archive.join("x")), archive.file_name().unwrap_or_default().to_string_lossy());
-                            let folder = if inner.is_empty() { folder } else { format!("{folder}/{inner}") };
-                            Some(Item::FoundInArchive(loc, node, folder.trim_start_matches("./").to_string()))
+        if let Some(base) = s.remote.clone() {
+            spawn_remote_search(base, s.query.clone(), show_hidden, cancel, tx);
+        } else {
+            let root = s.root.clone();
+            std::thread::Builder::new()
+                .name("fb-search".into())
+                .spawn(move || {
+                    use failbrauwser::search::{Hit, Options, Query, search};
+                    let q = Query::new(&s.query);
+                    let helper = s.archives.then(failbrauwser::archive::Helper::global);
+                    let rel = |p: &std::path::Path| -> String {
+                        let parent = p.parent().unwrap_or(p);
+                        match parent.strip_prefix(&root) {
+                            Ok(r) if r.as_os_str().is_empty() => ".".into(),
+                            Ok(r) => r.display().to_string(),
+                            Err(_) => parent.display().to_string(),
                         }
                     };
-                    batch.extend(item);
-                    if batch.len() >= 200 || last.elapsed() >= std::time::Duration::from_millis(150) {
-                        let _ = tx.send_blocking(Some(std::mem::take(&mut batch)));
-                        last = std::time::Instant::now();
+                    let mut batch = Vec::new();
+                    let mut last = std::time::Instant::now();
+                    let opts = Options { hidden: show_hidden, archives: s.archives };
+                    search(&root, &q, opts, helper, &cancel, |hit| {
+                        let item = match hit {
+                            Hit::File(p) => failbrauwser::fs::FileEntry::stat(&p).ok().map(|e| Item::Found(e, rel(&p))),
+                            Hit::InArchive { archive, entry, is_dir, size, mtime } => {
+                                let inner = entry.rfind('/').map(|i| entry[..i].to_string()).unwrap_or_default();
+                                let loc = failbrauwser::location::ArchiveLoc::root(archive.clone()).with_inner(&inner);
+                                let name = entry.rsplit('/').next().unwrap_or(&entry).to_string();
+                                let node = failbrauwser::archive::ArchiveNode { path: entry.clone(), name, is_dir, size, compressed: size, mtime, encrypted: false, implied: false };
+                                let folder = format!("{}/{}", rel(&archive.join("x")), archive.file_name().unwrap_or_default().to_string_lossy());
+                                let folder = if inner.is_empty() { folder } else { format!("{folder}/{inner}") };
+                                Some(Item::FoundInArchive(loc, node, folder.trim_start_matches("./").to_string()))
+                            }
+                        };
+                        batch.extend(item);
+                        if batch.len() >= 200 || last.elapsed() >= std::time::Duration::from_millis(150) {
+                            let _ = tx.send_blocking(Some(std::mem::take(&mut batch)));
+                            last = std::time::Instant::now();
+                        }
+                    });
+                    if !batch.is_empty() {
+                        let _ = tx.send_blocking(Some(batch));
                     }
-                });
-                if !batch.is_empty() {
-                    let _ = tx.send_blocking(Some(batch));
-                }
-                let _ = tx.send_blocking(None);
-            })
-            .expect("spawn search thread");
+                    let _ = tx.send_blocking(None);
+                })
+                .expect("spawn search thread");
+        }
         // Rows stream in unsorted (sorting each one in was what made big lists stall the
         // window); they are put in order once, at the end.
         self.applying_sort.set(true);
@@ -1661,6 +1726,10 @@ impl Pane {
             match one {
                 Item::Found(e, _) if e.is_dir_like() => {
                     self.navigate(Location::Dir(e.path.clone()));
+                    return;
+                }
+                Item::FoundRemote(l, n, _) if n.is_dir => {
+                    self.navigate(Location::Remote(l.with_inner(&l.entry_path(&n.name))));
                     return;
                 }
                 Item::FoundInArchive(a, n, _) => {

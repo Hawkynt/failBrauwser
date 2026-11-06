@@ -20,13 +20,15 @@ pub struct Link {
 }
 
 impl Link {
-    fn text(&self) -> String {
+    /// What the link points at: its address, or failBrauwser plus the page arguments when
+    /// only failBrauwser can show it (`desktoplink::place` writes the platform's entry).
+    fn target(&self) -> desktoplink::Target {
         if !self.url.is_empty() {
-            return desktoplink::entry_text(&self.name, &self.url, &self.icon);
+            return desktoplink::Target::Url(self.url.clone());
         }
         let mut command = vec![program()];
         command.extend(self.args.iter().cloned());
-        desktoplink::app_entry_text(&self.name, &command.iter().map(String::as_str).collect::<Vec<_>>(), &self.icon)
+        desktoplink::Target::Command(command)
     }
 }
 
@@ -115,7 +117,7 @@ pub fn for_mount(m: &gio::Mount) -> Link {
 pub fn create(w: &Window, links: &[Link]) {
     let mut made = Vec::new();
     for l in links {
-        match desktoplink::write(&l.name, &l.text()) {
+        match desktoplink::place(&l.name, &l.icon, &l.target()) {
             Ok(_) => made.push(l.name.as_str()),
             Err(e) => {
                 util::show_error(&w.win, "Cannot create the link on the desktop", &format!("{}: {e}", desktoplink::desktop_dir().display()));

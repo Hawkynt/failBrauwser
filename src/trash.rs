@@ -10,6 +10,10 @@
 //!
 //! The home trash is `$XDG_DATA_HOME/Trash`; files on other drives go to `<top>/.Trash-<uid>`
 //! (or `<top>/.Trash/<uid>`), where `Path` is relative to the drive's top directory.
+//!
+//! On Windows the same model is backed by the shell Recycle Bin (`win::recyclebin`): a bin
+//! entry maps onto `TrashItem` with the `$R…` name, its `$Recycle.Bin` location, the bin's
+//! display name as the original place and the `DateDeleted` property as the deletion time.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -79,7 +83,6 @@ pub fn percent_decode(s: &str) -> Vec<u8> {
 
 /// Reads a `.trashinfo`; returns (original path as written, deletion date).
 pub fn parse_trashinfo(text: &str) -> Option<(PathBuf, String)> {
-    use std::os::unix::ffi::OsStringExt;
     let mut in_section = false;
     let (mut path, mut date) = (None, String::new());
     for line in text.lines() {
@@ -92,7 +95,7 @@ pub fn parse_trashinfo(text: &str) -> Option<(PathBuf, String)> {
             continue;
         }
         if let Some(v) = line.strip_prefix("Path=") {
-            path = Some(PathBuf::from(std::ffi::OsString::from_vec(percent_decode(v))));
+            path = Some(decode_path(percent_decode(v)));
         } else if let Some(v) = line.strip_prefix("DeletionDate=") {
             date = v.to_string();
         }
@@ -100,8 +103,33 @@ pub fn parse_trashinfo(text: &str) -> Option<(PathBuf, String)> {
     path.map(|p| (p, date))
 }
 
+/// The percent-decoded spec bytes as a path: raw on Unix (where they are the name),
+/// UTF-8 text elsewhere.
+#[cfg(unix)]
+fn decode_path(bytes: Vec<u8>) -> PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    PathBuf::from(std::ffi::OsString::from_vec(bytes))
+}
+
+#[cfg(not(unix))]
+fn decode_path(bytes: Vec<u8>) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// The home trash and the trash folders of mounted drives that exist.
 pub fn trash_dirs() -> Vec<TrashDir> {
+    #[cfg(unix)]
+    return unix_trash_dirs();
+    // Windows: there are no trash folders to visit — the single shell Recycle Bin behind
+    // win::recyclebin is what list/is_empty/empty consult, whatever they are handed here.
+    #[cfg(windows)]
+    return Vec::new();
+    #[cfg(not(any(unix, windows)))]
+    Vec::new()
+}
+
+#[cfg(unix)]
+fn unix_trash_dirs() -> Vec<TrashDir> {
     let uid = unsafe { libc::getuid() };
     let mut dirs = vec![TrashDir { root: gtk::glib::user_data_dir().join("Trash"), top: None }];
     let home_dev = std::fs::metadata(gtk::glib::user_data_dir()).ok().map(|m| std::os::unix::fs::MetadataExt::dev(&m));
@@ -124,6 +152,7 @@ pub fn trash_dirs() -> Vec<TrashDir> {
 
 /// Everything in the given trash folders. Entries without a valid `.trashinfo` are listed
 /// with an unknown origin, so they can still be deleted.
+#[cfg(unix)]
 pub fn list(dirs: &[TrashDir]) -> Vec<TrashItem> {
     let mut out = Vec::new();
     for d in dirs {
@@ -148,10 +177,48 @@ pub fn list(dirs: &[TrashDir]) -> Vec<TrashItem> {
     out
 }
 
+#[cfg(unix)]
 pub fn is_empty(dirs: &[TrashDir]) -> bool {
     dirs.iter().all(|d| std::fs::read_dir(d.files()).map(|mut r| r.next().is_none()).unwrap_or(true))
 }
 
+/// All bin entries across the drives' Recycle Bins, mapped onto this module's model.
+#[cfg(windows)]
+pub fn list(_dirs: &[TrashDir]) -> Vec<TrashItem> {
+    crate::win::recyclebin::list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|b| TrashItem { name: b.name.clone(), path: b.path.clone(), info: bin_info_path(&b.path), original: b.original, deleted: b.deleted })
+        .collect()
+}
+
+/// The shell's `$I…` metadata file that belongs to a `$R…` entry — carried for identity
+/// only; the shell owns its contents and removal.
+#[cfg(windows)]
+fn bin_info_path(parser: &Path) -> PathBuf {
+    let name = parser.file_name().map(|n| n.to_string_lossy().replacen("$R", "$I", 1)).unwrap_or_default();
+    parser.parent().map(|p| p.join(name)).unwrap_or_else(|| parser.to_path_buf())
+}
+
+#[cfg(windows)]
+pub fn is_empty(_dirs: &[TrashDir]) -> bool {
+    crate::win::recyclebin::query().map(|(n, _)| n == 0).unwrap_or(true)
+}
+
+/// Puts one file into the platform trash (the delete operation and the restore-conflict
+/// path both use this). `NotFound` when it is already gone.
+pub fn trash_file(p: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    return crate::win::recyclebin::trash(p);
+    #[cfg(not(windows))]
+    match gtk::gio::prelude::FileExt::trash(&gtk::gio::File::for_path(p), gtk::gio::Cancellable::NONE) {
+        Ok(()) => Ok(()),
+        Err(e) if e.matches(gtk::gio::IOErrorEnum::NotFound) => Err(io::Error::new(io::ErrorKind::NotFound, e.to_string())),
+        Err(e) => Err(io::Error::other(e.to_string())),
+    }
+}
+
+#[cfg(unix)]
 fn remove_any(p: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(p) {
         Ok(m) if m.is_dir() => std::fs::remove_dir_all(p),
@@ -163,6 +230,7 @@ fn remove_any(p: &Path) -> io::Result<()> {
 
 /// Puts an item back where it came from (or at `to`, e.g. a free name next to it).
 /// Missing parent folders are created. Fails with `AlreadyExists` if the target is taken.
+#[cfg(unix)]
 pub fn restore(item: &TrashItem, to: Option<&Path>) -> io::Result<PathBuf> {
     let target = to.map(Path::to_path_buf).unwrap_or_else(|| item.original.clone());
     if !target.is_absolute() {
@@ -194,14 +262,30 @@ pub fn restore(item: &TrashItem, to: Option<&Path>) -> io::Result<PathBuf> {
     Ok(target)
 }
 
+/// Puts a bin entry back where the shell says it came from (or at `to`),
+/// renaming the `$R…` file to its original name on the way out.
+#[cfg(windows)]
+pub fn restore(item: &TrashItem, to: Option<&Path>) -> io::Result<PathBuf> {
+    crate::win::recyclebin::restore(&item.path, &item.original, to)
+}
+
 /// Deletes an item for good (the file and its `.trashinfo`).
+#[cfg(unix)]
 pub fn delete(item: &TrashItem) -> io::Result<()> {
     remove_any(&item.path)?;
     let _ = std::fs::remove_file(&item.info);
     Ok(())
 }
 
+/// Deletes a bin entry for good; what is left of the `$I…` metadata is shell business —
+/// orphaned entries never come back into `list`.
+#[cfg(windows)]
+pub fn delete(item: &TrashItem) -> io::Result<()> {
+    crate::win::recyclebin::delete(&item.path)
+}
+
 /// Empties the given trash folders (also stray `.trashinfo` files without a file).
+#[cfg(unix)]
 pub fn empty(dirs: &[TrashDir]) -> io::Result<()> {
     for item in list(dirs) {
         delete(&item)?;
@@ -216,11 +300,19 @@ pub fn empty(dirs: &[TrashDir]) -> io::Result<()> {
     Ok(())
 }
 
+/// Empties every drive's Recycle Bin, as Explorer's Empty Recycle Bin does.
+#[cfg(windows)]
+pub fn empty(_dirs: &[TrashDir]) -> io::Result<()> {
+    crate::win::recyclebin::empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)] // every fixture that touches the filesystem is a Unix scenario
     use std::fs;
 
+    #[cfg(unix)] // builds the freedesktop folders the Unix scenarios need
     fn put(dir: &TrashDir, name: &str, path_line: &str, content: &str) {
         fs::create_dir_all(dir.files()).unwrap();
         fs::create_dir_all(dir.info()).unwrap();
@@ -237,6 +329,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // the fixture builds freedesktop trash folders; Windows tests live in win::recyclebin
     fn lists_home_and_volume_trash() {
         let t = tempfile::tempdir().unwrap();
         let home = TrashDir { root: t.path().join("home/Trash"), top: None };
@@ -255,6 +348,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // same fixture caveat: restore/delete/empty here drive the folder implementation
     fn restore_delete_and_empty() {
         let t = tempfile::tempdir().unwrap();
         let home = TrashDir { root: t.path().join("Trash"), top: None };

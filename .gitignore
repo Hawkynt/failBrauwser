@@ -5,3 +5,8 @@
 *.swp
 /vendor/**/bin
 /vendor/**/obj
+/winpack/sysroot
+/winpack/dl
+/winpack/probe
+/winpack/out
+/winpack/onefile/target

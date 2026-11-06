@@ -3,8 +3,6 @@
 
 use gtk::glib;
 use std::collections::HashMap;
-use std::ffi::CString;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -212,6 +210,21 @@ pub fn user_volumes(all: &[Volume], home: &Path) -> Vec<Volume> {
 
 /// Fill level of a mounted filesystem.
 pub fn usage(mount_point: &Path) -> Option<Usage> {
+    #[cfg(unix)]
+    return unix_usage(mount_point);
+    #[cfg(windows)]
+    return win_usage(mount_point);
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = mount_point;
+        None
+    }
+}
+
+#[cfg(unix)]
+fn unix_usage(mount_point: &Path) -> Option<Usage> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
     let c = CString::new(mount_point.as_os_str().as_bytes()).ok()?;
     let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
@@ -220,6 +233,17 @@ pub fn usage(mount_point: &Path) -> Option<Usage> {
     let f = st.f_frsize as u64;
     let total = st.f_blocks as u64 * f;
     Some(Usage { total, used: (st.f_blocks as u64 - st.f_bfree as u64) * f, free: st.f_bavail as u64 * f })
+}
+
+#[cfg(windows)]
+fn win_usage(mount_point: &Path) -> Option<Usage> {
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let w = crate::win::longpath::wide(mount_point);
+    let (mut free, mut total, mut total_free) = (0u64, 0u64, 0u64);
+    if unsafe { GetDiskFreeSpaceExW(windows::core::PCWSTR(w.as_ptr()), Some(&raw mut free), Some(&raw mut total), Some(&raw mut total_free)) }.is_err() {
+        return None;
+    }
+    Some(Usage { total, used: total.saturating_sub(total_free), free })
 }
 
 fn bytes_to_string(v: &glib::Variant) -> String {
@@ -323,9 +347,13 @@ pub fn loop_filesystems(reply: &glib::Variant, loop_object: &str) -> Vec<(String
     out
 }
 
-/// Names of disk images the system can mount itself (through a loop device): raw images of
-/// a file system or a whole disk, not containers such as VHD or QCOW2.
+/// Names of disk images the system can mount itself: on Linux through a loop device — raw
+/// images of a file system or a whole disk, not containers such as VHD or QCOW2; on Windows
+/// what the system mounts natively (ISO, IMG, VHD, VHDX).
 pub fn is_mountable_image_name(name: &str) -> bool {
+    #[cfg(windows)]
+    const EXTS: &[&str] = crate::win::vdisk::MOUNTABLE;
+    #[cfg(not(windows))]
     const EXTS: &[&str] = &[".iso", ".img", ".ima", ".raw", ".dd", ".ntfs", ".fat", ".exfat", ".ext2", ".ext3", ".ext4", ".btrfs", ".xfs", ".udf", ".hfs", ".hfsplus", ".squashfs", ".sqsh", ".f2fs"];
     let lower = name.to_lowercase();
     EXTS.iter().any(|e| lower.len() > e.len() && lower.ends_with(e))
@@ -713,8 +741,13 @@ mod tests {
         assert_eq!(loop_for_file(&v, Path::new("/home/me/other.img")), None);
         assert_eq!(loop_filesystems(&v, "/o/b/loop4"), vec![("/o/b/loop4p1".to_string(), true), ("/o/b/loop4p2".to_string(), false)]);
         assert_eq!(loop_filesystems(&v, "/o/b/loop3"), vec![("/o/b/loop3".to_string(), true)]);
-        assert!(is_mountable_image_name("Ubuntu.ISO") && is_mountable_image_name("backup.ntfs") && is_mountable_image_name("sd.img"));
-        assert!(!is_mountable_image_name("disk.vhdx") && !is_mountable_image_name(".iso") && !is_mountable_image_name("a.zip"));
+        assert!(is_mountable_image_name("Ubuntu.ISO") && is_mountable_image_name("sd.img"));
+        assert!(!is_mountable_image_name(".iso") && !is_mountable_image_name("a.zip"));
+        // Linux loop-mounts raw file system images; Windows mounts its own disk containers
+        #[cfg(not(windows))]
+        assert!(is_mountable_image_name("backup.ntfs") && !is_mountable_image_name("disk.vhdx"));
+        #[cfg(windows)]
+        assert!(!is_mountable_image_name("backup.ntfs") && is_mountable_image_name("disk.vhdx"));
     }
 
     #[test]

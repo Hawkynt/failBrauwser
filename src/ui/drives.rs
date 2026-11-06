@@ -38,6 +38,8 @@ thread_local! {
     /// Change notifications from UDisks2 (dropped = unsubscribed).
     static SUBSCRIPTION: RefCell<Option<gio::SignalSubscription>> = const { RefCell::new(None) };
     static PENDING: Cell<bool> = const { Cell::new(false) };
+    /// Windows: the drive-letter poll is already installed (see [`connect_changed`]).
+    static POLLING: Cell<bool> = const { Cell::new(false) };
     /// Stand-ins for USB sticks in the self-test, answering in place of UDisks2.
     static FAKES: RefCell<Vec<FakeDrive>> = const { RefCell::new(Vec::new()) };
 }
@@ -172,8 +174,28 @@ pub fn connect_changed(f: impl Fn() -> bool + 'static) {
             changed();
             true
         });
-        let Ok(conn) = gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE) else { return };
-        *sub.borrow_mut() = Some(conn.subscribe_to_signal(Some(UDISKS), None, None, None, None, gio::DBusSignalFlags::NONE, |_| changed()));
+        #[cfg(windows)]
+        {
+            // Windows has no UDisks2 signals to follow: the drive-letter mask is polled
+            // instead — one cheap call, so sticks coming and going move the panel.
+            if !POLLING.with(|c| !c.replace(true)) {
+                let seen = Rc::new(Cell::new(0u32));
+                let _ = glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+                    let mask = failbrauwser::win::storage::drive_mask();
+                    if seen.get() != 0 && mask != seen.get() {
+                        changed();
+                    }
+                    seen.set(mask);
+                    glib::ControlFlow::Continue
+                });
+            }
+            return;
+        }
+        #[cfg(not(windows))]
+        {
+            let Ok(conn) = gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE) else { return };
+            *sub.borrow_mut() = Some(conn.subscribe_to_signal(Some(UDISKS), None, None, None, None, gio::DBusSignalFlags::NONE, |_| changed()));
+        }
     });
 }
 
@@ -212,6 +234,9 @@ fn set_busy(key: &str, on: bool) {
 
 /// Every volume and phone, with its fill level.
 pub async fn gather() -> Vec<(Volume, Option<Usage>)> {
+    #[cfg(windows)]
+    let vols = gio::spawn_blocking(failbrauwser::win::storage::volumes).await.unwrap_or_default();
+    #[cfg(not(windows))]
     let vols = match query_udisks().await {
         Some(v) => v,
         None => gio::spawn_blocking(drives::read_mountinfo).await.unwrap_or_default(),
@@ -990,7 +1015,7 @@ fn open_device(w: &Rc<Window>, v: &Volume, show: impl Fn(Location) + 'static) {
     super::phones::open(w.win.upcast_ref(), &v.device, move |res| {
         set_busy(&key, false);
         match res {
-            Ok(path) => show(Location::Dir(path)),
+            Ok(loc) => show(loc),
             Err(msg) if msg.is_empty() => {}
             Err(msg) => error(&win, "Cannot open the device", &msg),
         }
@@ -1014,6 +1039,7 @@ pub fn reconnect_device(w: &Rc<Window>, pane: &Rc<Pane>, v: &Volume) {
 /// Unmounts (and for `eject`, powers off / ejects the whole drive, with its other volumes
 /// among `all`). Tabs showing the drive are moved to the drives page first, so they do not
 /// keep it busy.
+#[cfg_attr(windows, allow(unreachable_code))]
 pub fn unmount_volume(w: &Rc<Window>, v: &Volume, eject: bool, all: &[Volume]) {
     if v.is_device() {
         eject_device(w, v);
@@ -1028,6 +1054,8 @@ pub fn unmount_volume(w: &Rc<Window>, v: &Volume, eject: bool, all: &[Volume]) {
         super::shares::eject(w, v, move |mounts| leave(&w2, mounts));
         return;
     }
+    #[cfg(windows)]
+    return win_unmount_volume(w, v, eject);
     let mounts: Vec<PathBuf> = if eject {
         all.iter().filter(|x| x.drive_object == v.drive_object).flat_map(|x| x.mount_points.clone()).collect()
     } else {
@@ -1078,6 +1106,40 @@ pub fn unmount_volume(w: &Rc<Window>, v: &Volume, eject: bool, all: &[Volume]) {
     });
 }
 
+/// Windows has no per-volume unmount: like Explorer's "Eject", a stick has its whole device
+/// taken out by PnP (caches flushed first — safe to unplug afterwards) and an optical drive
+/// ejects its disc; both buttons mean that here, so `eject` only picks the wording. The
+/// self-test stand-ins answer in the UDisks2 shape on either system.
+#[cfg(windows)]
+fn win_unmount_volume(w: &Rc<Window>, v: &Volume, eject: bool) {
+    leave(w, &v.mount_points);
+    let win = Rc::downgrade(w);
+    let v = v.clone();
+    set_busy(&v.block_object, true);
+    glib::spawn_future_local(async move {
+        let unmounted = if v.block_object.starts_with("/fake") {
+            call(&v.block_object, "org.freedesktop.UDisks2.Filesystem", "Unmount", empty_options()).await.map(|_| ())
+        } else {
+            Ok(())
+        };
+        let res = if v.block_object.starts_with("/fake") {
+            match unmounted {
+                Ok(()) if !v.crypto_backing.is_empty() => call(&v.crypto_backing, "org.freedesktop.UDisks2.Encrypted", "Lock", empty_options()).await.map(|_| ()),
+                other => other,
+            }
+        } else if v.optical {
+            gio::spawn_blocking(move || failbrauwser::win::storage::eject_media(&v.device)).await.map_err(|_| "the drive went away during the eject".to_string()).and_then(|r| r)
+        } else {
+            let device = v.device.clone();
+            gio::spawn_blocking(move || failbrauwser::win::storage::safe_remove(&device)).await.map_err(|_| "the drive went away during the eject".to_string()).and_then(|r| r)
+        };
+        set_busy(&v.block_object, false);
+        if let Err(e) = res {
+            error(&win, if v.optical || eject { "Cannot eject the drive" } else { "Cannot unmount the drive" }, &e);
+        }
+    });
+}
+
 /// Unmounts every file system of a mounted disk image and detaches it from its loop device.
 fn eject_image(w: &Rc<Window>, v: &Volume, all: &[Volume]) {
     let parts: Vec<Volume> = all.iter().filter(|x| x.loop_object == v.loop_object).cloned().collect();
@@ -1122,13 +1184,32 @@ pub fn mount_image(w: &Rc<Window>, image: PathBuf) {
     });
 }
 
+#[cfg(unix)] // the udisks2 tracking paths that ask for it are Unix-only until the drives milestone
 async fn managed_objects(conn: &gio::DBusConnection) -> Result<glib::Variant, String> {
     conn.call_future(Some(UDISKS), "/org/freedesktop/UDisks2", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects", None, Some(glib::VariantTy::new("(a{oa{sa{sv}}})").unwrap()), gio::DBusCallFlags::NONE, 5000)
         .await
         .map_err(|e| e.to_string())
 }
 
+/// Mount a disk image as a drive: udisks loop devices on Unix; on Windows the system's own
+/// image mounting (`win::vdisk`), which gives the image a drive letter.
 async fn attach_and_mount(image: &Path) -> Result<PathBuf, String> {
+    #[cfg(unix)]
+    return udisks_attach_and_mount(image).await;
+    #[cfg(windows)]
+    {
+        let image = image.to_path_buf();
+        gio::spawn_blocking(move || failbrauwser::win::vdisk::mount(&image)).await.unwrap_or_else(|_| Err("The mount stopped unexpectedly.".into()))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = image;
+        Err("No image mounting on this system.".into())
+    }
+}
+
+#[cfg(unix)]
+async fn udisks_attach_and_mount(image: &Path) -> Result<PathBuf, String> {
     let conn = gio::bus_get_future(gio::BusType::System).await.map_err(|e| e.to_string())?;
     let objects = managed_objects(&conn).await?;
     let loop_object = match drives::loop_for_file(&objects, image) {
@@ -1206,6 +1287,11 @@ fn eject_device(w: &Rc<Window>, v: &Volume) {
     if let Some(root) = super::phones::root_path(&v.device) {
         leave(w, &[root]);
     }
+    // A WPD device has no fuse folder to leave — its tabs show wpd:// addresses instead.
+    #[cfg(windows)]
+    if let Some(pnp) = super::phones::wpd_pnp(&v.device) {
+        leave_device_remotes(w, &pnp);
+    }
     let win = Rc::downgrade(w);
     let key = busy_key(v);
     set_busy(&key, true);
@@ -1226,7 +1312,19 @@ pub fn can_unmount(v: &Volume) -> bool {
 
 /// Whether the volume can be ejected: a USB or ejectable drive, or an open phone.
 pub fn can_eject(v: &Volume) -> bool {
-    (v.usb || v.ejectable) && !v.drive_object.is_empty() || v.is_device() && v.mount_point().is_some() || !v.loop_object.is_empty() || !v.share_uri.is_empty()
+    (v.usb || v.ejectable) && !v.drive_object.is_empty() || v.is_device() && v.mount_point().is_some() || !v.loop_object.is_empty() || !v.share_uri.is_empty() || wpd_storage(v)
+}
+
+/// A WPD row whose storage answered (rows for a storage-less device stay inert — ejecting
+/// a phone that only has its screen locked would remove it until the next replug).
+#[cfg(windows)]
+fn wpd_storage(v: &Volume) -> bool {
+    v.device.starts_with("wpd://") && !v.label.is_empty()
+}
+
+#[cfg(not(windows))]
+fn wpd_storage(_: &Volume) -> bool {
+    false
 }
 
 /// What marks a volume as busy: its UDisks2 object, or a device's address.
@@ -1245,6 +1343,21 @@ fn leave(w: &Window, mounts: &[PathBuf]) {
         for p in win.panes() {
             if p.location().nearest_dir().is_some_and(|d| mounts.iter().any(|m| d.starts_with(m))) {
                 p.navigate(Location::Drives);
+            }
+        }
+    }
+}
+
+/// The Windows twin of `leave`: tabs browsing one WPD device go to the drives page by
+/// the device's PnP path instead of by a mount folder (there is no fuse mount to match).
+#[cfg(windows)]
+fn leave_device_remotes(w: &Window, pnp: &str) {
+    for win in w.app.windows() {
+        for p in win.panes() {
+            if let Location::Remote(r) = p.location() {
+                if matches!(&r.at, failbrauwser::location::RemoteAt::Wpd { pnp: device, .. } if device == pnp) {
+                    p.navigate(Location::Drives);
+                }
             }
         }
     }
@@ -1269,6 +1382,7 @@ fn strip_dbus_prefix(msg: &str) -> String {
     msg.split_once(": ").map(|(_, rest)| rest.to_string()).unwrap_or_else(|| msg.to_string())
 }
 
+#[cfg(not(windows))]
 async fn query_udisks() -> Option<Vec<Volume>> {
     let conn = gio::bus_get_future(gio::BusType::System).await.ok()?;
     let reply = conn

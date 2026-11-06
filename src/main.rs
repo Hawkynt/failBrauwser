@@ -14,11 +14,42 @@ Options:
 ";
 
 fn main() -> gtk::glib::ExitCode {
+    // Windows keeps autostart in the per-user Run key (Linux ships an XDG autostart file);
+    // managed from here so no installer magic is needed, and answered without opening GTK.
+    #[cfg(windows)]
+    if let Some(on) = match std::env::args().nth(1).unwrap_or_default().as_str() {
+        "--autostart-on" => Some(true),
+        "--autostart-off" => Some(false),
+        _ => None,
+    } {
+        let outcome = if on {
+            let exe = std::env::current_exe().map(|p| format!("\"{}\" --daemon", p.display())).map_err(std::io::Error::other);
+            match exe {
+                Ok(cmd) => failbrauwser::win::reg::set_autostart(&cmd),
+                Err(e) => Err(e),
+            }
+        } else {
+            failbrauwser::win::reg::clear_autostart()
+        };
+        let ok = match outcome {
+            Ok(()) => {
+                println!("{}", if on { "failBrauwser will start when you sign in." } else { "Autostart removed." });
+                true
+            }
+            Err(e) => {
+                eprintln!("Cannot change autostart: {e}");
+                false
+            }
+        };
+        return if ok { gtk::glib::ExitCode::SUCCESS } else { gtk::glib::ExitCode::FAILURE };
+    }
     // Answered without GTK or D-Bus: never opens a window.
     for a in std::env::args().skip(1) {
         match a.as_str() {
             "-h" | "--help" => {
                 print!("{HELP}");
+                #[cfg(windows)]
+                print!("  --autostart-on / --autostart-off\n                  start failBrauwser at sign-in, or stop it (HKCU Run key)\n");
                 return gtk::glib::ExitCode::SUCCESS;
             }
             "-V" | "--version" => {
@@ -28,12 +59,31 @@ fn main() -> gtk::glib::ExitCode {
             _ => {}
         }
     }
+    #[cfg(unix)]
     raise_open_file_limit();
+    #[cfg(windows)]
+    release_own_console();
     ui::app::run()
+}
+
+/// The program is a console program on Windows, so a terminal it is started from shows
+/// its messages. Started from Explorer or the Start menu, Windows makes a console just
+/// for it: when nothing else shares that console, it is let go before the window opens,
+/// so no empty console window stays beside the application. (The single-file launcher
+/// starts it without any console in the first place.)
+#[cfg(windows)]
+fn release_own_console() {
+    use windows::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
+    let mut ids = [0u32; 2];
+    if unsafe { GetConsoleProcessList(&mut ids) } == 1 {
+        let _ = unsafe { FreeConsole() };
+    }
 }
 
 /// Lifts the soft limit on open files (often 1024) to the hard limit: GLib aborts the whole
 /// process when it finds no free descriptor, which must not end a long-running instance.
+/// Windows grows its handle table on demand, so it has no such limit to lift.
+#[cfg(unix)]
 fn raise_open_file_limit() {
     let mut l = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
     unsafe {

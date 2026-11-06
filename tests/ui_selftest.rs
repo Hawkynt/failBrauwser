@@ -1,11 +1,24 @@
-//! Runs the scripted UI tests in tests/ui/*.fbt inside a headless sway session.
-//! Skipped (with a notice) when sway, grim or dbus-run-session are not installed.
+//! Runs the scripted UI tests in tests/ui/*.fbt inside a headless sway session
+//! (Linux) or on the win32 GDK desktop (Windows). Skipped (with a notice) when the
+//! platform's tools are missing; scenarios without a twin on one platform skip there
+//! with the reason, listed in docs/WINDOWS.md.
 
 use std::path::Path;
 use std::process::Command;
 
+#[cfg(unix)]
 fn have(tool: &str) -> bool {
     Command::new("sh").arg("-c").arg(format!("command -v {tool}")).output().is_ok_and(|o| o.status.success())
+}
+
+/// The plain-Python twin's name differs by platform.
+fn python() -> &'static str {
+    if cfg!(windows) { "python" } else { "python3" }
+}
+
+/// A path inside a Python string literal: doubled backslashes, which a Unix path never has.
+fn pysafe(p: &Path) -> String {
+    p.display().to_string().replace('\\', "\\\\")
 }
 
 fn run(script: &str, setup: impl FnOnce(&Path)) {
@@ -14,6 +27,7 @@ fn run(script: &str, setup: impl FnOnce(&Path)) {
 
 /// Like `run`, with extra environment and a check of the folder afterwards.
 fn run_checked(script: &str, env: &[(&str, &str)], setup: impl FnOnce(&Path), check: impl FnOnce(&Path)) {
+    #[cfg(unix)]
     if !["sway", "grim", "dbus-run-session"].iter().all(|t| have(t)) {
         eprintln!("headless UI tools missing, skipping {script}");
         return;
@@ -21,6 +35,7 @@ fn run_checked(script: &str, env: &[(&str, &str)], setup: impl FnOnce(&Path), ch
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     setup(dir.path());
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    #[cfg(unix)]
     let out = Command::new(root.join("tests/ui/harness.sh"))
         .envs(env.iter().copied())
         .arg(env!("CARGO_BIN_EXE_failbrauwser"))
@@ -28,9 +43,93 @@ fn run_checked(script: &str, env: &[(&str, &str)], setup: impl FnOnce(&Path), ch
         .arg(dir.path())
         .output()
         .unwrap();
-    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    assert!(out.status.success() && log.contains("SELFTEST OK"), "{script} failed:\n{log}");
+    #[cfg(windows)]
+    let (ok, log) = if std::env::var("FB_UI_HARNESS").as_deref() == Ok("builtin") {
+        builtin_harness(Path::new(env!("CARGO_BIN_EXE_failbrauwser")), &root.join("tests/ui").join(script), dir.path(), env)
+    } else {
+        let out = Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(root.join("tests/ui/harness.ps1"))
+            .envs(env.iter().copied())
+            .arg(env!("CARGO_BIN_EXE_failbrauwser"))
+            .arg(root.join("tests/ui").join(script))
+            .arg(dir.path())
+            .output()
+            .unwrap();
+        (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+    };
+    #[cfg(unix)]
+    let (ok, log) = (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)));
+    assert!(ok && log.contains("SELFTEST OK"), "{script} failed:\n{log}");
     check(dir.path());
+}
+
+/// harness.ps1 done in-process, for hosts where PowerShell cannot run the script — Wine
+/// (winpack/cross.sh test sets FB_UI_HARNESS=builtin). Same contract: the substitutions,
+/// the isolated folders, the C locale, the 60 s kill and the noise filter.
+#[cfg(windows)]
+fn builtin_harness(bin: &Path, script: &Path, t: &Path, env: &[(&str, &str)]) -> (bool, String) {
+    use std::io::Read;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::time::{Duration, Instant};
+    // one run at a time, like the other harnesses: an exclusively opened lock file
+    let lock_path = std::env::temp_dir().join("failbrauwser-ui-test.lock");
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let _lock = loop {
+        match std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).share_mode(0).open(&lock_path) {
+            Ok(f) => break f,
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => return (false, format!("UI test lock held for 5 minutes: {e}")),
+        }
+    };
+    for d in ["config", "data", "cache"] {
+        std::fs::create_dir_all(t.join(d)).unwrap();
+    }
+    let ui = script.parent().unwrap();
+    let troot = t.to_str().unwrap().get(..2).filter(|q| q.ends_with(':')).map(|q| format!("{q}\\")).unwrap_or_default();
+    let text = std::fs::read_to_string(script).unwrap();
+    let text = text.replace("$TROOT", &troot).replace("$T", t.to_str().unwrap()).replace("$UI", ui.to_str().unwrap());
+    let fbt = t.join("script.fbt");
+    std::fs::write(&fbt, text).unwrap();
+    let mut child = Command::new(bin)
+        .current_dir(ui)
+        .env("XDG_CONFIG_HOME", t.join("config"))
+        .env("XDG_DATA_HOME", t.join("data"))
+        .env("XDG_CACHE_HOME", t.join("cache"))
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .env("FB_SELFTEST", &fbt)
+        .envs(env.iter().copied())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut pipes = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let out_reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = pipes.0.read_to_string(&mut s);
+        s
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = pipes.1.read_to_string(&mut s);
+        s
+    });
+    let started = Instant::now();
+    let ok = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status.success();
+        }
+        if started.elapsed() > Duration::from_secs(60) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let all = format!("{}\n{}", out_reader.join().unwrap_or_default(), err_reader.join().unwrap_or_default());
+    let log: Vec<&str> = all.lines().filter(|l| !["dbus-daemon", "SpiRegistry", "fusermount"].iter().any(|n| l.contains(n))).collect();
+    (ok, log.join("\n"))
 }
 
 #[test]
@@ -121,7 +220,11 @@ fn undo_operations() {
                 assert_eq!(std::fs::read_to_string(t.join("src").join(n)).unwrap(), n);
             }
             assert_eq!(std::fs::read_dir(t.join("dest")).unwrap().count(), 0);
+            // The copy that was taken back went to the trash — the XDG one, or the shell's.
+            #[cfg(unix)]
             assert!(t.join("data/Trash/files/a.txt").exists());
+            #[cfg(windows)]
+            assert!(failbrauwser::win::recyclebin::list().unwrap().iter().any(|b| b.original == t.join("dest").join("a.txt")), "the taken-back copy is not in the Recycle Bin");
         },
     );
 }
@@ -131,7 +234,8 @@ fn disk_image_as_drive() {
     run("mount_image.fbt", |t| {
         std::fs::create_dir_all(t.join("inside")).unwrap();
         std::fs::write(t.join("inside/report.txt"), "r").unwrap();
-        std::fs::write(t.join("backup.ntfs"), "not really").unwrap();
+        // an ISO: an image kind both Linux (loop device) and Windows (native) mount
+        std::fs::write(t.join("backup.iso"), "not really").unwrap();
         std::fs::write(t.join("photos.zip"), "PK").unwrap();
     });
 }
@@ -211,6 +315,10 @@ fn find_duplicates() {
 
 #[test]
 fn file_chooser_for_other_applications() {
+    if cfg!(windows) {
+        eprintln!("the XDG portal service has no Windows twin — serving other apps is a Linux feature, skipping");
+        return;
+    }
     run("portal.fbt", |t| {
         std::fs::create_dir_all(t.join("pics/sub")).unwrap();
         std::fs::create_dir_all(t.join("docs")).unwrap();
@@ -222,7 +330,8 @@ fn file_chooser_for_other_applications() {
 
 #[test]
 fn file_chooser_through_xdg_desktop_portal() {
-    if !Path::new("/usr/lib/xdg-desktop-portal").exists() && !Path::new("/usr/libexec/xdg-desktop-portal").exists() {
+    // Linux only, said outright: under Wine a rooted path reads the Linux root through Z:.
+    if cfg!(windows) || (!Path::new("/usr/lib/xdg-desktop-portal").exists() && !Path::new("/usr/libexec/xdg-desktop-portal").exists()) {
         eprintln!("xdg-desktop-portal not installed, skipping");
         return;
     }
@@ -244,20 +353,38 @@ fn update_from_release_or_source() {
         "update.fbt",
         &[],
         |t| {
-            let fake = |dir: &Path, record: &str| {
-                std::fs::create_dir_all(dir).unwrap();
-                let script = format!("#!/bin/sh\necho \"$@\" > {}/{record}\necho installed\n", t.display());
-                std::fs::write(dir.join("install.sh"), script).unwrap();
-                std::process::Command::new("chmod").arg("+x").arg(dir.join("install.sh")).status().unwrap();
-            };
-            let pkg = format!("failbrauwser-99.0-{}-linux.tar.gz", std::env::consts::ARCH);
-            fake(&t.join("pkgroot/failbrauwser-99.0"), "installed-args");
-            assert!(std::process::Command::new("tar").args(["czf"]).arg(t.join(&pkg)).arg("-C").arg(t.join("pkgroot")).arg("failbrauwser-99.0").status().unwrap().success());
-            fake(&t.join("srcroot/failBrauwser-main"), "built-args");
-            assert!(std::process::Command::new("tar").args(["czf"]).arg(t.join("source.tar.gz")).arg("-C").arg(t.join("srcroot")).arg("failBrauwser-main").status().unwrap().success());
+            // The stand-in package is named by the very formula the updater matches on,
+            // and laid out like package.ps1: a folder holding the payload to swap in.
+            let pkg = failbrauwser::update::package_name("v99.0");
+            let root = t.join("pkgroot/failbrauwser-99.0");
+            // The base keeps its trailing slash: the asset URL is this base plus the
+            // package name, and a join without one names the sibling of the folder.
+            let url = |p: &str| if cfg!(windows) { format!("file:///{}/", p.replace('\\', "/")) } else { format!("file://{p}/") };
+            if cfg!(windows) {
+                std::fs::create_dir_all(root.join("bin")).unwrap();
+                std::fs::create_dir_all(root.join("share")).unwrap();
+                std::fs::write(root.join("bin/failbrauwser.exe"), "NEW-EXE").unwrap();
+                std::fs::write(root.join("share/payload.txt"), "NEW-DATA").unwrap();
+                // Packed like package.ps1 does: the folder itself, so the zip holds one
+                // failbrauwser-* root with bin/ and share/ inside.
+                let pack = format!("Compress-Archive -Path '{}' -DestinationPath '{}'", root.display(), t.join(&pkg).display());
+                let zip = std::process::Command::new("powershell").args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &pack]).output().unwrap();
+                assert!(zip.status.success(), "{}{}", String::from_utf8_lossy(&zip.stdout), String::from_utf8_lossy(&zip.stderr));
+            } else {
+                let fake = |dir: &Path, record: &str| {
+                    std::fs::create_dir_all(dir).unwrap();
+                    let script = format!("#!/bin/sh\necho \"$@\" > {}/{record}\necho installed\n", t.display());
+                    std::fs::write(dir.join("install.sh"), script).unwrap();
+                    std::process::Command::new("chmod").arg("+x").arg(dir.join("install.sh")).status().unwrap();
+                };
+                fake(&root, "installed-args");
+                assert!(std::process::Command::new("tar").args(["czf"]).arg(t.join(&pkg)).arg("-C").arg(t.join("pkgroot")).arg("failbrauwser-99.0").status().unwrap().success());
+                fake(&t.join("srcroot/failBrauwser-main"), "built-args");
+                assert!(std::process::Command::new("tar").args(["czf"]).arg(t.join("source.tar.gz")).arg("-C").arg(t.join("srcroot")).arg("failBrauwser-main").status().unwrap().success());
+            }
             std::fs::write(
                 t.join("release.json"),
-                format!(r#"{{"tag_name": "v99.0", "name": "failBrauwser 99.0", "published_at": "2026-10-30T19:00:00Z", "assets": [{{"name": "{pkg}", "browser_download_url": "file://{}/{pkg}"}}]}}"#, t.display()),
+                format!(r#"{{"tag_name": "v99.0", "name": "failBrauwser 99.0", "published_at": "2026-10-30T19:00:00Z", "assets": [{{"name": "{pkg}", "browser_download_url": "{}{pkg}"}}]}}"#, url(&t.display().to_string())),
             )
             .unwrap();
             std::fs::create_dir_all(t.join("prefix/bin")).unwrap();
@@ -290,7 +417,12 @@ fn side_panel_entries() {
                 std::fs::create_dir_all(t.join(d)).unwrap();
             }
             // A known start instead of the GTK bookmarks the harness copies from the desktop.
-            let projects = format!("file://{}", t.join("projects").display());
+            // A Windows path needs the extra slash: `file://A:/…` would read “A:” as a host.
+            let projects = if cfg!(windows) {
+                format!("file:///{}", t.join("projects").display().to_string().replace('\\', "/"))
+            } else {
+                format!("file://{}", t.join("projects").display())
+            };
             std::fs::create_dir_all(t.join("config/failbrauwser")).unwrap();
             std::fs::write(
                 t.join("config/failbrauwser/shortcuts"),
@@ -309,6 +441,16 @@ fn side_panel_entries() {
     );
 }
 
+/// An unprivileged directory link: NTFS junctions report as symlinks and need no
+/// elevation, unlike real symlinks on machines without Developer Mode (error 1314).
+#[cfg(windows)]
+fn junction(link: &Path, target: &Path) {
+    // cmd treats a stray `/` as a switch start: hand mklink backslash paths only.
+    let plain = |p: &Path| p.display().to_string().replace('/', "\\");
+    let out = Command::new("cmd").args(["/C", "mklink", "/J"]).arg(plain(link)).arg(plain(target)).output().unwrap();
+    assert!(out.status.success(), "mklink /J {}: {}", link.display(), String::from_utf8_lossy(&out.stderr));
+}
+
 #[test]
 fn size_column_adds_up_folders() {
     run("dirsize.fbt", |t| {
@@ -319,10 +461,21 @@ fn size_column_adds_up_folders() {
         std::fs::create_dir_all(root.join("with-link")).unwrap();
         std::fs::write(root.join("with-link/small"), vec![0u8; 10]).unwrap();
         std::fs::write(t.join("big"), vec![0u8; 100_000]).unwrap();
-        // A link pointing at a big file outside: its target must not be counted.
+        // A link pointing at something big outside: its target must not be counted.
+        // Unix follows a file symlink; Windows points a junction at a big outside folder.
+        #[cfg(unix)]
         std::os::unix::fs::symlink(t.join("big"), root.join("with-link/big-link")).unwrap();
+        #[cfg(windows)]
+        {
+            std::fs::create_dir_all(t.join("outside")).unwrap();
+            std::fs::write(t.join("outside/big"), vec![0u8; 100_000]).unwrap();
+            junction(&root.join("with-link/big-link"), &t.join("outside"));
+        }
         // A link back up the tree: following it would go round in circles.
+        #[cfg(unix)]
         std::os::unix::fs::symlink(&root, root.join("with-link/loop")).unwrap();
+        #[cfg(windows)]
+        junction(&root.join("with-link/loop"), &root);
         std::fs::write(root.join("note.txt"), "hello").unwrap();
     });
 }
@@ -331,7 +484,8 @@ fn size_column_adds_up_folders() {
 fn default_application_from_properties() {
     // The desktop's own applications; any two that open text will do.
     let apps = ["org.xfce.mousepad.desktop", "vim.desktop"];
-    if !apps.iter().all(|a| Path::new("/usr/share/applications").join(a).exists()) {
+    // Linux only, said outright: under Wine a rooted path reads the Linux root through Z:.
+    if cfg!(windows) || !apps.iter().all(|a| Path::new("/usr/share/applications").join(a).exists()) {
         eprintln!("mousepad and vim not installed, skipping");
         return;
     }
@@ -452,6 +606,10 @@ fn drives_in_the_side_panel() {
 
 #[test]
 fn links_on_the_desktop() {
+    if cfg!(windows) {
+        eprintln!("win32 GLib resolves the desktop through the roaming profile: test links would land on the user's real desktop. .lnk creation itself is covered by the shelllink tests, skipping the scenario");
+        return;
+    }
     run_checked(
         "desktop_links.fbt",
         &[],
@@ -506,9 +664,9 @@ with zipfile.ZipFile("{w}/test.zip", "w", zipfile.ZIP_DEFLATED) as z:
     z.writestr("sub/b.txt", "beta")
     z.writestr("inner.tar.gz", buf.getvalue())
 "#,
-            w = w.display()
+            w = pysafe(&w)
         );
-        let ok = std::process::Command::new("python3").arg("-c").arg(script).status().unwrap();
+        let ok = std::process::Command::new(python()).arg("-c").arg(script).status().unwrap();
         assert!(ok.success());
     });
 }
@@ -553,6 +711,19 @@ fn path_bar() {
     });
 }
 
+/// The shell's Recycle Bin belongs to the whole machine, so an older run's `a.txt`
+/// would be picked by name instead of this run's, and our leftovers would pile up.
+/// Anything whose original place is under the test tmp root is ours: clear it out
+/// first (also recovering from a run that failed halfway) and again afterwards.
+#[cfg(windows)]
+fn bin_sweep() {
+    for item in failbrauwser::win::recyclebin::list_unfiltered().unwrap_or_default() {
+        if item.original.starts_with(env!("CARGO_TARGET_TMPDIR")) {
+            let _ = failbrauwser::win::recyclebin::delete(&item.path);
+        }
+    }
+}
+
 #[test]
 fn windows_share_names_in_the_location_bar() {
     run("unc_address.fbt", |_| {});
@@ -560,6 +731,8 @@ fn windows_share_names_in_the_location_bar() {
 
 #[test]
 fn trash() {
+    #[cfg(windows)]
+    bin_sweep();
     run("trash.fbt", |t| {
         let w = t.join("w");
         std::fs::create_dir_all(&w).unwrap();
@@ -567,6 +740,8 @@ fn trash() {
             std::fs::write(w.join(n), n).unwrap();
         }
     });
+    #[cfg(windows)]
+    bin_sweep();
 }
 
 #[test]
@@ -577,6 +752,7 @@ fn zoom() {
     });
 }
 
+#[cfg(unix)]
 fn make_pictures(t: &Path) {
     std::fs::create_dir_all(t.join("pics")).unwrap();
     let script = format!(
@@ -585,6 +761,16 @@ fn make_pictures(t: &Path) {
         t.display()
     );
     assert!(Command::new("python3").arg("-c").arg(script).status().unwrap().success());
+}
+
+/// PIL is not a given on Windows boxes; the same twelve soft-color pictures come from GDK-Pixbuf.
+#[cfg(windows)]
+fn make_pictures(t: &Path) {
+    std::fs::create_dir_all(t.join("pics")).unwrap();
+    for i in 0..12u32 {
+        picture(640, 480, i as i32).savev(t.join(format!("pics/p{i:02}.png")), "png", &[]).unwrap();
+    }
+    std::fs::write(t.join("pics/notes.txt"), "x").unwrap();
 }
 
 fn cached_thumbnails(t: &Path) -> usize {
@@ -608,6 +794,10 @@ fn thumbnails_without_a_service() {
 
 #[test]
 fn status_bar_summary() {
+    if cfg!(windows) {
+        eprintln!("the summary fixture needs a file symlink, which this machine only allows elevated (Developer Mode off) — junction links are exercised by dirsize instead, skipping");
+        return;
+    }
     run("summary.fbt", |t| {
         let s = t.join("s");
         std::fs::create_dir_all(s.join("sub1")).unwrap();
@@ -615,8 +805,9 @@ fn status_bar_summary() {
         std::fs::write(s.join("a.bin"), vec![0u8; 1000]).unwrap();
         std::fs::write(s.join("b.bin"), vec![0u8; 500]).unwrap();
         std::fs::write(s.join("sub2/deep/c.bin"), vec![0u8; 2000]).unwrap();
-        // A symlink to something big must not count.
+        // A symlink to something big must not count. (Unix link fixture; see above.)
         std::fs::write(t.join("huge"), vec![0u8; 50_000]).unwrap();
+        #[cfg(unix)]
         std::os::unix::fs::symlink(t.join("huge"), s.join("sub1/link")).unwrap();
     });
 }
@@ -630,9 +821,9 @@ fn search() {
         std::fs::write(w.join("a/b/REPORT old.txt"), "r").unwrap();
         std::fs::write(w.join("a/report.md"), "r").unwrap();
         std::fs::write(w.join("notes.txt"), "n").unwrap();
-        let ok = Command::new("python3")
+        let ok = Command::new(python())
             .arg("-c")
-            .arg(format!("import zipfile\nz=zipfile.ZipFile('{}/stuff.zip','w')\nz.writestr('docs/inside-report.txt','x')\nz.close()", w.display()))
+            .arg(format!("import zipfile\nz=zipfile.ZipFile('{}/stuff.zip','w')\nz.writestr('docs/inside-report.txt','x')\nz.close()", pysafe(&w)))
             .status()
             .unwrap();
         assert!(ok.success());
@@ -650,24 +841,39 @@ fn click_into_empty_space() {
 
 #[test]
 fn custom_actions() {
-    // Any existing program makes the built-in "Open Terminal Here" appear, on any machine.
-    run_checked("custom_actions.fbt", &[("TERMINAL", "sh")], |t| {
-        let w = t.join("w");
-        std::fs::create_dir_all(w.join("sub")).unwrap();
-        std::fs::write(w.join("pic.png"), "png").unwrap();
-        std::fs::create_dir_all(t.join("config/Thunar")).unwrap();
-        std::fs::create_dir_all(t.join("config/failbrauwser")).unwrap();
-        std::fs::write(
-            t.join("config/Thunar/uca.xml"),
-            "<actions><action><name>Thunar Folder Action</name><command>touch %f/marker</command><patterns>*</patterns><directories/></action></actions>",
-        )
-        .unwrap();
-        std::fs::write(
-            t.join("config/failbrauwser/actions.xml"),
-            "<actions><action><name>Image Action</name><command>touch %f.done</command><patterns>*.png</patterns><image-files/></action></actions>",
-        )
-        .unwrap();
-    }, |_| {});
+    // Any existing program makes the built-in "Open Terminal Here" appear, on any machine;
+    // on Windows the built-in console always exists, so no TERMINAL hint is needed.
+    #[cfg(windows)]
+    let env: &[(&str, &str)] = &[];
+    #[cfg(unix)]
+    let env: &[(&str, &str)] = &[("TERMINAL", "sh")];
+    run_checked(
+        "custom_actions.fbt",
+        env,
+        |t| {
+            let w = t.join("w");
+            std::fs::create_dir_all(w.join("sub")).unwrap();
+            std::fs::write(w.join("pic.png"), "png").unwrap();
+            std::fs::create_dir_all(t.join("config/Thunar")).unwrap();
+            std::fs::create_dir_all(t.join("config/failbrauwser")).unwrap();
+            // The actions drop marker files: touch on Unix, cmd redirection on Windows.
+            #[cfg(unix)]
+            let (folder_cmd, image_cmd) = ("touch %f/marker", "touch %f.done");
+            #[cfg(windows)]
+            let (folder_cmd, image_cmd) = ("echo m > %f/marker", "echo done > %f.done");
+            std::fs::write(
+                t.join("config/Thunar/uca.xml"),
+                format!("<actions><action><name>Thunar Folder Action</name><command>{folder_cmd}</command><patterns>*</patterns><directories/></action></actions>"),
+            )
+            .unwrap();
+            std::fs::write(
+                t.join("config/failbrauwser/actions.xml"),
+                format!("<actions><action><name>Image Action</name><command>{image_cmd}</command><patterns>*.png</patterns><image-files/></action></actions>"),
+            )
+            .unwrap();
+        },
+        |_| {},
+    );
 }
 
 #[test]

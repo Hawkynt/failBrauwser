@@ -172,6 +172,7 @@ pub fn selection_sources(pane: &Pane) -> Vec<ClipSource> {
             (Item::Fs(e) | Item::Found(e, _), _) => Some(ClipSource::Local(e.path.clone())),
             (Item::FoundInArchive(a, n, _), _) => Some(ClipSource::Archive(a.clone(), n.path.clone())),
             (Item::Archive(n), Location::Archive(a)) => Some(ClipSource::Archive(a.clone(), n.path.clone())),
+            (Item::Remote(n), Location::Remote(r)) | (Item::FoundRemote(r, n, _), _) => Some(ClipSource::Remote(r.at.clone(), r.entry_path(&n.name), n.is_dir)),
             _ => None,
         })
         .collect()
@@ -225,7 +226,7 @@ pub fn transfer(w: &Window, sources: Vec<ClipSource>, dest: Location, mode: Mode
             let dir = dir.clone();
             let weak = Rc::downgrade(&w.me());
             // Copies to the same drive wait for each other.
-            let key = std::fs::metadata(&dir).ok().map(|m| std::os::unix::fs::MetadataExt::dev(&m));
+            let key = failbrauwser::osprim::device_of(&dir);
             // What went where, for Ctrl+Z.
             let pairs = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
             let p2 = pairs.clone();
@@ -377,7 +378,7 @@ fn ask_rename(w: &Window, item: Item, initial: String) {
                         w.app.remember(Undoable { what: format!("Rename “{old}”"), step: Step::Moved(vec![(e.path.clone(), target.clone())]) });
                         w.app.refresh_shares();
                     }
-                    Err(err) if err.raw_os_error() == Some(libc::EEXIST) => {
+                    Err(err) if failbrauwser::osprim::is_exists(&err) => {
                         let folder = target.symlink_metadata().is_ok_and(|m| m.is_dir());
                         let place = target.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "/".into());
                         name_taken(&w, item.clone(), new, &place, folder, {
@@ -398,8 +399,21 @@ fn ask_rename(w: &Window, item: Item, initial: String) {
                     }
                 });
             }
-            Item::Archive(_) => super::extensions::rename_non_local(&w, &pane, &item, &new),
-            Item::Trash(..) | Item::FoundInArchive(..) => {}
+            Item::Remote(_) if pane.has_name(&new) => {
+                // The server answers with its own "already exists" (FTP) or replaces (SFTP);
+                // renaming onto a name shown in the pane always asks first.
+                let folder = pane.item_named(&new).is_some_and(|i| i.is_dir_like());
+                let place = pane.location().title();
+                let (p, it) = (Rc::downgrade(&pane), item.clone());
+                name_taken(&w, item.clone(), new, &place, folder, move |w, new| {
+                    if let Some(pane) = p.upgrade() {
+                        super::extensions::rename_replacing_non_local(w, &pane, &it, &new);
+                    }
+                });
+            }
+            Item::Archive(_) | Item::Remote(_) => super::extensions::rename_non_local(&w, &pane, &item, &new),
+            // search results inside archives and on servers are renamed where they are
+            Item::Trash(..) | Item::FoundInArchive(..) | Item::FoundRemote(..) => {}
         }
     });
 }

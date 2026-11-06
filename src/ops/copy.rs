@@ -14,15 +14,19 @@ use super::device::{DeviceClass, classify};
 use super::fastcopy::{self, copy_contents, is_cancelled_error};
 use super::job::{Answer, JobCtx, Phase, Question};
 use super::names::free_name;
-use std::ffi::{CString, OsStr};
+use crate::osprim;
+use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
-use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
+#[cfg(unix)]
+use std::sync::OnceLock;
 use gtk::gio;
 use gtk::prelude::*;
 
@@ -48,6 +52,8 @@ struct FileTask {
     dst: PathBuf,
     size: u64,
     mode: u32,
+    /// Windows HIDDEN|SYSTEM|READONLY mask of the source (0 on Unix).
+    attrs: u32,
     atime: (i64, i64),
     mtime: (i64, i64),
     ino: u64,
@@ -56,7 +62,10 @@ struct FileTask {
 #[derive(Debug)]
 struct DirTask {
     dst: PathBuf,
+    /// Only Unix applies mode bits to folders; Windows carries `attrs`.
+    #[cfg(unix)]
     mode: u32,
+    attrs: u32,
     atime: (i64, i64),
     mtime: (i64, i64),
     /// We created it (so we own its metadata); false when merging into an existing folder.
@@ -73,6 +82,18 @@ struct Plan {
     move_leftovers: Vec<PathBuf>,
 }
 
+/// Sort key giving roughly sequential read order in the plan.
+#[cfg(unix)]
+fn inode_of(_src: &Path, meta: &fs::Metadata) -> u64 {
+    meta.ino()
+}
+
+#[cfg(windows)]
+fn inode_of(src: &Path, meta: &fs::Metadata) -> u64 {
+    osprim::identity(src, meta).id as u64
+}
+
+#[cfg(unix)]
 fn umask() -> u32 {
     static UMASK: OnceLock<u32> = OnceLock::new();
     *UMASK.get_or_init(|| {
@@ -84,32 +105,12 @@ fn umask() -> u32 {
     })
 }
 
-fn cpath(p: &Path) -> io::Result<CString> {
-    CString::new(p.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
-}
-
 fn times(m: &fs::Metadata) -> ((i64, i64), (i64, i64)) {
-    ((m.atime(), m.atime_nsec()), (m.mtime(), m.mtime_nsec()))
-}
-
-fn set_times_path(p: &Path, atime: (i64, i64), mtime: (i64, i64), follow: bool) {
-    let Ok(c) = cpath(p) else { return };
-    let ts = [
-        libc::timespec { tv_sec: atime.0, tv_nsec: atime.1 },
-        libc::timespec { tv_sec: mtime.0, tv_nsec: mtime.1 },
-    ];
-    let flags = if follow { 0 } else { libc::AT_SYMLINK_NOFOLLOW };
-    unsafe {
-        libc::utimensat(libc::AT_FDCWD, c.as_ptr(), ts.as_ptr(), flags);
-    }
+    osprim::times(m)
 }
 
 /// rename(2) that refuses to replace an existing target.
-pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
-    let (f, t) = (cpath(from)?, cpath(to)?);
-    let r = unsafe { libc::renameat2(libc::AT_FDCWD, f.as_ptr(), libc::AT_FDCWD, t.as_ptr(), libc::RENAME_NOREPLACE) };
-    if r == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
-}
+pub use crate::osprim::rename_noreplace;
 
 /// Renames `from` to `to`, replacing what is there: a file in one atomic step, a folder (or
 /// a file over a folder) by swapping the two and deleting the old one afterwards.
@@ -121,21 +122,16 @@ pub fn rename_replacing(from: &Path, to: &Path) -> io::Result<()> {
     };
     let source = fs::symlink_metadata(from)?;
     // "a.txt" to "A.txt" on a case-insensitive drive: the same file, just a new spelling.
-    if source.dev() == target.dev() && source.ino() == target.ino() {
+    if osprim::identity(from, &source) == osprim::identity(to, &target) {
         return fs::rename(from, to);
     }
     if !source.is_dir() && !target.is_dir() {
         return fs::rename(from, to);
     }
-    let (f, t) = (cpath(from)?, cpath(to)?);
-    let r = unsafe { libc::renameat2(libc::AT_FDCWD, f.as_ptr(), libc::AT_FDCWD, t.as_ptr(), libc::RENAME_EXCHANGE) };
-    if r == 0 {
-        // The old one now sits under the source's name.
-        return remove_any(from);
-    }
-    let err = io::Error::last_os_error();
-    if !matches!(err.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP)) {
-        return Err(err);
+    match osprim::rename_swap(from, to) {
+        Ok(()) => return remove_any(from), // the old one now sits under the source's name
+        Err(err) if osprim::is_rename_flag_unsupported(&err) => {}
+        Err(err) => return Err(err),
     }
     // Filesystems that cannot swap (FUSE, some network ones): delete first.
     remove_any(to)?;
@@ -152,17 +148,24 @@ fn remove_any(p: &Path) -> io::Result<()> {
 }
 
 /// Runs `op` until it succeeds, the user skips it (`Ok(None)`) or cancels (`Err`).
+/// Transient sharing blocks retry among themselves first — an AV scan or preview
+/// handler releases within a blink and should not interrupt the user.
 fn with_retry<T>(ctx: &JobCtx, path: &Path, mut op: impl FnMut() -> io::Result<T>) -> io::Result<Option<T>> {
+    let mut sharing = 0u32;
     loop {
         match op() {
             Ok(v) => return Ok(Some(v)),
             Err(e) if is_cancelled_error(&e) => return Err(e),
-            Err(e) => match ctx.ask(Question::Error { path: path.to_path_buf(), message: e.to_string() }) {
-                Answer::Retry => continue,
-                Answer::Cancel => return Err(fastcopy::cancelled()),
-                _ => {
-                    ctx.record_error(format!("{}: {}", path.display(), e));
-                    return Ok(None);
+            Err(e) if fastcopy::wait_sharing_retry(&e, &mut sharing) => continue,
+            Err(e) => {
+                sharing = 0;
+                match ctx.ask(Question::Error { path: path.to_path_buf(), message: e.to_string() }) {
+                    Answer::Retry => continue,
+                    Answer::Cancel => return Err(fastcopy::cancelled()),
+                    _ => {
+                        ctx.record_error(format!("{}: {}", path.display(), e));
+                        return Ok(None);
+                    }
                 }
             },
         }
@@ -194,8 +197,8 @@ fn resolve_conflict(ctx: &JobCtx, src: &Path, src_meta: &fs::Metadata, dst: &Pat
         dst: dst.to_path_buf(),
         src_size: src_meta.len(),
         dst_size: dst_meta.len(),
-        src_mtime: src_meta.mtime(),
-        dst_mtime: dst_meta.mtime(),
+        src_mtime: osprim::times(&src_meta).1.0,
+        dst_mtime: osprim::times(&dst_meta).1.0,
         dst_is_dir: dst_meta.is_dir(),
     };
     match ctx.ask(q) {
@@ -227,9 +230,14 @@ pub fn transfer_pairs(ctx: &JobCtx, sources: &[PathBuf], dest_dir: &Path, mode: 
     if let Some(dir) = sources.first().and_then(|s| s.parent()) {
         super::gvfs::check(dir, super::gvfs::TIMEOUT)?;
     }
-    let dest_meta = fs::metadata(dest_dir)?;
+    fs::metadata(dest_dir)?; // fail before any work if the destination folder is gone
     let dest_class = classify(dest_dir);
+    // The GIO backend copy exists to skip gvfsd-fuse; Windows UNC paths are native to the
+    // redirector, so the normal engine (with its own timeout checks) serves them.
+    #[cfg(unix)]
     let via_gio = is_gvfs_path(dest_dir);
+    #[cfg(windows)]
+    let via_gio = false;
     let mut plan = Plan::default();
     let mut tops = Vec::new();
 
@@ -252,7 +260,7 @@ pub fn transfer_pairs(ctx: &JobCtx, sources: &[PathBuf], dest_dir: &Path, mode: 
         }
 
         // Moves within one filesystem are a rename, whatever the size.
-        if mode == Mode::Move && src_meta.dev() == dest_meta.dev() {
+        if mode == Mode::Move && osprim::same_filesystem(src, dest_dir) {
             ctx.set_current(name.to_string_lossy());
             move_by_rename(ctx, src, &src_meta, &dst)?;
             tops.push((src.clone(), dst));
@@ -319,7 +327,7 @@ pub fn transfer_pairs(ctx: &JobCtx, sources: &[PathBuf], dest_dir: &Path, mode: 
                 }
             }
         } else {
-            with_retry(ctx, dst, || std::os::unix::fs::symlink(target, dst))?
+            with_retry(ctx, dst, || osprim::make_symlink(target, dst, fs::metadata(target).is_ok_and(|m| m.is_dir())))?
         };
         if made.is_some() && mode == Mode::Move {
             let _ = fs::remove_file(src);
@@ -329,8 +337,10 @@ pub fn transfer_pairs(ctx: &JobCtx, sources: &[PathBuf], dest_dir: &Path, mode: 
 
     // Folder metadata last (deepest first); then clean up after cross-device moves.
     for d in plan.dirs.iter().rev().filter(|d| d.created) {
+        #[cfg(unix)]
         let _ = fs::set_permissions(&d.dst, fs::Permissions::from_mode(d.mode & 0o7777));
-        set_times_path(&d.dst, d.atime, d.mtime, true);
+        osprim::set_attrs(&d.dst, d.attrs); // HIDDEN/SYSTEM/READONLY on Windows, no-op on Unix
+        osprim::set_times(&d.dst, d.atime, d.mtime, true);
     }
     if mode == Mode::Move {
         for dir in &plan.move_leftovers {
@@ -356,8 +366,8 @@ fn move_by_rename(ctx: &JobCtx, src: &Path, src_meta: &fs::Metadata, dst: &Path)
             ctx.files_done.fetch_add(1, Ordering::Relaxed);
             return Ok(());
         }
-        Err(e) if e.raw_os_error() == Some(libc::EEXIST) || e.raw_os_error() == Some(libc::ENOTEMPTY) => {}
-        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
+        Err(e) if osprim::is_exists(&e) || osprim::is_dir_not_empty(&e) => {}
+        Err(e) if osprim::is_rename_flag_unsupported(&e) => {
             // Old kernels or filesystems without RENAME_NOREPLACE: check, then rename.
             if fs::symlink_metadata(dst).is_err() {
                 return with_retry(ctx, src, || fs::rename(src, dst)).map(|_| ());
@@ -398,7 +408,7 @@ fn plan_tree(ctx: &JobCtx, src: &Path, meta: &fs::Metadata, dst: &Path, mode: Mo
         plan.links.push((src.to_path_buf(), target, dst.to_path_buf()));
     } else if ft.is_dir() {
         let exists = dst.is_dir();
-        plan.dirs.push(DirTask { dst: dst.to_path_buf(), mode: meta.mode(), atime, mtime, created: !exists });
+        plan.dirs.push(DirTask { dst: dst.to_path_buf(), attrs: osprim::attrs_of(src), atime, mtime, created: !exists, #[cfg(unix)] mode: osprim::mode_of(&meta) });
         let Some(entries) = with_retry(ctx, src, || fs::read_dir(src)?.collect::<io::Result<Vec<_>>>())? else { return Ok(()) };
         for e in entries {
             let child = e.path();
@@ -409,7 +419,7 @@ fn plan_tree(ctx: &JobCtx, src: &Path, meta: &fs::Metadata, dst: &Path, mode: Mo
             plan.move_leftovers.push(src.to_path_buf());
         }
     } else if ft.is_file() {
-        plan.files.push(FileTask { src: src.to_path_buf(), dst: dst.to_path_buf(), size: meta.len(), mode: meta.mode(), atime, mtime, ino: meta.ino() });
+        plan.files.push(FileTask { src: src.to_path_buf(), dst: dst.to_path_buf(), size: meta.len(), mode: osprim::mode_of(&meta), attrs: osprim::attrs_of(src), atime, mtime, ino: inode_of(src, meta) });
     } else {
         ctx.record_error(format!("{}: special files are not copied", src.display()));
     }
@@ -534,18 +544,55 @@ fn copy_one(ctx: &JobCtx, t: &FileTask, mode: Mode, throttle: bool, verify: bool
 }
 
 /// Compares a copy with its original, reading the copy from the device rather than from
-/// the page cache (it is flushed and dropped first).
+/// the page cache. On Unix the copy's pages are flushed and dropped first; on Windows
+/// the sector-aligned bulk is read back through `FILE_FLAG_NO_BUFFERING`, which cannot
+/// be served by cache at all, and only the sub-sector tail reads normally.
 pub fn verify_copy(ctx: &JobCtx, src: &Path, dst: &Path, counted: &mut u64) -> io::Result<()> {
     use std::io::Read;
     ctx.set_phase(Phase::Working);
     let mut a = fs::File::open(src)?;
     let mut b = fs::File::open(dst)?;
+    // Drop the copy's cached pages so the compare reads from the device.
+    #[cfg(unix)]
     unsafe {
         libc::fdatasync(b.as_raw_fd());
         libc::posix_fadvise(b.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
     }
     let mut x = vec![0u8; 1 << 20];
     let mut y = vec![0u8; 1 << 20];
+
+    #[cfg(windows)]
+    {
+        use std::io::Seek;
+        let sector = fastcopy::sector_size(dst) as usize;
+        let len = b.metadata()?.len() as usize;
+        let bulk = len - len % sector;
+        if bulk > 0 {
+            let mut uncached = fastcopy::UncachedReader::open(dst)?;
+            let mut off = 0usize;
+            while off < bulk {
+                ctx.wait_while_paused();
+                if ctx.is_cancelled() {
+                    return Err(fastcopy::cancelled());
+                }
+                let want = x.len().min(bulk - off);
+                let n = read_full(&mut a, &mut x[..want])?;
+                let m = uncached.read(&mut y[..want])?;
+                if m == 0 {
+                    return Err(io::Error::other("verification failed: the copy changed during verification"));
+                }
+                if n != m || x[..n] != y[..n] {
+                    return Err(io::Error::other("verification failed: the copy differs from the original"));
+                }
+                off += n;
+                ctx.add_bytes(n as u64);
+                *counted += n as u64;
+            }
+        }
+        // The tail loop continues both files from here; b must skip the bulk it has not read.
+        b.seek(std::io::SeekFrom::Start(bulk as u64))?;
+    }
+
     loop {
         ctx.wait_while_paused();
         if ctx.is_cancelled() {
@@ -576,22 +623,20 @@ pub fn verify_copy(ctx: &JobCtx, src: &Path, dst: &Path, counted: &mut u64) -> i
 }
 
 fn write_file(ctx: &JobCtx, t: &FileTask, dst: &Path, throttle: bool, buf: &mut Vec<u8>, counted: &mut u64) -> io::Result<()> {
-    let src = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&t.src)?;
+    let src = open_unfollowed(&t.src)?;
     let perm = t.mode & 0o7777;
-    let out = OpenOptions::new().write(true).create_new(true).mode(perm & 0o777).open(dst)?;
+    let out = open_new(dst, perm)?;
     let result = (|| {
         copy_contents(ctx, &src, &out, t.size, throttle, buf, counted)?;
         // Only when the umask changed what we asked for (saves a syscall per file).
+        #[cfg(unix)]
         if perm != (perm & 0o777 & !umask()) {
             out.set_permissions(fs::Permissions::from_mode(perm))?;
         }
-        let ts = [
-            libc::timespec { tv_sec: t.atime.0, tv_nsec: t.atime.1 },
-            libc::timespec { tv_sec: t.mtime.0, tv_nsec: t.mtime.1 },
-        ];
-        unsafe {
-            libc::futimens(out.as_raw_fd(), ts.as_ptr());
-        }
+        // HIDDEN/SYSTEM/READONLY travel with the copy once the bytes are written
+        // (read-only first would block the write itself); the Windows twin of the mode bits.
+        osprim::set_attrs(dst, t.attrs);
+        osprim::set_times(dst, t.atime, t.mtime, true);
         Ok(())
     })();
     drop(out);
@@ -599,6 +644,33 @@ fn write_file(ctx: &JobCtx, t: &FileTask, dst: &Path, throttle: bool, buf: &mut 
         let _ = fs::remove_file(dst);
     }
     result
+}
+
+/// Open a regular file, refusing to follow a symlink at the last component.
+#[cfg(unix)]
+fn open_unfollowed(p: &Path) -> io::Result<fs::File> {
+    OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(p)
+}
+
+#[cfg(windows)]
+fn open_unfollowed(p: &Path) -> io::Result<fs::File> {
+    // FILE_FLAG_OPEN_REPARSE_POINT: a reparse point opens as itself, matching O_NOFOLLOW.
+    use std::os::windows::fs::OpenOptionsExt;
+    OpenOptions::new().read(true).custom_flags(0x0020_0000).open(p)
+}
+
+/// Create a brand-new destination file with the source's permission shape.
+#[cfg(unix)]
+fn open_new(dst: &Path, perm: u32) -> io::Result<fs::File> {
+    OpenOptions::new().write(true).create_new(true).mode(perm & 0o777).open(dst)
+}
+
+#[cfg(windows)]
+fn open_new(dst: &Path, perm: u32) -> io::Result<fs::File> {
+    // The attribute shape (read-only/hidden/system) rides on FileTask.attrs and is
+    // applied after the copy; perm is the Unix view and carries nothing to set here.
+    let _ = perm;
+    OpenOptions::new().write(true).create_new(true).open(dst)
 }
 
 pub use super::gvfs::is_gvfs_path;
@@ -735,4 +807,61 @@ fn gio_copier() -> io::Result<std::sync::mpsc::Sender<GioCopy>> {
 /// The name of `p` for messages.
 pub fn display_name(p: &Path) -> String {
     p.file_name().unwrap_or(OsStr::new("/")).to_string_lossy().into_owned()
+}
+
+#[cfg(all(test, windows))] // the engine's Unix scenarios live in tests/copy_engine.rs
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(windows)] // the attribute twin of the Unix mode-bit scenario in tests/copy_engine.rs
+    fn readonly_and_hidden_travel_through_a_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir(&src).unwrap();
+        let f = src.join("locked.txt");
+        fs::write(&f, "secret").unwrap();
+        osprim::set_attrs(&f, 0x3); // READONLY | HIDDEN
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let ctx = JobCtx::new();
+        transfer(&ctx, &[src.clone()], &dest, Mode::Copy, &Options::default()).unwrap();
+        let out = dest.join("src").join("locked.txt");
+        assert_eq!(fs::read_to_string(&out).unwrap(), "secret");
+        assert_eq!(osprim::attrs_of(&out), 0x3);
+        assert!(fs::metadata(&out).unwrap().permissions().readonly());
+    }
+
+    #[test]
+    #[cfg(windows)] // verification must catch a byte change in bulk or tail through NO_BUFFERING
+    fn verification_reads_from_the_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = JobCtx::new();
+        for size in [0usize, 1, 500, 4096, 5000, (1 << 20) + 777] {
+            let a = dir.path().join(format!("a{size}"));
+            let b = dir.path().join(format!("b{size}"));
+            let data: Vec<u8> = (0..size).map(|i| (i * 13 % 251) as u8).collect();
+            fs::write(&a, &data).unwrap();
+            fs::write(&b, &data).unwrap();
+            verify_copy(&ctx, &a, &b, &mut 0).unwrap();
+            if size >= 2 {
+                let mut bad = data.clone();
+                let idx = if size > 4200 { 4200 } else { size - 2 };
+                bad[idx] ^= 0xFF;
+                fs::write(&b, &bad).unwrap();
+                assert!(verify_copy(&ctx, &a, &b, &mut 0).is_err(), "a changed byte at {idx} of {size} must be caught");
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(windows)] // measured behaviour: removal ignores READONLY, so moves need no clearing
+    fn removal_ignores_the_readonly_attribute() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("ro.txt");
+        fs::write(&f, "x").unwrap();
+        osprim::set_attrs(&f, 0x1);
+        fs::remove_file(&f).unwrap();
+        assert!(!f.exists());
+    }
 }

@@ -1,0 +1,3 @@
+# Base URL of the MSYS2 repository the Windows GTK stack is fetched from (bootstrap.ps1,
+# cross.sh). Any mirror of repo.msys2.org with the same layout works; put its URL here.
+https://repo.msys2.org

@@ -11,9 +11,13 @@ thread_local! {
     static ICONS: RefCell<HashMap<String, gio::Icon>> = RefCell::new(HashMap::new());
     static LINK_ICONS: RefCell<HashMap<String, gio::Icon>> = RefCell::new(HashMap::new());
     static DESCRIPTIONS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    static SPECIAL_DIRS: RefCell<Option<HashMap<PathBuf, &'static str>>> = const { RefCell::new(None) };
+}
+
+#[cfg(unix)]
+thread_local! {
     static USERS: RefCell<HashMap<u32, String>> = RefCell::new(HashMap::new());
     static GROUPS: RefCell<HashMap<u32, String>> = RefCell::new(HashMap::new());
-    static SPECIAL_DIRS: RefCell<Option<HashMap<PathBuf, &'static str>>> = const { RefCell::new(None) };
 }
 
 /// Drops the caches; used when the last window closes and the process idles as a daemon.
@@ -108,7 +112,15 @@ pub fn type_description(content_type: &str) -> String {
     })
 }
 
+/// The account behind an id (Unix only: Windows rows carry their names through the
+/// security descriptor instead — see [`entry_owner`]).
+#[cfg(unix)]
 fn lookup_name(id: u32, group: bool) -> String {
+    unix_lookup_name(id, group)
+}
+
+#[cfg(unix)]
+fn unix_lookup_name(id: u32, group: bool) -> String {
     let mut buf = vec![0u8; 4096];
     unsafe {
         if group {
@@ -128,12 +140,31 @@ fn lookup_name(id: u32, group: bool) -> String {
     id.to_string()
 }
 
+#[cfg(unix)]
 pub fn user_name(uid: u32) -> String {
     USERS.with(|c| c.borrow_mut().entry(uid).or_insert_with(|| lookup_name(uid, false)).clone())
 }
 
+#[cfg(unix)]
 pub fn group_name(gid: u32) -> String {
     GROUPS.with(|c| c.borrow_mut().entry(gid).or_insert_with(|| lookup_name(gid, true)).clone())
+}
+
+/// The owner name a row shows: the entry's own name on Windows (the loader asked the
+/// security descriptor), the uid's account name on Unix — what each platform is true by.
+pub fn entry_owner(e: &failbrauwser::fs::FileEntry) -> String {
+    #[cfg(windows)]
+    return e.owner.clone().unwrap_or_default();
+    #[cfg(not(windows))]
+    user_name(e.uid)
+}
+
+/// The group name a row shows (see [`entry_owner`]).
+pub fn entry_group(e: &failbrauwser::fs::FileEntry) -> String {
+    #[cfg(windows)]
+    return e.group.clone().unwrap_or_default();
+    #[cfg(not(windows))]
+    group_name(e.gid)
 }
 
 /// Opens a file with its default application, without blocking the UI.
@@ -211,9 +242,33 @@ pub fn is_remote_uri(text: &str) -> bool {
     }
 }
 
+/// Windows reads SMB and WebDAV addresses as network paths right away: the UNC path is
+/// the folder, and signing in to the share is the whole of "mounting". Other schemes have
+/// no share path behind them on the network itself.
+#[cfg(windows)]
+pub fn mount_remote(parent: &impl IsA<gtk::Window>, uri: &str, done: impl FnOnce(Result<PathBuf, String>) + 'static) {
+    let _ = parent;
+    let uri = uri.trim();
+    let Some(unc) = failbrauwser::win::wnet::unc_for_smb(uri).or_else(|| failbrauwser::win::wnet::unc_for_webdav(uri)) else {
+        done(Err(format!("Windows reaches shares over the network itself, and “{uri}” has no share path behind it (smb:// and WebDAV become share paths; well-formed sftp:// and ftp:// addresses open in the app's own browser before this is ever reached).")));
+        return;
+    };
+    let path = PathBuf::from(&unc);
+    // Sign in only when the address names a concrete share, and believe a failed sign-in
+    // only when the path is truly unreachable: guest-open shares need no session of ours.
+    if let Some(top) = failbrauwser::ops::gvfs::share_root(&path) {
+        if let Err(e) = failbrauwser::win::wnet::connect(&top.to_string_lossy(), None, None) && !path.exists() {
+            done(Err(format!("{e} ({})", top.display())));
+            return;
+        }
+    }
+    done(Ok(path));
+}
+
 /// Mounts a network address through GVfs (asking for a password if the server wants one)
 /// and hands back the local folder GVfs exposes it under. Nothing here touches that folder:
 /// on a share that stopped answering that would hang the UI (the pane checks it).
+#[cfg(unix)]
 pub fn mount_remote(parent: &impl IsA<gtk::Window>, uri: &str, done: impl FnOnce(Result<PathBuf, String>) + 'static) {
     let file = gio::File::for_uri(uri.trim());
     let op = gtk::MountOperation::new(Some(parent));

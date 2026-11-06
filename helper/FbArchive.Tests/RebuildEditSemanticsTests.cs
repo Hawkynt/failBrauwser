@@ -56,6 +56,7 @@ public class RebuildEditSemanticsTests {
 
   [Test]
   public void Remove_IsCaseSensitive() {
+    if (OperatingSystem.IsWindows()) Assert.Inconclusive("the fixture stages a.txt and A.TXT through the volume, and NTFS keeps them apart only with per-directory case sensitivity on (docs/WINDOWS.md)");
     var archive = this.MakeTarGz();
     ArchiveOperations.Remove(archive, ["A.TXT"]);
     Assert.That(Names(archive), Does.Contain("a.txt"));
