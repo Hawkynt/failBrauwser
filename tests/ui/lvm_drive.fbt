@@ -1,0 +1,22 @@
+# An encrypted USB disk with LVM volumes inside (a Linux installation): unlocking it opens
+# its volumes too; unmounting closes them and locks the disk again, and so does Eject.
+fake-stick Linux = $T/linux : sesame : lvm
+wait-side-drive Linux : Encrypted — click to unlock
+text sesame
+side-drive-click Linux : Encrypted — click to unlock
+wait-location $T/linux
+wait-row notes.txt
+wait-side-drive Linux : $T/linux
+wait-no-side-drive Linux : Encrypted — click to unlock
+side-drive-menu Linux : $T/linux : Unmount
+wait-side-drive Linux : Encrypted — click to unlock
+expect-tabs Drives
+action win.drives
+wait-drive-text Linux : Encrypted, locked
+text sesame
+drive-button Linux : Encrypted, locked : Unlock
+wait-location $T/linux
+action win.drives
+wait-drive-text Linux : % used
+drive-button Linux : % used : Eject
+wait-drive-text Linux : Encrypted, locked

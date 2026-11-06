@@ -43,6 +43,14 @@ fn main() -> gtk::glib::ExitCode {
         };
         return if ok { gtk::glib::ExitCode::SUCCESS } else { gtk::glib::ExitCode::FAILURE };
     }
+    // Opens the LVM volumes of an encrypted drive, as root through pkexec (see lvm.rs).
+    #[cfg(unix)]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).map(String::as_str) == Some("--lvm") {
+            std::process::exit(failbrauwser::lvm::helper_main(&args[2..]));
+        }
+    }
     // Answered without GTK or D-Bus: never opens a window.
     for a in std::env::args().skip(1) {
         match a.as_str() {

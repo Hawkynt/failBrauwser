@@ -12,6 +12,17 @@ pub mod desktoplink;
 pub mod devices;
 pub mod drives;
 pub mod location;
+#[cfg(unix)]
+pub mod lvm;
+/// LVM inside encrypted drives is a Linux matter (device-mapper, UDisks2, pkexec); the
+/// shared UDisks2 reading still names the type, and finds no LVM volumes on Windows.
+#[cfg(not(unix))]
+pub mod lvm {
+    pub const PV_TYPE: &str = "LVM2_member";
+    pub fn lvm_containers(_sys: &std::path::Path, devices: &[String], _containers: &[(String, String)]) -> Vec<Option<String>> {
+        vec![None; devices.len()]
+    }
+}
 pub mod network;
 pub mod ops;
 pub mod osprim;

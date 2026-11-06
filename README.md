@@ -231,7 +231,12 @@ open it, mounting it or connecting to the phone first; middle-click for a new ta
 to unmount, eject or see its properties. An encrypted (LUKS) stick says *Encrypted — click to
 unlock*: a click asks for its passphrase (again if it was wrong), unlocks and mounts it.
 Unmounting or ejecting it locks it again, as other file managers do; the drives page has an
-*Unlock* button for it. A drive plugged in moves the split down so the list fits; the bars
+*Unlock* button for it. A disk with LVM volumes inside the encryption (a whole Linux
+installation on a USB disk) opens too, also when its volume group has the same name as this
+computer's (`ArchinstallVg` on both): after the passphrase failBrauwser asks for the
+administrator password (polkit) and maps the volumes under names of its own, reading LVM's
+data on the disk but never changing it, and mounts them below `/run/media/<you>/`. Unmounting
+one of them closes them all and locks the disk again. A drive plugged in moves the split down so the list fits; the bars
 follow as drives fill up.
 
 **Links on the desktop:** *Create Link on Desktop* in the right-click menu of files and
