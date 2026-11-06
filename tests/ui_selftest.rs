@@ -44,18 +44,92 @@ fn run_checked(script: &str, env: &[(&str, &str)], setup: impl FnOnce(&Path), ch
         .output()
         .unwrap();
     #[cfg(windows)]
-    let out = Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(root.join("tests/ui/harness.ps1"))
-        .envs(env.iter().copied())
-        .arg(env!("CARGO_BIN_EXE_failbrauwser"))
-        .arg(root.join("tests/ui").join(script))
-        .arg(dir.path())
-        .output()
-        .unwrap();
-    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    assert!(out.status.success() && log.contains("SELFTEST OK"), "{script} failed:\n{log}");
+    let (ok, log) = if std::env::var("FB_UI_HARNESS").as_deref() == Ok("builtin") {
+        builtin_harness(Path::new(env!("CARGO_BIN_EXE_failbrauwser")), &root.join("tests/ui").join(script), dir.path(), env)
+    } else {
+        let out = Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(root.join("tests/ui/harness.ps1"))
+            .envs(env.iter().copied())
+            .arg(env!("CARGO_BIN_EXE_failbrauwser"))
+            .arg(root.join("tests/ui").join(script))
+            .arg(dir.path())
+            .output()
+            .unwrap();
+        (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+    };
+    #[cfg(unix)]
+    let (ok, log) = (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)));
+    assert!(ok && log.contains("SELFTEST OK"), "{script} failed:\n{log}");
     check(dir.path());
+}
+
+/// harness.ps1 done in-process, for hosts where PowerShell cannot run the script — Wine
+/// (winpack/cross.sh test sets FB_UI_HARNESS=builtin). Same contract: the substitutions,
+/// the isolated folders, the C locale, the 60 s kill and the noise filter.
+#[cfg(windows)]
+fn builtin_harness(bin: &Path, script: &Path, t: &Path, env: &[(&str, &str)]) -> (bool, String) {
+    use std::io::Read;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::time::{Duration, Instant};
+    // one run at a time, like the other harnesses: an exclusively opened lock file
+    let lock_path = std::env::temp_dir().join("failbrauwser-ui-test.lock");
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let _lock = loop {
+        match std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).share_mode(0).open(&lock_path) {
+            Ok(f) => break f,
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => return (false, format!("UI test lock held for 5 minutes: {e}")),
+        }
+    };
+    for d in ["config", "data", "cache"] {
+        std::fs::create_dir_all(t.join(d)).unwrap();
+    }
+    let ui = script.parent().unwrap();
+    let troot = t.to_str().unwrap().get(..2).filter(|q| q.ends_with(':')).map(|q| format!("{q}\\")).unwrap_or_default();
+    let text = std::fs::read_to_string(script).unwrap();
+    let text = text.replace("$TROOT", &troot).replace("$T", t.to_str().unwrap()).replace("$UI", ui.to_str().unwrap());
+    let fbt = t.join("script.fbt");
+    std::fs::write(&fbt, text).unwrap();
+    let mut child = Command::new(bin)
+        .current_dir(ui)
+        .env("XDG_CONFIG_HOME", t.join("config"))
+        .env("XDG_DATA_HOME", t.join("data"))
+        .env("XDG_CACHE_HOME", t.join("cache"))
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .env("FB_SELFTEST", &fbt)
+        .envs(env.iter().copied())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut pipes = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let out_reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = pipes.0.read_to_string(&mut s);
+        s
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = pipes.1.read_to_string(&mut s);
+        s
+    });
+    let started = Instant::now();
+    let ok = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status.success();
+        }
+        if started.elapsed() > Duration::from_secs(60) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let all = format!("{}\n{}", out_reader.join().unwrap_or_default(), err_reader.join().unwrap_or_default());
+    let log: Vec<&str> = all.lines().filter(|l| !["dbus-daemon", "SpiRegistry", "fusermount"].iter().any(|n| l.contains(n))).collect();
+    (ok, log.join("\n"))
 }
 
 #[test]
@@ -259,7 +333,8 @@ fn file_chooser_for_other_applications() {
 
 #[test]
 fn file_chooser_through_xdg_desktop_portal() {
-    if !Path::new("/usr/lib/xdg-desktop-portal").exists() && !Path::new("/usr/libexec/xdg-desktop-portal").exists() {
+    // Linux only, said outright: under Wine a rooted path reads the Linux root through Z:.
+    if cfg!(windows) || (!Path::new("/usr/lib/xdg-desktop-portal").exists() && !Path::new("/usr/libexec/xdg-desktop-portal").exists()) {
         eprintln!("xdg-desktop-portal not installed, skipping");
         return;
     }
@@ -412,7 +487,8 @@ fn size_column_adds_up_folders() {
 fn default_application_from_properties() {
     // The desktop's own applications; any two that open text will do.
     let apps = ["org.xfce.mousepad.desktop", "vim.desktop"];
-    if !apps.iter().all(|a| Path::new("/usr/share/applications").join(a).exists()) {
+    // Linux only, said outright: under Wine a rooted path reads the Linux root through Z:.
+    if cfg!(windows) || !apps.iter().all(|a| Path::new("/usr/share/applications").join(a).exists()) {
         eprintln!("mousepad and vim not installed, skipping");
         return;
     }

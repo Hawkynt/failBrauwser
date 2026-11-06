@@ -61,4 +61,4 @@ mingw-w64-ucrt-x86_64-xz-5.8.4-1-any.pkg.tar.zst
 mingw-w64-ucrt-x86_64-zlib-1.3.2-3-any.pkg.tar.zst
 mingw-w64-ucrt-x86_64-zstd-1.5.7-2-any.pkg.tar.zst
 
-# fetched 2026-11-04 07:43:23Z from https://jhcnartifactory.global.jhcn.net/artifactory/msys2
+# fetched 2026-11-04 07:43:23Z from a mirror of https://repo.msys2.org
