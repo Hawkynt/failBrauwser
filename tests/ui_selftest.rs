@@ -725,6 +725,18 @@ fn bin_sweep() {
 }
 
 #[test]
+fn encrypted_drive_with_lvm_inside() {
+    if cfg!(windows) {
+        eprintln!("LVM volumes inside encrypted drives are a Linux matter (device-mapper, UDisks2), skipping");
+        return;
+    }
+    run("lvm_drive.fbt", |t| {
+        std::fs::create_dir_all(t.join("linux")).unwrap();
+        std::fs::write(t.join("linux/notes.txt"), "x").unwrap();
+    });
+}
+
+#[test]
 fn windows_share_names_in_the_location_bar() {
     run("unc_address.fbt", |_| {});
 }

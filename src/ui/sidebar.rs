@@ -254,6 +254,7 @@ fn drive_place(v: &Volume) -> String {
             }
         }
         None if v.is_locked() => "Encrypted — click to unlock".into(),
+        None if v.lvm_closed() => "Encrypted, unlocked — click to open".into(),
         None if v.mountable => "Not mounted — click to mount".into(),
         None => "Not mounted".into(),
     }
@@ -600,7 +601,7 @@ impl Sidebar {
         let vol = v.clone();
         if super::drives::no_storage(v) {
             add("_Retry", Box::new(move |_, w| super::drives::reconnect_device(w, &w.current_pane(), &vol)));
-        } else if v.mount_point().is_some() || v.is_device() || v.mountable || v.is_locked() {
+        } else if v.mount_point().is_some() || v.is_device() || v.mountable || v.is_locked() || v.lvm_closed() {
             add("_Open", Box::new(move |sb, _| sb.open_drive(&vol, false)));
             let vol = v.clone();
             add("Open in New _Tab", Box::new(move |sb, _| sb.open_drive(&vol, true)));
