@@ -146,8 +146,8 @@ copy installed for everyone (`--system`) is updated from a terminal. `scripts/pa
 pressed, and the last step always stays in view. Click the empty space right of the last
 button (the text cursor shows where; or press
 <kbd>Ctrl</kbd>+<kbd>L</kbd>) to type a location; <kbd>Enter</kbd> or <kbd>Esc</kbd> returns to
-the buttons. A network address (`smb://host/share`, `sftp://host/dir`, …) is mounted
-through GVfs, asking for a password if needed, and opens as its local GVfs folder.
+the buttons. A network address (`smb://host/share`, `\\host\share`, `sftp://host/dir`, …) is
+mounted through GVfs, asking for a password if needed, and opens as its local GVfs folder.
 While you type one, the bar suggests addresses opened before, SMB servers found on the
 local network (searched in the background, about two seconds) and, once a server is typed
 with its slash, that server's shares. Home and Drives are in the side panel.
