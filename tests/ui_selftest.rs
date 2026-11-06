@@ -554,6 +554,14 @@ fn path_bar() {
 }
 
 #[test]
+fn encrypted_drive_with_lvm_inside() {
+    run("lvm_drive.fbt", |t| {
+        std::fs::create_dir_all(t.join("linux")).unwrap();
+        std::fs::write(t.join("linux/notes.txt"), "x").unwrap();
+    });
+}
+
+#[test]
 fn windows_share_names_in_the_location_bar() {
     run("unc_address.fbt", |_| {});
 }
