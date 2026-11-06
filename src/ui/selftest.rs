@@ -925,11 +925,15 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             super::phones::add_fake(name.trim(), PathBuf::from(dir.trim()));
         }
         "fake-stick" => {
-            // fake-stick <label> = <folder> [: <passphrase>]: a USB stick that mounts on the
-            // folder, encrypted when a passphrase is given.
-            let (label, rest) = arg.split_once(" = ").ok_or("usage: fake-stick <label> = <folder> [: <passphrase>]")?;
+            // fake-stick <label> = <folder> [: <passphrase> [: lvm]]: a USB stick that mounts on
+            // the folder, encrypted when a passphrase is given, with an LVM volume inside.
+            let (label, rest) = arg.split_once(" = ").ok_or("usage: fake-stick <label> = <folder> [: <passphrase> [: lvm]]")?;
             let (dir, pass) = rest.split_once(" : ").map_or((rest, None), |(d, p)| (d, Some(p.trim().to_string())));
-            super::drives::add_fake(label.trim(), PathBuf::from(dir.trim()), pass);
+            let (pass, lvm) = match pass.as_deref().and_then(|p| p.strip_suffix(" : lvm")) {
+                Some(p) => (Some(p.trim().to_string()), true),
+                None => (pass, false),
+            };
+            super::drives::add_fake(label.trim(), PathBuf::from(dir.trim()), pass, lvm);
         }
         "fake-host" => {
             // fake-host <name> = <share>:<folder>, … [: <password>]: a computer on the network
