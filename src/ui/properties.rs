@@ -218,7 +218,11 @@ pub fn show(w: &Window) {
 fn link_page(w: &Window, d: &gtk::Dialog, e: &failbrauwser::fs::FileEntry) -> Option<gtk::Widget> {
     use failbrauwser::links;
     let is_link = e.kind == failbrauwser::fs::Kind::Symlink;
-    let overlay = links::overlay(is_link, e.junction, e.broken, e.kind == failbrauwser::fs::Kind::File, e.nlink)?;
+    let mounted = (e.kind == failbrauwser::fs::Kind::Dir).then(|| links::volume::shown_at(&e.path)).flatten();
+    let overlay = links::overlay(is_link, e.junction, e.broken, e.kind == failbrauwser::fs::Kind::File, e.nlink);
+    if overlay.is_none() && mounted.is_none() {
+        return None;
+    }
     let grid = gtk::Grid::new();
     grid.set_column_spacing(12);
     grid.set_row_spacing(6);
@@ -230,6 +234,17 @@ fn link_page(w: &Window, d: &gtk::Dialog, e: &failbrauwser::fs::FileEntry) -> Op
             _ => grid.set_margin_end(12),
         }
     }
+    if let Some((volume, places)) = mounted {
+        // A Volume Mountpoint: the drive shown here, and where else it is.
+        row(&grid, 0, "Kind:", "Volume Mountpoint");
+        row(&grid, 1, "Volume:", &volume);
+        let places: Vec<String> = places.iter().map(|p| p.display().to_string()).collect();
+        if !places.is_empty() {
+            row(&grid, 2, "Also shown at:", &places.join("\n"));
+        }
+        return Some(grid.upcast());
+    }
+    let Some(overlay) = overlay else { return None };
     let kind = match overlay {
         links::Overlay::Hard => format!("Hard link ({} names)", e.nlink),
         links::Overlay::Junction => "Junction".into(),

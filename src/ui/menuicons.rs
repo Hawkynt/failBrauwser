@@ -73,6 +73,8 @@ pub fn icon_names(label: &str) -> &'static [&'static str] {
         "Create Link here" | "Drop As" | "Pick Link Source" | "Symbolic Link" | "Hard Link" | "Junction" | "Shell Link (.desktop)" | "Shell Link (.lnk)" => &["emblem-symbolic-link", "insert-link"],
         "Replace Symbolic Link" | "Replace Junction" | "Symbolic Link Copy" | "Junction Copy" => &["emblem-symbolic-link", "edit-find-replace"],
         "Smart Copy" | "Hardlink Clone" | "Symbolic Link Clone" => &["edit-copy", "emblem-symbolic-link"],
+        "Volume Mountpoint" => &["drive-harddisk", "insert-link"],
+        "Unmount Volume" => &["media-eject", "drive-harddisk"],
         "Smart Mirror" => &["emblem-synchronizing", "view-refresh"],
         "DeLorean Copy" => &["document-open-recent", "appointment-soon", "edit-copy"],
         "Cancel" | "Cancel Link Creation" => &["process-stop", "window-close"],

@@ -128,12 +128,14 @@ pub fn install_app_actions(ctx: &Rc<AppCtx>) {
     });
     app.add_action(&a);
 
-    // Links (README: Links): overlays, relative symbolic links, Smart Move, outer links.
+    // Links (README: Links): overlays, relative symbolic links, Smart Move, Backup Mode, outer
+    // links.
     super::linkicons::set_enabled(ctx.settings.borrow().link_overlays);
     for (name, get, set) in [
         ("link-overlays", (|s: &failbrauwser::config::Settings| s.link_overlays) as fn(&failbrauwser::config::Settings) -> bool, (|s: &mut failbrauwser::config::Settings, v| s.link_overlays = v) as fn(&mut failbrauwser::config::Settings, bool)),
         ("relative-symlinks", |s| s.relative_symlinks, |s, v| s.relative_symlinks = v),
         ("smart-move", |s| s.smart_move, |s, v| s.smart_move = v),
+        ("backup-mode", |s| s.backup_mode, |s, v| s.backup_mode = v),
     ] {
         let a = gio::SimpleAction::new_stateful(name, None, &get(&ctx.settings.borrow()).to_variant());
         let c = Rc::downgrade(ctx);
@@ -247,6 +249,7 @@ pub fn menubar_model() -> gio::Menu {
             item(l, "Link _Overlays", "app.link-overlays");
             item(l, "_Relative Symbolic Links", "app.relative-symlinks");
             item(l, "_Smart Move", "app.smart-move");
+            item(l, "_Backup Mode", "app.backup-mode");
         });
         let outer = gio::Menu::new();
         outer.append(Some("_Unroll"), Some("app.outer-links::unroll"));

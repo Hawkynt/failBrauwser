@@ -224,7 +224,7 @@ pub fn transfer(w: &Window, sources: Vec<ClipSource>, dest: Location, mode: Mode
             let title = format!("{verb} {} to “{}”", count_label(paths.len(), "item"), dest.title());
             let opts = copy::Options { smooth_writes: w.app.settings.borrow().smooth_writes, workers: None, verify: w.app.settings.borrow().verify_copies };
             // Smart Move (README: Links): links inside moved folders keep reaching their targets.
-            let smart = (mode == Mode::Move && w.app.settings.borrow().smart_move).then(|| w.app.settings.borrow().relative_symlinks);
+            let smart = (mode == Mode::Move && w.app.settings.borrow().smart_move).then(|| super::links::SmartMove::of(w));
             let dir = dir.clone();
             let weak = Rc::downgrade(&w.me());
             // Copies to the same drive wait for each other.
@@ -239,8 +239,8 @@ pub fn transfer(w: &Window, sources: Vec<ClipSource>, dest: Location, mode: Mode
                 move |ctx| {
                     let made = copy::transfer_pairs(ctx, &paths, &dir, mode, &opts)?;
                     *p2.lock().unwrap() = made.clone();
-                    if let Some(relative) = smart {
-                        for e in super::links::smart_move(&made, relative) {
+                    if let Some(how) = smart {
+                        for e in super::links::smart_move(&made, how) {
                             ctx.record_error(e);
                         }
                     }
@@ -381,13 +381,11 @@ fn ask_rename(w: &Window, item: Item, initial: String) {
                 let target = e.path.with_file_name(&new);
                 match copy::rename_noreplace(&e.path, &target) {
                     Ok(()) => {
-                        let (smart, relative) = {
-                            let st = w.app.settings.borrow();
-                            (st.smart_move, st.relative_symlinks)
-                        };
+                        let smart = w.app.settings.borrow().smart_move;
                         if smart && target.is_dir() {
                             let pair = vec![(e.path.clone(), target.clone())];
-                            std::thread::spawn(move || super::links::smart_move(&pair, relative));
+                            let how = super::links::SmartMove::of(&w);
+                            std::thread::spawn(move || super::links::smart_move(&pair, how));
                         }
                         pane.select_when_present(vec![OsString::from(&new)]);
                         w.app.remember(Undoable { what: format!("Rename “{old}”"), step: Step::Moved(vec![(e.path.clone(), target.clone())]) });

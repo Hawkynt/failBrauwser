@@ -121,6 +121,9 @@ pub struct Settings {
     pub smart_move: bool,
     /// What the tree operations do with links pointing outside the tree.
     pub outer_links: crate::links::tree::Outer,
+    /// Backup Mode: the tree operations, Smart Move and link replacing run as the administrator
+    /// and keep owners, permissions, extended attributes and holes.
+    pub backup_mode: bool,
 }
 
 impl Default for Settings {
@@ -151,6 +154,7 @@ impl Default for Settings {
             relative_symlinks: true,
             smart_move: true,
             outer_links: crate::links::tree::Outer::Unroll,
+            backup_mode: false,
         }
     }
 }
@@ -195,6 +199,7 @@ impl Settings {
         b("link_overlays", &mut s.link_overlays);
         b("relative_symlinks", &mut s.relative_symlinks);
         b("smart_move", &mut s.smart_move);
+        b("backup_mode", &mut s.backup_mode);
         if let Ok(v) = kf.string(GROUP, "outer_links") {
             s.outer_links = crate::links::tree::Outer::from_id(&v);
         }
@@ -267,6 +272,7 @@ impl Settings {
         kf.set_boolean(GROUP, "link_overlays", self.link_overlays);
         kf.set_boolean(GROUP, "relative_symlinks", self.relative_symlinks);
         kf.set_boolean(GROUP, "smart_move", self.smart_move);
+        kf.set_boolean(GROUP, "backup_mode", self.backup_mode);
         kf.set_string(GROUP, "outer_links", self.outer_links.id());
         kf.set_integer(GROUP, "window_width", self.window_width);
         kf.set_integer(GROUP, "window_height", self.window_height);
@@ -355,6 +361,7 @@ mod tests {
         s.relative_symlinks = false;
         s.smart_move = false;
         s.outer_links = crate::links::tree::Outer::Splice;
+        s.backup_mode = true;
         s.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), s);
     }

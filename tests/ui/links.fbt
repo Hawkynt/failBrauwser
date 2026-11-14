@@ -71,8 +71,30 @@ open $T/dest/sub
 expect-link-overlay inner.txt = hard
 expect-link-overlay to-inner = symbolic
 
-# Two folders: no DeLorean Copy (one folder at a time).
 open $T/d
+# A drive (here a link to the top folder of the root drive) can be shown in a folder as a
+# Volume Mountpoint; a plain folder cannot.
+right-drop drive -> $T/dest
+expect-drop-menu-item Create Link here/Volume Mountpoint
+drop-menu Cancel
+right-drop sub -> $T/dest
+expect-no-drop-menu-item Create Link here/Volume Mountpoint
+drop-menu Cancel
+
+# Backup Mode: the Smart Copy runs as the administrator (root of a user namespace here instead of
+# pkexec) and copies the file nobody may read, keeping its permissions.
+expect-file-mode $T/d/vault/sealed.txt = 0
+setenv FAILBRAUWSER_ELEVATE=unshare -r
+action app.backup-mode
+right-drop vault -> $T/dest3
+drop-menu Drop As/Smart Copy
+wait-exists $T/dest3/vault/sealed.txt
+wait-no-jobs
+expect-file-mode $T/dest3/vault/sealed.txt = 0
+action app.backup-mode
+setenv FAILBRAUWSER_ELEVATE=
+
+# Two folders: no DeLorean Copy (one folder at a time).
 right-drop sub | plain.txt -> $T/dest
 expect-no-drop-menu-item Drop As/DeLorean Copy
 drop-menu Cancel

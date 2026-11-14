@@ -21,7 +21,7 @@
 //! `expect-default-app <content type> = <desktop id>`, `fake-phone <name> = <folder>`,
 //! `wait-drive-text <title> : <text>`, `wait-no-drive-text <title> : <text>`,
 //! `drive-button <title> : <row text> : <button>`, `expect-tabs <a | b>`, `expect-title <text>`,
-//! `fake-share <folder>`, `fake-image <file> = <folder>`, `sleep-begin`, `sleep-end`, `expect-menu-item <label>`, `wait-compare-rows <rows>`, `wait-duplicates <n>`, `setenv NAME=value`, `wait-update-checked`, `expect-update-status <text>`, `update-choose <release|source>`, `update-start`, `wait-update-done`, `run <command>`, `wait-file-text <path> = <text>`, `wait-chooser`, `chooser-open <folder>`, `chooser-select <a | b>`, `expect-chooser-rows <a | b>`, `chooser-name <text>`, `chooser-filter <n>`, `chooser-accept`, `chooser-cancel`, `chooser-activate`, `expect-duplicate-group <*kept | …>`, `duplicate-keep <name>`, `duplicate-click <delete|skip|previous>`, `compare-show-identical <on|off>`, `compare-copy <left|right>`, `close-compare`, `expect-no-menu-item <label>`, `fake-job <seconds> <MB>`, `wait-progress-chart <points>`, `expect-progress-text <text>`, `progress-snapshot <png>`,
+//! `fake-share <folder>`, `fake-image <file> = <folder>`, `sleep-begin`, `sleep-end`, `expect-menu-item <label>`, `wait-compare-rows <rows>`, `wait-duplicates <n>`, `setenv NAME=value`, `wait-update-checked`, `expect-update-status <text>`, `update-choose <release|source>`, `update-start`, `wait-update-done`, `run <command>`, `wait-file-text <path> = <text>`, `wait-chooser`, `chooser-open <folder>`, `chooser-select <a | b>`, `expect-chooser-rows <a | b>`, `chooser-name <text>`, `chooser-filter <n>`, `chooser-accept`, `chooser-cancel`, `chooser-activate`, `expect-duplicate-group <*kept | …>`, `duplicate-keep <name>`, `duplicate-click <delete|skip|previous>`, `compare-show-identical <on|off>`, `compare-copy <left|right>`, `close-compare`, `expect-no-menu-item <label>`, `expect-file-mode <path> = <octal>`, `fake-job <seconds> <MB>`, `wait-progress-chart <points>`, `expect-progress-text <text>`, `progress-snapshot <png>`,
 //! `expect-network-subtitle <row> = <text>`, `wait-side-drive <name> : <place>`, `wait-no-side-drive <name>`, `expect-no-side-drive-at <path>`,
 //! `side-drive-click <name> : <place>`, `side-drive-menu <name> : <place> : <item>`,
 //! the Git steps of `git/testing.rs`,
@@ -914,6 +914,15 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         }
         "text" => TEXT.with(|t| t.borrow_mut().push_back(arg.to_string())),
         "wait-idle" => wait(r, |r| Ok(idle(r))),
+        "expect-file-mode" => {
+            // expect-file-mode <path> = <octal permission bits>
+            let (p, want) = arg.split_once(" = ").ok_or("usage: expect-file-mode <path> = <octal>")?;
+            let want = u32::from_str_radix(want.trim(), 8).map_err(|e| e.to_string())?;
+            let got = failbrauwser::osprim::mode_of(&std::fs::symlink_metadata(p).map_err(|e| format!("{p}: {e}"))?) & 0o7777;
+            if got != want {
+                return Err(format!("{p} has mode {got:o}, not {want:o}"));
+            }
+        }
         "wait-exists" => {
             let p = arg.to_string();
             wait(r, move |r| Ok(Path::new(&p).exists() && idle(r)));

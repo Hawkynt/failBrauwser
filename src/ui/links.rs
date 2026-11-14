@@ -35,7 +35,32 @@ const TREE_OPS: [(&str, tree::TreeOp); 4] = [
 
 pub fn options(w: &Window) -> tree::Options {
     let s = w.app.settings.borrow();
-    tree::Options { outer: s.outer_links, relative: s.relative_symlinks }
+    tree::Options { outer: s.outer_links, relative: s.relative_symlinks, backup: s.backup_mode }
+}
+
+/// failBrauwser itself as the administrator, for Backup Mode and Volume Mountpoints.
+fn admin() -> std::io::Result<links::helper::Elevation> {
+    Ok(links::helper::Elevation::admin(&std::env::current_exe()?))
+}
+
+/// Whether Backup Mode runs through the administrator helper (Linux); Windows enables its
+/// backup privileges in the process itself.
+fn through_helper(opts: tree::Options) -> bool {
+    opts.backup && cfg!(unix)
+}
+
+/// How Smart Move runs: relative links or not, Backup Mode or not.
+#[derive(Debug, Clone, Copy)]
+pub struct SmartMove {
+    pub relative: bool,
+    pub backup: bool,
+}
+
+impl SmartMove {
+    pub fn of(w: &Window) -> SmartMove {
+        let s = w.app.settings.borrow();
+        SmartMove { relative: s.relative_symlinks, backup: s.backup_mode }
+    }
 }
 
 fn local_paths(sources: &[ClipSource]) -> Vec<PathBuf> {
@@ -57,6 +82,10 @@ fn item(label: &str, action: &str, id: &str) -> gio::MenuItem {
         "link-junction" => Some(links::Overlay::Junction),
         _ => None,
     };
+    if id == "link-mountpoint" {
+        // The overlays draw links; a drive is a drive.
+        it.set_icon(&gio::ThemedIcon::from_names(&["drive-harddisk", "drive-removable-media"]));
+    }
     if let Some(o) = overlay {
         let icon = gio::BytesIcon::new(&glib::Bytes::from_owned(super::linkicons::svg(o).into_bytes()));
         it.set_icon(&icon);
@@ -196,6 +225,8 @@ pub fn perform(w: &Rc<Window>, id: &str, sources: &[ClipSource], dest: &Location
             let Some(dir) = dir else { return };
             if id == "link-copy" {
                 copy_links(w, &paths, &dir);
+            } else if id == "link-mountpoint" {
+                mount_volumes(w, paths, dir);
             } else if let Some(kind) = id.strip_prefix("link-").and_then(LinkKind::from_id) {
                 make_links(w, kind, &paths, &dir);
             } else if let Some((_, op)) = TREE_OPS.iter().find(|(i, _)| *i == id) {
@@ -220,6 +251,62 @@ fn make_links(w: &Window, kind: LinkKind, paths: &[PathBuf], dir: &Path) {
         super::util::show_error(&w.win, &format!("Cannot create {}", kind.label().to_lowercase()), &errors.join("\n"));
     }
     fileops::select_created(w, &Location::Dir(dir.to_path_buf()), &made);
+}
+
+/// Volume Mountpoints of the drives `paths` (their top folders) in `dir`: a job, since the
+/// administrator password is asked for meanwhile.
+fn mount_volumes(w: &Window, paths: Vec<PathBuf>, dir: PathBuf) {
+    let title = format!("Mounting {} in “{}”", count(paths.len()), folder_name(&dir));
+    let weak = Rc::downgrade(&w.me());
+    let d2 = dir.clone();
+    w.app.jobs.start(
+        w.win.upcast_ref(),
+        title,
+        move |ctx| {
+            ctx.set_phase(failbrauwser::ops::job::Phase::Working);
+            let admin = admin()?;
+            let mut made = Vec::new();
+            for p in &paths {
+                match links::volume::create(p, &d2, &admin) {
+                    Ok(f) => made.push(f),
+                    Err(e) => ctx.record_error(format!("{}: {e}", p.display())),
+                }
+            }
+            Ok(made)
+        },
+        move |outcome| {
+            if let (Some(w), Outcome::Done(made)) = (weak.upgrade(), outcome) {
+                fileops::select_created(&w, &Location::Dir(dir.clone()), made);
+            }
+        },
+    );
+}
+
+/// *Unmount Volume*: the drive taken out of the Volume Mountpoint `folder`.
+fn unmount_volume(w: &Window, folder: PathBuf) {
+    let title = format!("Unmounting “{}”", folder_name(&folder));
+    let weak = Rc::downgrade(&w.me());
+    w.app.jobs.start(
+        w.win.upcast_ref(),
+        title,
+        move |ctx| {
+            ctx.set_phase(failbrauwser::ops::job::Phase::Working);
+            links::volume::remove(&folder, &admin()?)?;
+            Ok(Vec::new())
+        },
+        move |_| {
+            if let Some(w) = weak.upgrade() {
+                w.current_pane().reload();
+            }
+        },
+    );
+}
+
+/// A tree run through the administrator helper, reporting into the job.
+fn elevated(ctx: &failbrauwser::ops::job::JobCtx, args: Vec<std::ffi::OsString>) -> std::io::Result<tree::Report> {
+    let mut step = progress(ctx);
+    let reply = admin()?.run(args, &mut |p| step(Path::new(p)))?;
+    Ok(reply.report())
 }
 
 fn copy_links(w: &Window, paths: &[PathBuf], dir: &Path) {
@@ -278,7 +365,14 @@ fn run_tree(w: &Window, op: tree::TreeOp, paths: Vec<PathBuf>, dir: PathBuf) {
         move |ctx| {
             ctx.set_phase(failbrauwser::ops::job::Phase::Working);
             let pairs = tree::destinations(&paths, &d2);
-            let r = tree::run(op, &pairs, opts, &mut progress(ctx));
+            let r = if through_helper(opts) {
+                elevated(ctx, links::helper::tree_args(op, opts, &pairs))?
+            } else {
+                if opts.backup {
+                    links::backup::enable_privileges()?;
+                }
+                tree::run(op, &pairs, opts, &mut progress(ctx))
+            };
             finish(ctx, &r)?;
             Ok(pairs.into_iter().map(|(_, d)| d).collect())
         },
@@ -300,7 +394,16 @@ fn delorean(w: &Window, source: PathBuf, dir: PathBuf) {
         title,
         move |ctx| {
             ctx.set_phase(failbrauwser::ops::job::Phase::Working);
-            let (made, r) = tree::delorean(&source, &d2, &tree::stamp_now(), opts, &mut progress(ctx))?;
+            let stamp = tree::stamp_now();
+            let (made, r) = if through_helper(opts) {
+                let name = source.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                (d2.join(format!("{name} - {stamp}")), elevated(ctx, links::helper::delorean_args(opts, &stamp, &source, &d2))?)
+            } else {
+                if opts.backup {
+                    links::backup::enable_privileges()?;
+                }
+                tree::delorean(&source, &d2, &stamp, opts, &mut progress(ctx))?
+            };
             finish(ctx, &r)?;
             Ok(vec![made])
         },
@@ -313,14 +416,24 @@ fn delorean(w: &Window, source: PathBuf, dir: PathBuf) {
 }
 
 /// Smart Move after `pairs` (from, to) were moved: the links inside moved folders reach what
-/// they reached before (README: Links). Runs where it is called (a job's worker thread).
-pub fn smart_move(pairs: &[(PathBuf, PathBuf)], relative: bool) -> Vec<String> {
+/// they reached before (README: Links); in Backup Mode through the administrator helper. Runs
+/// where it is called (a worker thread).
+pub fn smart_move(pairs: &[(PathBuf, PathBuf)], how: SmartMove) -> Vec<String> {
+    let folders: Vec<(PathBuf, PathBuf)> = pairs.iter().filter(|(_, to)| std::fs::symlink_metadata(to).is_ok_and(|m| m.is_dir())).cloned().collect();
+    if folders.is_empty() {
+        return Vec::new();
+    }
+    if how.backup && cfg!(unix) {
+        let reply = admin().and_then(|a| a.run(links::helper::smart_move_args(how.relative, &folders), &mut |_| true));
+        return match reply {
+            Ok(r) => r.errors.into_iter().map(|(p, e)| format!("{p}: {e}")).collect(),
+            Err(e) => vec![format!("Smart Move: {e}")],
+        };
+    }
     let mut errors = Vec::new();
-    for (from, to) in pairs {
-        if std::fs::symlink_metadata(to).is_ok_and(|m| m.is_dir()) {
-            for (p, e) in links::moved::after_move(from, to, relative).errors {
-                errors.push(format!("{}: {e}", p.display()));
-            }
+    for (from, to) in &folders {
+        for (p, e) in links::moved::after_move(from, to, how.relative, how.backup).errors {
+            errors.push(format!("{}: {e}", p.display()));
         }
     }
     errors
@@ -343,11 +456,20 @@ pub fn install_actions(w: &Window) {
         perform(&w, &id, &picked.into_iter().map(ClipSource::Local).collect::<Vec<_>>(), &dest);
     });
     w.win.add_action(&a);
+    w.add_action("unmount-mountpoint", |w| {
+        if let Some(folder) = selected_mountpoint(w) {
+            unmount_volume(w, folder);
+        }
+    });
     w.add_action("replace-link", |w| {
         let picked = PICKED.with(|p| p.borrow().clone());
         let (Some(link), [target]) = (selected_link(w), picked.as_slice()) else { return };
-        let relative = w.app.settings.borrow().relative_symlinks;
-        match links::make::retarget(&link, target, relative) {
+        let how = SmartMove::of(w);
+        if how.backup && cfg!(unix) {
+            replace_elevated(w, link, target.clone(), how.relative);
+            return;
+        }
+        match links::make::retarget_with(&link, target, how.relative, how.backup) {
             Ok(()) => {
                 PICKED.with(|p| p.borrow_mut().clear());
                 w.current_pane().reload();
@@ -355,6 +477,36 @@ pub fn install_actions(w: &Window) {
             Err(e) => super::util::show_error(&w.win, "Cannot replace the link", &e.to_string()),
         }
     });
+}
+
+/// *Replace Symbolic Link / Junction* in Backup Mode: through the administrator helper, as a job
+/// (the password is asked for meanwhile).
+fn replace_elevated(w: &Window, link: PathBuf, target: PathBuf, relative: bool) {
+    let title = format!("Replacing “{}”", folder_name(&link));
+    let weak = Rc::downgrade(&w.me());
+    w.app.jobs.start(
+        w.win.upcast_ref(),
+        title,
+        move |ctx| {
+            ctx.set_phase(failbrauwser::ops::job::Phase::Working);
+            admin()?.run(links::helper::retarget_args(relative, &link, &target), &mut |_| true)?.result()?;
+            Ok(Vec::new())
+        },
+        move |outcome| {
+            if let (Some(w), Outcome::Done(_)) = (weak.upgrade(), outcome) {
+                PICKED.with(|p| p.borrow_mut().clear());
+                w.current_pane().reload();
+            }
+        },
+    );
+}
+
+/// The one selected item when it is a Volume Mountpoint that can be unmounted.
+fn selected_mountpoint(w: &Window) -> Option<PathBuf> {
+    match w.current_pane().selected_items().as_slice() {
+        [Item::Fs(e)] if e.kind == failbrauwser::fs::Kind::Dir && links::volume::is_mountpoint(&e.path) => Some(e.path.clone()),
+        _ => None,
+    }
 }
 
 /// Where *Drop As* drops: into the one folder selected, else into the folder shown.
@@ -381,6 +533,9 @@ pub fn menu_section(w: &Window, items: &[Item]) -> Option<gio::Menu> {
     let local: Vec<PathBuf> = items.iter().filter_map(|i| i.path().cloned()).collect();
     if !items.is_empty() && local.len() == items.len() {
         s.append_item(&super::menuicons::model_item("Pic_k Link Source", "win.pick-link-source"));
+    }
+    if selected_mountpoint(w).is_some() {
+        s.append_item(&super::menuicons::model_item("_Unmount Volume", "win.unmount-mountpoint"));
     }
     let picked = PICKED.with(|p| p.borrow().clone());
     if !picked.is_empty() {

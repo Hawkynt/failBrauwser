@@ -908,6 +908,11 @@ fn links_their_overlays_and_the_right_drag_menu() {
         std::os::unix::fs::symlink("nowhere", d.join("dead")).unwrap();
         std::fs::write(d.join("sub/inner.txt"), "i").unwrap();
         std::os::unix::fs::symlink("inner.txt", d.join("sub/to-inner")).unwrap();
+        std::os::unix::fs::symlink("/", d.join("drive")).unwrap();
+        std::fs::create_dir_all(d.join("vault")).unwrap();
+        std::fs::create_dir_all(t.join("dest3")).unwrap();
+        std::fs::write(d.join("vault/sealed.txt"), "only root reads this").unwrap();
+        std::fs::set_permissions(d.join("vault/sealed.txt"), std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
     });
 }
 
