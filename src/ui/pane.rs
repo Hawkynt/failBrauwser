@@ -1718,6 +1718,11 @@ impl Pane {
         self.right_press.take();
     }
 
+    /// Where a right press on an item that may still become a drag happened, and the press.
+    pub fn right_press_at(&self) -> Option<(f64, f64)> {
+        self.right_press.borrow().as_ref().map(|e| e.position())
+    }
+
     /// The right button let go: the menu of a press that did not become a drag opens.
     fn right_released(&self, ev: &gdk::EventButton) -> glib::Propagation {
         if ev.button() != 3 {

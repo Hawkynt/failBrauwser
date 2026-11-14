@@ -251,7 +251,9 @@ file's icon or name drags it, and dragging from the empty part of a row draws a 
 rectangle; pressing one of several selected files drags them all, shown as a stack with their
 count. Middle-click a folder to open it in a new tab.
 
-Drag with the **right** mouse button and a menu opens where you drop, asking what to do:
+Drag with the **right** mouse button and a menu opens where you drop — on the list, on a folder
+in the folder tree or in another failBrauwser window — asking what to do (a right-button drag
+from another file manager that asks opens it too):
 
 | Item | Does |
 |---|---|
