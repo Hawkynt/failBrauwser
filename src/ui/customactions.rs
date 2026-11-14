@@ -73,8 +73,18 @@ fn run(w: &Window, name: &str) {
     let Some(action) = all().into_iter().find(|a| a.name == name && a.applies_to(&t)) else { return };
     let cmd = action.expand(&t);
     let cwd: PathBuf = w.current_location().nearest_dir().unwrap_or_else(glib::home_dir);
-    let spawned = std::process::Command::new("sh")
-        .arg("-c")
+    // The command line was built (quoted) for the shell named here.
+    #[cfg(windows)]
+    let (shell, flag) = ("cmd", "/C");
+    #[cfg(not(windows))]
+    let (shell, flag) = ("sh", "-c");
+    let mut command = std::process::Command::new(shell);
+    // The action's command line runs without a window of its own: this program has no console
+    // to hand it, so Windows would otherwise allocate a black one for the duration.
+    #[cfg(windows)]
+    failbrauwser::win::console::no_window(&mut command);
+    let spawned = command
+        .arg(flag)
         .arg(&cmd)
         .current_dir(&cwd)
         .stdin(std::process::Stdio::null())

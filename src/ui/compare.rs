@@ -255,7 +255,10 @@ impl Compare {
             if r.state == State::Same && !show_same {
                 continue;
             }
-            let path = if r.left.or(r.right).is_some_and(|m| m.dir) { format!("{}/", r.rel.display()) } else { r.rel.display().to_string() };
+            // A relative path reads with `/` on every platform: the components joined are
+            // the same text Linux already shows, and a name holding a backslash stays whole.
+            let rel = r.rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+            let path = if r.left.or(r.right).is_some_and(|m| m.dir) { format!("{rel}/") } else { rel };
             let state = format!("{} {}", arrow(r.state), state_text(r.state));
             self.store.insert_with_values(None, &[(COL_PATH, &path), (COL_LEFT, &side(&r.left)), (COL_STATE, &state), (COL_RIGHT, &side(&r.right)), (COL_INDEX, &(i as u32))]);
         }

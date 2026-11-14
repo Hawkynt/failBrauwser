@@ -53,7 +53,7 @@ session_restore no
 panel_command true
 animations off
 default_border normal
-exec sh -c 'printf %s "\$WAYLAND_DISPLAY" > $DISPLAY_FILE'
+exec sh -c 'printf %s "\$WAYLAND_DISPLAY" > "$DISPLAY_FILE"'
 TILEWIN
 export TILEWIN_NO_APP_TWEAKS=1 TILEWIN_WAYLAND_SOCKET=wayland-fb-test-$$
 export SWAYSOCK="$RUNDIR/wm.sock" TILEWINSOCK="$RUNDIR/wm.sock"

@@ -378,7 +378,6 @@ Utage	ok
 UuEncoding	ok
 Vdfs	ok	case
 Vdi	ok
-VeraCrypt	fail create: ArgumentException: VeraCrypt/TrueCrypt creation needs a password. (Parameter 'options')
 Vhd	ok
 Vhdx	ok
 Vib	fail list: Exception: listed: descriptor.xml, sig.pkcs7, payload/a.txt, payload/d/b.bin

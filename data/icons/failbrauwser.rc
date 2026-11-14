@@ -1,0 +1,4 @@
+// The shell icon of every failBrauwser program file: one icon group taking all the pictures
+// from failbrauwser.ico, which winpack\mkico.ps1 renders from the application icon's svg.
+// build.rs and winpack\onefile\build.rs compile this with rc.exe and link the result.
+MAINICON ICON "failbrauwser.ico"

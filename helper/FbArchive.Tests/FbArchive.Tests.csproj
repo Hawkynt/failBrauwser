@@ -21,4 +21,9 @@
     <ProjectReference Include="../FbArchive/FbArchive.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Volume files made by the real VeraCrypt program (password "test"): external ground truth. -->
+    <Content Include="../../tests/fixtures/veracrypt/*.hc" Link="veracrypt/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

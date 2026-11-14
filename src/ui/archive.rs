@@ -15,6 +15,8 @@ use failbrauwser::location::{ArchiveLoc, Location};
 use failbrauwser::ops::copy::{self, Mode};
 use failbrauwser::ops::job::{Answer, JobCtx, Question};
 use failbrauwser::ops::{delete, names, staging};
+#[cfg(windows)]
+use failbrauwser::remote_fs;
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use std::cell::RefCell;
@@ -279,6 +281,18 @@ pub fn transfer(w: &Window, sources: Vec<ClipSource>, dest: Location, mode: Mode
         .chain(archive_of(&dest).cloned())
         .collect();
     let retry_sources = sources.clone();
+    #[cfg(windows)]
+    let touched_servers: Vec<failbrauwser::location::RemoteAt> = sources
+        .iter()
+        .filter_map(|s| match s {
+            ClipSource::Remote(t, ..) => Some(t.clone()),
+            _ => None,
+        })
+        .chain(match &dest {
+            Location::Remote(r) => Some(r.at.clone()),
+            _ => None,
+        })
+        .collect();
     w.app.jobs.start(
         w.win.upcast_ref(),
         title,
@@ -299,6 +313,10 @@ pub fn transfer(w: &Window, sources: Vec<ClipSource>, dest: Location, mode: Mode
             let Some(w) = weak.upgrade() else { return };
             for a in &touched {
                 refresh_archive_tabs(&w, a);
+            }
+            #[cfg(windows)]
+            for t in &touched_servers {
+                refresh_remote_tabs(&w, t);
             }
             if let Outcome::Done(created) = outcome {
                 fileops::select_created(&w, &dest, created);
@@ -349,6 +367,8 @@ fn transfer_work(ctx: &JobCtx, sources: Vec<ClipSource>, dest: &Location, mode: 
     let result = (|| {
         let mut local: Vec<PathBuf> = Vec::new();
         let mut from_archives: Vec<(ArchiveLoc, String)> = Vec::new();
+        #[cfg(windows)]
+        let mut from_servers: Vec<(failbrauwser::location::RemoteAt, String, bool)> = Vec::new();
         for s in &sources {
             match s {
                 ClipSource::Local(p) => local.push(p.clone()),
@@ -358,6 +378,16 @@ fn transfer_work(ctx: &JobCtx, sources: Vec<ClipSource>, dest: &Location, mode: 
                     local.extend(got);
                     from_archives.push((a.clone(), e.clone()));
                 }
+                // Remote entries are pulled to staging whole (folders walked), exactly
+                // like archive extractions: from there the destination legs are the usual ones.
+                #[cfg(windows)]
+                ClipSource::Remote(t, e, is_dir) => {
+                    ctx.set_current(format!("Downloading {}", leaf(e)));
+                    local.extend(remote_fs::fetch_tree(ctx, t, e, *is_dir, &staging)?);
+                    from_servers.push((t.clone(), e.clone(), *is_dir));
+                }
+                #[cfg(not(windows))]
+                ClipSource::Remote(..) => return Err(std::io::Error::other("remote copies run where the app's own remote stack runs — on this platform those addresses belong to the desktop's mounts")),
             }
         }
         match dest {
@@ -386,12 +416,31 @@ fn transfer_work(ctx: &JobCtx, sources: Vec<ClipSource>, dest: &Location, mode: 
                     delete::delete_permanently(ctx, &moved_local)?;
                 }
             }
+            // Pasting into a server folder: local sources go out over the wire as-is,
+            // staged ones (from archives or other servers) the same way; conflicts ask
+            // the job's own question (see remote_fs::publish_tree).
+            #[cfg(windows)]
+            Location::Remote(d) => {
+                created.extend(remote_fs::publish_tree(ctx, &local, &d.at, &d.inner)?);
+                if mode == Mode::Move {
+                    let moved_local: Vec<PathBuf> = local.iter().filter(|p| !p.starts_with(&staging)).cloned().collect();
+                    delete::delete_permanently(ctx, &moved_local)?;
+                }
+            }
+            #[cfg(not(windows))]
+            Location::Remote(_) => return Err(std::io::Error::other("remote copies run where the app's own remote stack runs — on this platform those addresses belong to the desktop's mounts")),
             Location::Drives | Location::Trash | Location::Search(_) | Location::Network(_) => {}
         }
         if mode == Mode::Move {
             for (a, e) in &from_archives {
                 ctx.set_current(format!("Removing {} from the archive", leaf(e)));
                 tracked(ctx, || v.remove(a, std::slice::from_ref(e))).map_err(io)?;
+            }
+            // Server-side removals are permanent (no trash on the other machine's folder).
+            #[cfg(windows)]
+            for (t, e, is_dir) in &from_servers {
+                ctx.set_current(format!("Removing {} from the server", leaf(e)));
+                remote_fs::remove(t, e, *is_dir)?;
             }
         }
         Ok(created)
@@ -544,6 +593,21 @@ fn local_staging() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Re-read every tab showing a folder on this server (its contents changed at the source
+/// or destination of a transfer).
+#[cfg(windows)]
+fn refresh_remote_tabs(w: &Window, t: &failbrauwser::location::RemoteAt) {
+    for win in w.app.windows() {
+        for p in win.panes() {
+            if let Location::Remote(r) = p.location() {
+                if r.at == *t {
+                    p.schedule_refresh();
+                }
+            }
+        }
+    }
+}
+
 /// Archive files among the selection (local files only).
 pub fn selected_archives(pane: &Pane) -> Vec<PathBuf> {
     pane.selected_items().iter().filter_map(|i| i.path().filter(|_| !i.is_dir_like() && is_browsable_name(&i.display_name())).cloned()).collect()
@@ -666,6 +730,42 @@ pub fn open_as_archive(w: &Window) {
         }
         if let Some(w) = me.upgrade() {
             w.navigate(target);
+        }
+    });
+}
+
+fn open_loc(w: &Window, loc: ArchiveLoc) {
+    w.navigate(Location::Archive(loc));
+}
+
+/// Opens the selected file as the container kind with this id (M14 *Open as*), whatever its name
+/// says. No probe first: detection is exactly what the user overruled, and a chosen reader answers
+/// a file it cannot open with its own refusal, which the pane shows.
+///
+/// An encrypted kind is asked for its passphrase before the file is opened, so that answer is what
+/// its reader runs with — a search started without one can only end at the shell of a locked volume.
+/// A refused prompt opens the file without a passphrase, which leaves that shell in view and keeps
+/// the later ask of a reading in place. A file this session already has a passphrase for is not
+/// asked for again.
+pub fn open_as_volume(w: &Window, kind: &str) {
+    let pane = w.current_pane();
+    let Some(path) = pane.selected_items().into_iter().find_map(|i| if i.is_dir_like() { None } else { i.path().map(PathBuf::from) }) else { return };
+    let loc = ArchiveLoc::root_as(path.clone(), kind);
+    if !super::extensions::kind_needs_passphrase(kind) || Vfs::global().has_password(&loc) {
+        open_loc(w, loc);
+        return;
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string());
+    let (weak_yes, weak_no) = (Rc::downgrade(&w.me()), Rc::downgrade(&w.me()));
+    let (asked, refused) = (loc.clone(), loc);
+    util::ask_secret_answered(&w.win, "Encrypted Volume", &format!("Passphrase for “{name}”:"), move |pw| {
+        Vfs::global().set_password(&asked, &pw);
+        if let Some(w) = weak_yes.upgrade() {
+            open_loc(&w, asked.clone());
+        }
+    }, move || {
+        if let Some(w) = weak_no.upgrade() {
+            open_loc(&w, refused.clone());
         }
     });
 }

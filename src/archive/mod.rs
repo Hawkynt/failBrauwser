@@ -80,6 +80,14 @@ impl Helper {
         Ok(parse_listing(&v))
     }
 
+    /// Lists the file as the format with this id (see [`formats`]), skipping detection: that kind's
+    /// own reader runs over the bytes whatever the name suggests (M14 *Open as*). A kind the helper
+    /// cannot open is refused by name.
+    pub fn list_as(&self, archive: &Path, format: &str, password: Option<&str>) -> Result<Listing> {
+        let v = self.request(with_password(json!({"cmd": "list", "archive": path_str(archive), "format": format}), password))?;
+        Ok(parse_listing(&v))
+    }
+
     /// Is this file something the helper can open as a folder?
     pub fn probe(&self, path: &Path) -> Result<(bool, String, bool)> {
         let v = self.request(json!({"cmd": "probe", "path": path_str(path)}))?;
@@ -94,6 +102,16 @@ impl Helper {
     /// archive-relative paths. A folder brings its whole subtree.
     pub fn extract(&self, archive: &Path, entries: Option<&[String]>, dest: &Path, password: Option<&str>) -> Result<()> {
         let mut req = json!({"cmd": "extract", "archive": path_str(archive), "dest": path_str(dest)});
+        if let Some(e) = entries {
+            req["entries"] = json!(e);
+        }
+        self.request(with_password(req, password)).map(|_| ())
+    }
+
+    /// Extracts through the reader of the format with this id, skipping detection (M14 *Open as*).
+    /// A wrong kind answers with that reader's own error and leaves nothing behind.
+    pub fn extract_as(&self, archive: &Path, entries: Option<&[String]>, dest: &Path, format: &str, password: Option<&str>) -> Result<()> {
+        let mut req = json!({"cmd": "extract", "archive": path_str(archive), "dest": path_str(dest), "format": format});
         if let Some(e) = entries {
             req["entries"] = json!(e);
         }

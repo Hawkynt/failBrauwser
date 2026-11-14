@@ -20,29 +20,52 @@ pub fn human_size(bytes: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
+// POSIX file-type and permission bits — the same numbers libc defines, held here so the
+// display also compiles on Windows (where `fs::entry` synthesizes these bits from the
+// file attributes, and no system headers are involved).
+const S_IFMT: u32 = 0o170000;
+const S_IFDIR: u32 = 0o040000;
+const S_IFLNK: u32 = 0o120000;
+const S_IFCHR: u32 = 0o002000;
+const S_IFBLK: u32 = 0o060000;
+const S_IFIFO: u32 = 0o010000;
+const S_IFSOCK: u32 = 0o140000;
+const S_IRUSR: u32 = 0o400;
+const S_IWUSR: u32 = 0o200;
+const S_IXUSR: u32 = 0o100;
+const S_IRGRP: u32 = 0o040;
+const S_IWGRP: u32 = 0o020;
+const S_IXGRP: u32 = 0o010;
+const S_IROTH: u32 = 0o004;
+const S_IWOTH: u32 = 0o002;
+const S_IXOTH: u32 = 0o001;
+const S_ISUID: u32 = 0o4000;
+const S_ISGID: u32 = 0o2000;
+const S_ISVTX: u32 = 0o1000;
+
 /// Like `ls -l`: "drwxr-xr-x".
 pub fn permissions(mode: u32) -> String {
-    let t = match mode & libc::S_IFMT {
-        libc::S_IFDIR => 'd',
-        libc::S_IFLNK => 'l',
-        libc::S_IFCHR => 'c',
-        libc::S_IFBLK => 'b',
-        libc::S_IFIFO => 'p',
-        libc::S_IFSOCK => 's',
+    let t = match mode & S_IFMT {
+        S_IFDIR => 'd',
+        S_IFLNK => 'l',
+        S_IFCHR => 'c',
+        S_IFBLK => 'b',
+        S_IFIFO => 'p',
+        S_IFSOCK => 's',
         _ => '-',
     };
     let mut s = String::with_capacity(10);
     s.push(t);
     let bits = [
-        (libc::S_IRUSR, 'r'),
-        (libc::S_IWUSR, 'w'),
-        (libc::S_IXUSR, 'x'),
-        (libc::S_IRGRP, 'r'),
-        (libc::S_IWGRP, 'w'),
-        (libc::S_IXGRP, 'x'),
-        (libc::S_IROTH, 'r'),
-        (libc::S_IWOTH, 'w'),
-        (libc::S_IXOTH, 'x'),
+        (S_IRUSR, 'r'),
+        (S_IWUSR, 'w'),
+        (S_IXUSR, 'x'),
+        (S_IRGRP, 'r'),
+        (S_IWGRP, 'w'),
+        (S_IXGRP, 'x'),
+        (S_IROTH, 'r'),
+        (S_IWOTH, 'w'),
+        (S_IXOTH, 'x'),
     ];
     for (bit, c) in bits {
         s.push(if mode & bit != 0 { c } else { '-' });
@@ -53,9 +76,9 @@ pub fn permissions(mode: u32) -> String {
             s.replace_range(idx..idx + 1, &(if exec { exec_c } else { noexec_c }).to_string());
         }
     };
-    special(&mut s, 3, mode & libc::S_ISUID != 0, 's', 'S');
-    special(&mut s, 6, mode & libc::S_ISGID != 0, 's', 'S');
-    special(&mut s, 9, mode & libc::S_ISVTX != 0, 't', 'T');
+    special(&mut s, 3, mode & S_ISUID != 0, 's', 'S');
+    special(&mut s, 6, mode & S_ISGID != 0, 's', 'S');
+    special(&mut s, 9, mode & S_ISVTX != 0, 't', 'T');
     s
 }
 
@@ -133,11 +156,11 @@ mod tests {
 
     #[test]
     fn perms() {
-        assert_eq!(permissions(libc::S_IFDIR | 0o755), "drwxr-xr-x");
-        assert_eq!(permissions(libc::S_IFREG | 0o644), "-rw-r--r--");
-        assert_eq!(permissions(libc::S_IFREG | 0o4755), "-rwsr-xr-x");
-        assert_eq!(permissions(libc::S_IFDIR | 0o1777), "drwxrwxrwt");
-        assert_eq!(permissions(libc::S_IFREG | 0o2644), "-rw-r-Sr--");
+        assert_eq!(permissions(S_IFDIR | 0o755), "drwxr-xr-x");
+        assert_eq!(permissions(0o100000 | 0o644), "-rw-r--r--");
+        assert_eq!(permissions(0o100000 | 0o4755), "-rwsr-xr-x");
+        assert_eq!(permissions(S_IFDIR | 0o1777), "drwxrwxrwt");
+        assert_eq!(permissions(0o100000 | 0o2644), "-rw-r-Sr--");
     }
 
     #[test]

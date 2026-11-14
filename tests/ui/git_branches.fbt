@@ -1,7 +1,7 @@
 # Branches: Create Branch, Switch/Checkout, Merge with a conflict, Resolve, Create Tag, Reset.
 open $T/repo
 click-empty
-git-menu TortoiseGit/Create Branch...
+git-menu Repository/Create Branch...
 wait-git-window Create Branch - TortoiseGit
 git-set Create Branch - TortoiseGit : branch-name = feature
 git-set Create Branch - TortoiseGit : switch = on
@@ -19,7 +19,7 @@ git-click Commit - TortoiseGit : Commit
 wait-git-result Git Command Progress = Success
 git-click Git Command Progress : Close
 # Back to main.
-git-menu TortoiseGit/Switch/Checkout...
+git-menu Repository/Switch/Checkout...
 wait-git-window Switch/Checkout - TortoiseGit
 git-set Switch/Checkout - TortoiseGit : base-branch-name = main
 git-snapshot Switch/Checkout - TortoiseGit = $T/switch.png
@@ -36,7 +36,7 @@ git-click Commit - TortoiseGit : Commit
 wait-git-result Git Command Progress = Success
 git-click Git Command Progress : Close
 # Merging feature conflicts.
-git-menu TortoiseGit/Merge...
+git-menu Repository/Merge...
 wait-git-window Merge - TortoiseGit
 git-set Merge - TortoiseGit : base-branch-name = feature
 git-snapshot Merge - TortoiseGit = $T/merge.png
@@ -44,9 +44,9 @@ git-click Merge - TortoiseGit : OK
 wait-git-result Git Command Progress = git did not exit cleanly
 git-click Git Command Progress : Close
 wait-git-overlay clean.txt = Conflicted
-expect-git-menu TortoiseGit/Resolve...
+expect-git-menu Repository/Resolve...
 select clean.txt
-git-menu TortoiseGit/Resolve...
+git-menu Repository/Resolve...
 wait-git-rows Resolve - TortoiseGit : files = +clean.txt Conflicted
 write-file $T/repo/clean.txt = merged
 git-click Resolve - TortoiseGit : OK
@@ -62,7 +62,7 @@ wait-git-result Git Command Progress = Success
 git-click Git Command Progress : Close
 wait-git-overlay clean.txt = Normal
 # An annotated tag.
-git-menu TortoiseGit/Create Tag...
+git-menu Repository/Create Tag...
 wait-git-window Create Tag - TortoiseGit
 git-set Create Tag - TortoiseGit : tag-name = v2
 git-set Create Tag - TortoiseGit : message = Release two
@@ -70,7 +70,7 @@ git-click Create Tag - TortoiseGit : OK
 wait-git-result Git Command Progress = Success
 git-click Git Command Progress : Close
 # Reset main back to before the merge, from the log.
-git-menu TortoiseGit/Show log
+git-menu Repository/Show log
 wait-git-window Log Messages - TortoiseGit
 git-set Log Messages - TortoiseGit : all-branches = on
 wait-git-log Log Messages = [main,v2] Merge feature | [feature] On feature | On main | [v1] Second commit | First commit

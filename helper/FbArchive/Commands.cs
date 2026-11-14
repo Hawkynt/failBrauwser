@@ -113,8 +113,8 @@ public static class Commands {
   }
 
   /// <summary>
-  /// Formats whose writer does not store files so they can be read back (found by the format
-  /// matrix test): they are not offered for new archives.
+  /// Formats that are not offered for new archives: writers whose files do not read back again
+  /// (found by the format matrix test), and formats failBrauwser deliberately never writes (M13).
   /// </summary>
   private static readonly HashSet<string> NoCreate = new(StringComparer.OrdinalIgnoreCase) {
     "StuffItX",    // writes the header only
@@ -123,6 +123,7 @@ public static class Commands {
     "Mtree",       // a manifest: names and sizes, no file contents
     "Umx",         // the music module comes back empty
     "DiskDoubler", // keeps only the first file
+    "VeraCrypt",   // encrypted volumes are opened, never created here (M13)
   };
 
   /// <summary>True when new archives of this format are offered (it can create, and what it writes reads back).</summary>
@@ -132,6 +133,7 @@ public static class Commands {
   private static readonly Dictionary<string, string> NotEditable = new(StringComparer.OrdinalIgnoreCase) {
     ["BinCue"] = "BIN/CUE images are changed a sector at a time, not file by file.",
     ["Ods1"] = "Editing ODS-1 volumes damages file contents.",
+    ["VeraCrypt"] = "An encrypted volume opens read-only; creating, resizing or re-keying a container stays with the VeraCrypt program.",
   };
 
   /// <summary>Why an archive of this format cannot be changed, if that is the case.</summary>
@@ -169,19 +171,39 @@ public static class Commands {
     return ops is IArchiveModifiable || ops is IArchiveCreatable;
   }
 
-  public static void List(Utf8JsonWriter w, string archive, string? password) {
-    var parts = SplitSet.Parts(archive);
+  // ── Open as <kind>: force a format the name/content do not give away ──
+
+  /// <summary>Turns a format id (formats_table.rs) into its enum member; ids match the generated names case-insensitively.</summary>
+  private static F ParseFormat(string id) =>
+    Enum.TryParse<F>(id, ignoreCase: true, out var f) ? f : throw new NotSupportedException($"No such format '{id}'.");
+
+  /// <summary>Lists with the named format's own reader, whatever the file's name or contents would detect.</summary>
+  private static List<ArchiveEntry> ForcedList(string archive, string id, string? password) {
+    var ops = FormatRegistry.GetArchiveOps(id) ?? throw new NotSupportedException($"Nothing reads '{id}' as a folder.");
+    using var fs = ArchiveVolumes.OpenRead(archive);
+    return ops.List(fs, password)
+      .Select(e => new ArchiveEntry(e.Index, e.Name, e.OriginalSize, e.CompressedSize, e.Method, e.IsDirectory, e.IsEncrypted, e.LastModified))
+      .ToList();
+  }
+
+  public static void List(Utf8JsonWriter w, string archive, string? password, string? force) {
+    var parts = force == null ? SplitSet.Parts(archive) : null;
     F format;
     List<ArchiveEntry> entries;
-    if (parts != null) {
+    if (force != null) {
+      // Open as <kind>: the user chose the format, so detection is skipped and its ops run directly.
+      format = ParseFormat(force);
+      entries = ForcedList(archive, force, password);
+    } else if (parts != null) {
       entries = SplitSet.List(parts, password, out format);
     } else {
       format = FormatDetector.Detect(archive);
       entries = ArchiveOperations.List(archive, password);
     }
     w.WriteString("format", format.ToString());
-    w.WriteBoolean("writable", parts == null && IsWritable(format, archive));
-    if ((parts != null ? SplitSet.ReadOnlyReason : ReadOnlyReason(format, archive)) is { } why) w.WriteString("readonly_reason", why);
+    w.WriteBoolean("writable", force == null && parts == null && IsWritable(format, archive));
+    if (force != null) w.WriteString("readonly_reason", NotEditable.GetValueOrDefault(format.ToString(), "a chosen Open-as container opens read-only"));
+    else if ((parts != null ? SplitSet.ReadOnlyReason : ReadOnlyReason(format, archive)) is { } why) w.WriteString("readonly_reason", why);
     w.WriteStartArray("entries");
     foreach (var e in entries) {
       w.WriteStartObject();
@@ -209,11 +231,14 @@ public static class Commands {
   /// <paramref name="dest"/>, keeping their paths relative to the archive root.
   /// A null list extracts everything.
   /// </summary>
-  public static void Extract(string archive, string dest, string[]? names, string? password) {
+  /// <summary>Detects the format and extracts; the force-choosing overload below answers an Open-as choice.</summary>
+  public static void Extract(string archive, string dest, string[]? names, string? password) => Extract(archive, dest, names, password, null);
+
+  public static void Extract(string archive, string dest, string[]? names, string? password, string? force) {
     Directory.CreateDirectory(dest);
     string[]? raw = null;
-    var parts = SplitSet.Parts(archive);
-    var all = parts != null ? SplitSet.List(parts, password, out _) : ArchiveOperations.List(archive, password);
+    var parts = force == null ? SplitSet.Parts(archive) : null;
+    var all = force != null ? ForcedList(archive, force, password) : parts != null ? SplitSet.List(parts, password, out _) : ArchiveOperations.List(archive, password);
     // Progress: what has arrived in the destination out of what is coming.
     var before = Progress.BytesBelow(dest);
     var wantedSize = names == null
@@ -228,7 +253,11 @@ public static class Commands {
       foreach (var e in all.Where(e => e.IsDirectory && wanted.Any(n => IsAtOrBelow(Normalize(e.Name), n))))
         Directory.CreateDirectory(Path.Combine(dest, Normalize(e.Name)));
     }
-    if (parts != null) SplitSet.Extract(parts, dest, password, raw);
+    if (force != null) {
+      var ops = FormatRegistry.GetArchiveOps(force) ?? throw new NotSupportedException($"Nothing reads '{force}' as a folder.");
+      using var fs = ArchiveVolumes.OpenRead(archive);
+      ops.Extract(fs, dest, password, raw);
+    } else if (parts != null) SplitSet.Extract(parts, dest, password, raw);
     else ArchiveOperations.Extract(archive, dest, password, raw);
     // Empty folders, which many formats' extractors skip.
     if (names == null)
@@ -274,7 +303,7 @@ public static class Commands {
     Progress.Current?.Phase("adding", inputBytes + existing0);
 
     if (!File.Exists(archive) || new FileInfo(archive).Length == 0) {
-      if (format != null && NoCreate.Contains(format)) throw new NotSupportedException($"{format} archives cannot be written so that their files read back.");
+      if (format != null && NoCreate.Contains(format)) throw new NotSupportedException($"{format} archives are not written here.");
       if (format == null) {
         ArchiveOperations.Create(archive, WithParents(inputs), opts);
       } else {

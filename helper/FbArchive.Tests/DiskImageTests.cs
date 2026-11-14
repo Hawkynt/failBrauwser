@@ -52,7 +52,7 @@ public class DiskImageTests {
       Commands.Extract(img, x, null, null);
       var file = Directory.GetFiles(x, "*", SearchOption.AllDirectories).Single();
       Assert.That(File.ReadAllText(file), Is.EqualTo("deep"));
-      Assert.That(Path.GetRelativePath(x, file).ToLowerInvariant(), Is.EqualTo("pack/sub/b.txt"));
+      Assert.That(Path.GetRelativePath(x, file).Replace('\\', '/').ToLowerInvariant(), Is.EqualTo("pack/sub/b.txt"));
     }
     finally {
       root.Delete(true);

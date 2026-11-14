@@ -175,6 +175,10 @@ impl Window {
         super::showfilter::install_actions(self);
         super::showfilter::attach(&self.statusbar);
         super::extensions::window_created(self);
+        // The mouse's back and forward keys, which GDK reports to no one on Windows: the watch
+        // needs this window's handle, and that exists once the window has been shown.
+        #[cfg(windows)]
+        failbrauwser::win::xbuttons::watch(&self.win);
     }
 
     pub fn me(&self) -> Rc<Window> {
@@ -390,7 +394,7 @@ impl Window {
         let items = pane.selected_items();
         let model = super::extensions::context_menu_model(self, pane, &items);
         let menu = gtk::Menu::from_model(&model);
-        super::menuicons::submenu_icons(&menu, &|text| super::git::icons::submenu_icon(text).or_else(|| super::menuicons::icon_for(text).map(|i| i.upcast())));
+        super::menuicons::submenu_icons(&menu, &|text| super::vcs::icons::submenu_icon(text).or_else(|| super::menuicons::icon_for(text).map(|i| i.upcast())));
         menu.set_attach_widget(Some(&self.win));
         // A right click on the files while the menu is open (it has the pointer then) opens
         // the menu of the folder there, as on Windows: with no empty space left to click,
@@ -528,6 +532,15 @@ impl Window {
             let Some(app) = gio::AppInfo::all().into_iter().find(|a| a.id().as_deref() == Some(id.as_str())) else { return };
             let files: Vec<gio::File> = w.current_pane().selected_items().iter().filter_map(|i| i.path().map(gio::File::for_path)).collect();
             util::launch_with(w.win.upcast_ref(), &app, &files);
+        });
+        self.win.add_action(&a);
+
+        // *Open as ▸ a chosen container*: the one-argument shape of "open-with", carrying the kind's id.
+        let a = gio::SimpleAction::new("open-as-volume", Some(glib::VariantTy::STRING));
+        let weak = self.weak.borrow().clone();
+        a.connect_activate(move |_, v| {
+            let (Some(w), Some(kind)) = (weak.upgrade(), v.and_then(|v| v.get::<String>())) else { return };
+            super::archive::open_as_volume(&w, &kind);
         });
         self.win.add_action(&a);
 
@@ -828,15 +841,6 @@ fn status_text(pane: &Pane) -> String {
 }
 
 pub fn free_space(dir: &std::path::Path) -> Option<u64> {
-    use std::os::unix::ffi::OsStrExt;
-    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-        return None;
-    }
     // No size at all: a server that does not tell (FTP, some WebDAV), not a full drive.
-    if st.f_blocks == 0 {
-        return None;
-    }
-    Some(st.f_bavail as u64 * st.f_frsize as u64)
+    failbrauwser::osprim::free_space(dir)
 }

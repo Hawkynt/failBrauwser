@@ -1,0 +1,27 @@
+# A Mercurial working copy its own client made: TortoiseGit's overlays, the Commit window and the
+# log, through the Repository menu (README, Version control).
+open $T/wc
+wait-git-overlay same.txt = Normal
+wait-git-overlay one.txt = Modified
+wait-git-overlay new.txt = Unversioned
+click-empty
+expect-git-menu Repository/Show log
+git-menu Hg Commit -> "default"...
+wait-git-window Commit - TortoiseGit
+wait-git-rows Commit - TortoiseGit : changes = +one.txt Modified
+git-set Commit - TortoiseGit : show-unversioned = on
+wait-git-rows Commit - TortoiseGit : changes = -new.txt Unversioned | +one.txt Modified
+git-tick Commit - TortoiseGit : changes : new.txt = on
+git-set Commit - TortoiseGit : message = from the window
+git-snapshot Commit - TortoiseGit = $T/commit.png
+git-click Commit - TortoiseGit : Commit
+wait-git-result Mercurial Command Progress = Success
+git-snapshot Mercurial Command Progress = $T/progress.png
+git-click Mercurial Command Progress : Close
+wait-git-overlay one.txt = Normal
+wait-git-overlay new.txt = Normal
+git-menu Repository/Show log
+wait-git-window Log Messages - TortoiseGit
+wait-git-log Log Messages - TortoiseGit = [default] from the window | second | first
+git-snapshot Log Messages - TortoiseGit = $T/log.png
+quit

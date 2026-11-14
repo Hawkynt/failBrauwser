@@ -1,9 +1,8 @@
-//! Deleting: to the trash (freedesktop.org spec, through GIO) or permanently.
+//! Deleting: to the platform trash (freedesktop.org folders via GIO on Linux, the shell
+//! Recycle Bin on Windows — both behind `trash::trash_file`) or permanently.
 
 use super::fastcopy::{self, is_cancelled_error};
 use super::job::{Answer, JobCtx, Phase, Question};
-use gtk::gio;
-use gtk::prelude::*;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -42,11 +41,14 @@ fn remove_tree(ctx: &JobCtx, p: &Path) -> io::Result<()> {
         }
     };
     ctx.set_current(p.file_name().unwrap_or_default().to_string_lossy());
+    let mut sharing = 0u32;
     if meta.is_dir() {
         let entries = loop {
             match fs::read_dir(p).and_then(|d| d.collect::<io::Result<Vec<_>>>()) {
                 Ok(v) => break v,
+                Err(e) if fastcopy::wait_sharing_retry(&e, &mut sharing) => continue,
                 Err(e) => {
+                    sharing = 0;
                     if !ask_error(ctx, p, &e)? {
                         return Ok(());
                     }
@@ -60,8 +62,10 @@ fn remove_tree(ctx: &JobCtx, p: &Path) -> io::Result<()> {
             match fs::remove_dir(p) {
                 Ok(()) => break,
                 // Something inside was skipped; the folder stays.
-                Err(e) if e.raw_os_error() == Some(libc::ENOTEMPTY) => break,
+                Err(e) if crate::osprim::is_dir_not_empty(&e) => break,
+                Err(e) if fastcopy::wait_sharing_retry(&e, &mut sharing) => continue,
                 Err(e) => {
+                    sharing = 0;
                     if !ask_error(ctx, p, &e)? {
                         break;
                     }
@@ -73,7 +77,9 @@ fn remove_tree(ctx: &JobCtx, p: &Path) -> io::Result<()> {
             match fs::remove_file(p) {
                 Ok(()) => break,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => break,
+                Err(e) if fastcopy::wait_sharing_retry(&e, &mut sharing) => continue,
                 Err(e) => {
+                    sharing = 0;
                     if !ask_error(ctx, p, &e)? {
                         break;
                     }
@@ -111,10 +117,9 @@ pub fn trash(ctx: &JobCtx, paths: &[PathBuf]) -> io::Result<()> {
             return Err(fastcopy::cancelled());
         }
         ctx.set_current(p.file_name().unwrap_or_default().to_string_lossy());
-        let file = gio::File::for_path(p);
-        match file.trash(gio::Cancellable::NONE) {
+        match crate::trash::trash_file(p) {
             Ok(()) => {}
-            Err(e) if e.matches(gio::IOErrorEnum::NotFound) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => match ctx.ask(Question::TrashUnsupported { path: p.clone(), message: e.to_string() }) {
                 Answer::DeleteInstead => remove_tree(ctx, p)?,
                 Answer::Cancel => return Err(fastcopy::cancelled()),
@@ -132,6 +137,24 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(windows)] // drives the live Recycle Bin through the delete operation — only ever its own file
+    fn trashing_a_local_file_lands_in_the_recycle_bin() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("gone.txt");
+        fs::write(&f, "x").unwrap();
+        let ctx = JobCtx::new();
+        trash(&ctx, &[f.clone()]).unwrap();
+        assert!(!f.exists(), "the file must have left its original place");
+        assert_eq!(ctx.snapshot().files_done, ctx.snapshot().files_total);
+        if let Ok(items) = crate::win::recyclebin::list() {
+            if let Some(item) = items.iter().find(|b| b.original == f) {
+                crate::win::recyclebin::delete(&item.path).ok();
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)] // the fixture builds a Unix symlink; no-follow delete is what it proves
     fn deletes_trees_without_following_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();

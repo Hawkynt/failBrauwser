@@ -116,6 +116,8 @@ impl AppCtx {
     fn go_idle(&self) {
         super::util::clear_caches();
         failbrauwser::archive::Helper::global().shutdown();
+        // glibc hands freed pages back only on request; the Windows heap compacts itself.
+        #[cfg(unix)]
         unsafe {
             libc::malloc_trim(0);
         }
@@ -222,6 +224,9 @@ pub fn run() -> glib::ExitCode {
         super::actions::install_app_actions(&actx);
         super::shares::follow_sleep(&actx);
         super::portal::serve(&actx);
+        // The app's own SFTP/FTP stack asks its sign-in questions through the windows.
+        #[cfg(windows)]
+        super::remote::install_prompts(app);
         let weak = Rc::downgrade(&actx);
         super::clipboard::connect_changed(move || {
             if let Some(a) = weak.upgrade() {

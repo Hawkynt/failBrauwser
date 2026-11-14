@@ -47,7 +47,8 @@ public sealed class Progress : IDisposable {
   }
 
   private void Send() {
-    if (Stdout == null) return;
+    // Nothing to report yet: a line without a phase is noise between the two sides.
+    if (Stdout == null || this._phase.Length == 0) return;
     var done = this._poll?.Invoke() ?? Interlocked.Read(ref this._done);
     var total = Interlocked.Read(ref this._total);
     if (done == this._lastSent) return;

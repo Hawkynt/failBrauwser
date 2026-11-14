@@ -6,6 +6,8 @@ use super::model::Item;
 use super::pane::Pane;
 use super::window::Window;
 use super::{archive, dnd, fileops, util};
+#[cfg(windows)]
+use super::remote;
 use failbrauwser::location::Location;
 use failbrauwser::ops::copy::Mode;
 use gtk::gio;
@@ -23,7 +25,7 @@ pub fn window_created(w: &Rc<Window>) {
     w.add_action("find", super::searchbar::open);
     super::customactions::install_actions(w);
     super::trash::install_actions(w);
-    super::git::install_actions(w);
+    super::vcs::install_actions(w);
     super::sidebar::attach(w);
 }
 
@@ -53,7 +55,7 @@ pub fn pane_created(w: &Window, p: &Rc<Pane>) {
 }
 
 pub fn pane_location_changed(w: &Window, p: &Rc<Pane>) {
-    super::git::overlay::update(w, p);
+    super::vcs::overlay::update(w, p);
     super::drives::location_changed(p);
     super::network::location_changed(p);
     super::trash::update_bar(p);
@@ -67,7 +69,7 @@ pub fn pane_scrolled(w: &Window, p: &Rc<Pane>) {
 
 pub fn pane_contents_changed(w: &Window, p: &Rc<Pane>) {
     super::dirsize::update(w, p);
-    super::git::overlay::update(w, p);
+    super::vcs::overlay::update(w, p);
     if Rc::ptr_eq(p, &w.current_pane()) {
         super::summary::update(w, true);
     }
@@ -105,7 +107,7 @@ pub fn settings_changed(w: &Window) {
     }
     for p in w.panes() {
         super::dirsize::update(w, &p);
-        super::git::overlay::update(w, &p);
+        super::vcs::overlay::update(w, &p);
     }
 }
 
@@ -115,21 +117,24 @@ pub fn location_writable(loc: &Location) -> bool {
         // Not asked on a network share (this runs on the UI thread, and a share that stopped
         // answering would hang it); jobs report what the share refuses.
         Location::Dir(p) if failbrauwser::ops::gvfs::is_gvfs_path(p) => true,
-        Location::Dir(p) => {
-            use std::os::unix::ffi::OsStrExt;
-            let Ok(c) = std::ffi::CString::new(p.as_os_str().as_bytes()) else { return false };
-            unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
-        }
+        Location::Dir(p) => failbrauwser::osprim::can_write(p),
         // Known once the archive was listed (always the case while it is shown).
         Location::Archive(a) => failbrauwser::archive::vfs::Vfs::global().cached(a).is_some_and(|x| x.writable),
+        // A server folder is taken as writable (asking would mean a round trip per draw);
+        // the job reports whatever the server refuses.
+        Location::Remote(_) => true,
         // Nothing can be put into the trash view; items there are restored or deleted.
         Location::Drives | Location::Trash | Location::Search(_) | Location::Network(_) => false,
     }
 }
 
-/// Items that are not plain local files (entries inside archives).
+/// Items that are not plain local files (entries inside archives or on servers).
 pub fn open_non_local(w: &Window, item: &Item) {
-    archive::open_entry(w, item);
+    match item {
+        #[cfg(windows)]
+        Item::Remote(_) => remote::view::open_entry(w, item),
+        _ => archive::open_entry(w, item),
+    }
 }
 
 pub fn transfer_non_local(w: &Window, sources: Vec<ClipSource>, dest: Location, mode: Mode, after: Box<dyn FnOnce()>) {
@@ -141,15 +146,36 @@ pub fn transfer_non_local(w: &Window, sources: Vec<ClipSource>, dest: Location, 
 }
 
 pub fn delete_non_local(w: &Window, pane: &Rc<Pane>) {
-    archive::delete_selection(w, pane);
+    match pane.location() {
+        #[cfg(windows)]
+        Location::Remote(_) => remote::view::delete_selection(w, pane),
+        _ => archive::delete_selection(w, pane),
+    }
 }
 
 pub fn rename_non_local(w: &Window, pane: &Rc<Pane>, item: &Item, new: &str) {
-    archive::rename(w, pane, item, new);
+    match pane.location() {
+        #[cfg(windows)]
+        Location::Remote(_) => remote::view::rename(w, pane, item, new),
+        _ => archive::rename(w, pane, item, new),
+    }
+}
+
+/// Rename onto a name that is there (asked first — see `fileops::rename`).
+pub fn rename_replacing_non_local(w: &Window, pane: &Rc<Pane>, item: &Item, new: &str) {
+    match pane.location() {
+        #[cfg(windows)]
+        Location::Remote(_) => remote::view::rename_replacing(w, pane, item, new),
+        _ => archive::rename_replacing(w, pane, item, new),
+    }
 }
 
 pub fn create_non_local(w: &Window, loc: &Location, name: &str, folder: bool) {
-    archive::create(w, loc, name, folder);
+    match loc {
+        #[cfg(windows)]
+        Location::Remote(_) => remote::view::create(w, loc, name, folder),
+        _ => archive::create(w, loc, name, folder),
+    }
 }
 
 fn section(menu: &gio::Menu, items: &[(&str, &str)]) {
@@ -179,8 +205,8 @@ pub fn context_menu_model(w: &Window, pane: &Rc<Pane>, items: &[Item]) -> gio::M
         section(&menu, &[("Create _Folder…", "win.new-folder"), ("Create _Document…", "win.new-file")]);
         section(&menu, &[("_Paste", "win.paste")]);
         section(&menu, &[("Select _All", "win.select-all"), ("Show _Hidden Files", "win.show-hidden"), ("_Reload", "win.reload")]);
-        // TortoiseGit's items, where Explorer has them: after the folder's own.
-        if let Some(g) = super::git::menu_section(w, pane, items) {
+        // The version-control items, where Explorer has TortoiseGit's: after the folder's own.
+        if let Some(g) = super::vcs::menu_section(w, pane, items) {
             menu.append_section(None, &g);
         }
         if local {
@@ -201,9 +227,9 @@ pub fn context_menu_model(w: &Window, pane: &Rc<Pane>, items: &[Item]) -> gio::M
         open.append_item(&super::menuicons::model_submenu("Open _With", &sub));
     }
     menu.append_section(None, &open);
-    // TortoiseGit's items, as in Explorer: right after opening.
+    // The version-control items, as in Explorer: right after opening.
     if local || matches!(pane.location(), Location::Search(_)) {
-        if let Some(g) = super::git::menu_section(w, pane, items) {
+        if let Some(g) = super::vcs::menu_section(w, pane, items) {
             menu.append_section(None, &g);
         }
     }
@@ -224,9 +250,6 @@ pub fn context_menu_model(w: &Window, pane: &Rc<Pane>, items: &[Item]) -> gio::M
         arch.push(("E_xtract Here", "win.extract-here"));
         arch.push(("Extract _To…", "win.extract-to"));
     }
-    if items.len() == 1 && !items[0].is_dir_like() && !failbrauwser::archive::is_browsable_name(&items[0].display_name()) {
-        arch.push(("Open as _Archive", "win.open-as-archive"));
-    }
     if let [a, b] = items {
         if a.is_dir_like() && b.is_dir_like() && a.path().is_some() && b.path().is_some() {
             arch.push(("Co_mpare", "win.compare-folders"));
@@ -241,6 +264,11 @@ pub fn context_menu_model(w: &Window, pane: &Rc<Pane>, items: &[Item]) -> gio::M
         arch.push(("C_ompress…", "win.compress"));
     }
     section(&menu, &arch);
+    if let Some(sub) = open_as_menu(items) {
+        let s = gio::Menu::new();
+        s.append_item(&super::menuicons::model_submenu("Open _as", &sub));
+        menu.append_section(None, &s);
+    }
     if items.iter().all(|i| i.path().is_some()) {
         section(&menu, &[("Create _Link on Desktop", "win.link-on-desktop")]);
     }
@@ -251,6 +279,72 @@ pub fn context_menu_model(w: &Window, pane: &Rc<Pane>, items: &[Item]) -> gio::M
     }
     section(&menu, &[("_Properties…", "win.properties")]);
     menu
+}
+
+/// A container kind a file can be opened as whatever its name says (M14 *Open as*): the helper's
+/// format id, and the menu label with its mnemonic. The choices are the user's because a VeraCrypt
+/// header is random-looking bytes, a dm-crypt volume has no header at all, and a renamed container
+/// says nothing about what is inside it.
+pub const VOLUME_KINDS: [(&str, &str); 4] = [("VeraCrypt", "_VeraCrypt / TrueCrypt"), ("BitLocker", "_BitLocker"), ("Luks", "_LUKS"), ("DmCryptPlain", "dm-crypt (_plain)")];
+
+/// One *Open as* entry.
+#[derive(Debug, PartialEq, Eq)]
+pub enum OpenAs {
+    /// Enter whatever the library detects, instead of launching the program that owns the suffix.
+    Archive,
+    /// Run this kind's own reader over the bytes: (format id, menu label).
+    Volume(&'static str, &'static str),
+}
+
+/// Is this helper format id one of the encrypted container kinds the menu offers? Its ids are the
+/// single source, so an entry and the ask that belongs to it cannot drift apart.
+pub fn kind_needs_passphrase(id: &str) -> bool {
+    VOLUME_KINDS.iter().any(|(kind, _)| *kind == id)
+}
+
+impl OpenAs {
+    /// Must the passphrase arrive before the file is opened (M14)? Every volume kind the menu
+    /// offers is an encrypted one, and its reader is worth running only with the answer in hand:
+    /// a search started without it can only answer with the shell of a locked volume. *Archive*
+    /// keeps the ask where the library puts it — on the reader that needs one.
+    pub fn needs_passphrase(&self) -> bool {
+        match self { OpenAs::Volume(id, _) => kind_needs_passphrase(id), OpenAs::Archive => false }
+    }
+}
+
+/// Which *Open as* entries one selected file gets (M14). Decided apart from the menu so it can be
+/// tested without a pane: a folder gets none, and a file the archive viewer already opens by name
+/// needs no *Archive* entry, because that entry is for what the name sends somewhere else.
+pub fn open_as_choices(display_name: &str, dir_like: bool) -> Vec<OpenAs> {
+    if dir_like {
+        return Vec::new();
+    }
+    let mut choices = Vec::new();
+    if !failbrauwser::archive::is_browsable_name(display_name) {
+        choices.push(OpenAs::Archive);
+    }
+    choices.extend(VOLUME_KINDS.iter().map(|(id, label)| OpenAs::Volume(id, label)));
+    choices
+}
+
+fn open_as_menu(items: &[Item]) -> Option<gio::Menu> {
+    let [item] = items else { return None };
+    let choices = open_as_choices(&item.display_name(), item.is_dir_like());
+    if choices.is_empty() {
+        return None;
+    }
+    let sub = gio::Menu::new();
+    for choice in choices {
+        match choice {
+            OpenAs::Archive => sub.append_item(&super::menuicons::model_item("_Archive", "win.open-as-archive")),
+            OpenAs::Volume(id, label) => {
+                let entry = super::menuicons::model_item(label, "win.open-as-volume");
+                entry.set_action_and_target_value(Some("win.open-as-volume"), Some(&id.to_variant()));
+                sub.append_item(&entry);
+            }
+        }
+    }
+    Some(sub)
 }
 
 /// Applications registered for the selection's type, plus "Other Application…".
@@ -272,4 +366,42 @@ pub fn open_with_menu(items: &[Item]) -> Option<gio::Menu> {
     other.append_item(&super::menuicons::model_item("Other _Application…", "win.open-with-other"));
     sub.append_section(None, &other);
     Some(sub)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OpenAs, VOLUME_KINDS, kind_needs_passphrase, open_as_choices};
+
+    #[test]
+    fn a_folder_gets_no_open_as_choices() {
+        assert!(open_as_choices("photos", true).is_empty());
+    }
+
+    /// The kinds that a name cannot tell apart stay offered for every single file (M14).
+    #[test]
+    fn one_file_of_any_name_gets_the_four_volume_kinds() {
+        for name in ["disk.bin", "notes.txt", "movie.mkv", "setup.exe", "photo.iso", "photos.zip"] {
+            let kinds = open_as_choices(name, false).into_iter().filter(|c| matches!(c, OpenAs::Volume(_, _))).count();
+            assert_eq!(kinds, 4, "{name}");
+        }
+    }
+
+    /// A chosen encrypted kind reads its volume with the passphrase, so the ask comes first:
+    /// a search that runs before the answer can only end in the shell of a locked volume (M14).
+    #[test]
+    fn a_chosen_volume_asks_its_passphrase_before_opening() {
+        for (id, label) in VOLUME_KINDS {
+            assert!(OpenAs::Volume(id, label).needs_passphrase(), "{id} is encrypted: it asks before anything is read");
+        }
+        assert!(!OpenAs::Archive.needs_passphrase(), "Archive asks only when a reader of its own asks");
+        assert!(!kind_needs_passphrase("Zip"), "a forced ordinary archive keeps the reader's own ask");
+    }
+
+    #[test]
+    fn what_the_archive_viewer_already_reaches_by_name_gets_no_archive_entry() {
+        assert!(!open_as_choices("photos.zip", false).contains(&OpenAs::Archive), "the entry would repeat what the name does already");
+        for name in ["movie.mkv", "setup.exe", "photo.jpg", "disk.bin"] {
+            assert!(open_as_choices(name, false).contains(&OpenAs::Archive), "{name} should answer with its contents instead of its program");
+        }
+    }
 }

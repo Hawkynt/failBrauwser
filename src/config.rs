@@ -107,12 +107,12 @@ pub struct Settings {
     pub zoom_icons: usize,
     /// Throttle writes to removable and rotational drives so the page cache never fills up.
     pub smooth_writes: bool,
-    /// Git in the file manager (TortoiseGit's overlays, menus and dialogs); off until
-    /// switched on in Edit → Git Integration.
-    pub git_integration: bool,
-    /// Git status overlays on files and folders in working trees (TortoiseGit's icons), while
-    /// the Git integration is on.
-    pub git_overlays: bool,
+    /// Version control in the file manager (TortoiseGit's overlays, menus and dialogs, for every
+    /// tool); off until switched on in Edit → Version Control Integration.
+    pub vcs_integration: bool,
+    /// State overlays on files and folders of working copies (TortoiseGit's icons), while the
+    /// version-control integration is on.
+    pub vcs_overlays: bool,
 }
 
 impl Default for Settings {
@@ -137,8 +137,8 @@ impl Default for Settings {
             zoom_list: 1,
             zoom_icons: 1,
             smooth_writes: true,
-            git_integration: false,
-            git_overlays: true,
+            vcs_integration: false,
+            vcs_overlays: true,
         }
     }
 }
@@ -175,8 +175,11 @@ impl Settings {
         b("smooth_writes", &mut s.smooth_writes);
         b("show_thumbnails", &mut s.show_thumbnails);
         b("verify_copies", &mut s.verify_copies);
-        b("git_integration", &mut s.git_integration);
-        b("git_overlays", &mut s.git_overlays);
+        // Version 0.9's names first, so the current ones win where both are written.
+        b("git_integration", &mut s.vcs_integration);
+        b("git_overlays", &mut s.vcs_overlays);
+        b("vcs_integration", &mut s.vcs_integration);
+        b("vcs_overlays", &mut s.vcs_overlays);
         i("window_width", &mut s.window_width, 300);
         i("window_height", &mut s.window_height, 200);
         i("sidebar_width", &mut s.sidebar_width, 0);
@@ -241,8 +244,8 @@ impl Settings {
         kf.set_boolean(GROUP, "smooth_writes", self.smooth_writes);
         kf.set_boolean(GROUP, "show_thumbnails", self.show_thumbnails);
         kf.set_boolean(GROUP, "verify_copies", self.verify_copies);
-        kf.set_boolean(GROUP, "git_integration", self.git_integration);
-        kf.set_boolean(GROUP, "git_overlays", self.git_overlays);
+        kf.set_boolean(GROUP, "vcs_integration", self.vcs_integration);
+        kf.set_boolean(GROUP, "vcs_overlays", self.vcs_overlays);
         kf.set_integer(GROUP, "window_width", self.window_width);
         kf.set_integer(GROUP, "window_height", self.window_height);
         kf.set_integer(GROUP, "sidebar_width", self.sidebar_width);
@@ -324,10 +327,29 @@ mod tests {
         s.set_column_visible("type", false);
         s.window_width = 1234;
         s.zoom_icons = 4;
-        s.git_overlays = false;
-        s.git_integration = true;
+        s.vcs_overlays = false;
+        s.vcs_integration = true;
         s.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), s);
+    }
+
+    /// Version 0.9 called the switch Git Integration and kept it as `vcs_integration`: a setting
+    /// left by it still counts, and what is saved now is the new name.
+    #[test]
+    fn an_older_git_integration_switch_counts_as_version_control_integration() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old.ini");
+        std::fs::write(&old, "[General]\ngit_integration=true\ngit_overlays=false\n").unwrap();
+        let s = Settings::load_from(&old);
+        assert!(s.vcs_integration);
+        assert!(!s.vcs_overlays);
+        let new = dir.path().join("new.ini");
+        s.save_to(&new).unwrap();
+        let text = std::fs::read_to_string(&new).unwrap();
+        assert!(text.contains("vcs_integration=true"), "{text}");
+        assert!(!text.contains("git_integration"), "{text}");
+        std::fs::write(&old, "[General]\ngit_integration=true\nvcs_integration=false\n").unwrap();
+        assert!(!Settings::load_from(&old).vcs_integration, "the new name wins over the old one");
     }
 
     #[test]
@@ -344,7 +366,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(Settings::load_from(&dir.path().join("none.ini")), Settings::default());
         // Git stays off until switched on.
-        assert!(!Settings::default().git_integration);
+        assert!(!Settings::default().vcs_integration);
         let bad = dir.path().join("bad.ini");
         std::fs::write(&bad, "[General]\ncolumns=bogus;size\ntree_root=sideways\nwindow_width=-5\n").unwrap();
         let s = Settings::load_from(&bad);

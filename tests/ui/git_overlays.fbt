@@ -1,12 +1,12 @@
 # TortoiseGit's overlay icons and its items in the right-click menu.
 open $T/repo
-# Off until switched on in Edit → Git Integration: no overlays, no Git menu.
+# Off until switched on in Edit → Version Control Integration: no overlays, no version-control menu.
 wait-git-idle
 wait-git-overlay clean.txt = none
 select clean.txt
 expect-no-git-menu Git Commit -> "main"...
 expect-no-menu-item TortoiseGit
-action app.git-integration
+action app.vcs-integration
 click-empty
 wait-git-overlay clean.txt = Normal
 wait-git-overlay changed.txt = Modified
@@ -28,21 +28,21 @@ wait-git-overlay src = Normal
 select clean.txt
 expect-git-menu Git Sync...
 expect-git-menu Git Commit -> "main"...
-expect-git-menu TortoiseGit/Pull...
-expect-git-menu TortoiseGit/Show log
-expect-git-menu TortoiseGit/Diff with previous version
-expect-git-menu TortoiseGit/Blame
-expect-git-menu TortoiseGit/Rename...
-expect-git-menu TortoiseGit/Settings
-expect-no-git-menu TortoiseGit/Diff
-expect-no-git-menu TortoiseGit/Add...
-expect-no-git-menu Git Clone...
+expect-git-menu Repository/Pull...
+expect-git-menu Repository/Show log
+expect-git-menu Repository/Diff with previous version
+expect-git-menu Repository/Blame
+expect-git-menu Repository/Rename...
+expect-git-menu Repository/Settings
+expect-no-git-menu Repository/Diff
+expect-no-git-menu Repository/Add...
+expect-no-git-menu Repository/Clone...
 # An unversioned file: Add and the ignore list.
 select new.txt
-expect-git-menu TortoiseGit/Add...
-expect-git-menu TortoiseGit/Add to ignore list/new.txt
-expect-git-menu TortoiseGit/Add to ignore list/*.txt
-expect-no-git-menu TortoiseGit/Delete
+expect-git-menu Repository/Add...
+expect-git-menu Repository/Add to ignore list/new.txt
+expect-git-menu Repository/Add to ignore list/*.txt
+expect-no-git-menu Repository/Delete
 # The folder above: each working tree shows its state; Clone and Create repository here.
 open $T
 wait-git-overlay repo = Normal
@@ -51,19 +51,19 @@ run echo more >> $T/repo/clean.txt
 action win.reload
 wait-git-overlay repo = Modified
 click-empty
-expect-git-menu Git Clone...
-expect-git-menu Git Create repository here...
-expect-git-menu TortoiseGit/About
+expect-git-menu Repository/Clone...
+expect-git-menu Repository/Create repository here...
+expect-git-menu Repository/About
 expect-no-git-menu Git Sync...
 select repo
 expect-git-menu Git Commit -> "main"...
-# How it looks: the overlays, and the menu with the TortoiseGit submenu open.
+# How it looks: the overlays, and the menu with the Repository submenu open.
 open $T/repo
 wait-git-overlay clean.txt = Modified
 window-snapshot $T/overlays.png
 right-click new.txt
 expect-context-menu file
-git-open-submenu TortoiseGit
+git-open-submenu Repository
 sleep 400
 screenshot $T/menu.png
 close-context-menu

@@ -10,7 +10,7 @@ wait-git-sync Git Synchronization
 git-snapshot Git Synchronization - TortoiseGit = $T/sync.png
 git-close Git Synchronization - TortoiseGit
 # Pull: the commit from elsewhere is merged.
-git-menu TortoiseGit/Pull...
+git-menu Repository/Pull...
 wait-git-window Pull - TortoiseGit
 git-snapshot Pull - TortoiseGit = $T/pull.png
 git-click Pull - TortoiseGit : OK
@@ -19,7 +19,7 @@ git-click Git Command Progress : Close
 wait-row other.txt
 wait-git-overlay other.txt = Normal
 # Push the merge.
-git-menu TortoiseGit/Push...
+git-menu Repository/Push...
 wait-git-window Push - TortoiseGit
 git-snapshot Push - TortoiseGit = $T/push.png
 git-click Push - TortoiseGit : OK
@@ -27,7 +27,7 @@ wait-git-result Git Command Progress = Success
 expect-git-text Git Command Progress : git push --progress -v origin main
 git-click Git Command Progress : Close
 # Fetch with prune.
-git-menu TortoiseGit/Fetch...
+git-menu Repository/Fetch...
 wait-git-window Fetch - TortoiseGit
 git-set Fetch - TortoiseGit : prune = on
 git-click Fetch - TortoiseGit : OK
@@ -37,13 +37,14 @@ git-click Git Command Progress : Close
 # Clone into the folder above.
 open $T
 click-empty
-git-menu Git Clone...
-wait-git-window Git clone - TortoiseGit
-git-set Git clone - TortoiseGit : url = $T/remote.git
-expect-git-dialog-field Git clone - TortoiseGit : directory = $T/remote
-git-set Git clone - TortoiseGit : directory = $T/cloned
-git-snapshot Git clone - TortoiseGit = $T/clone.png
-git-click Git clone - TortoiseGit : OK
+git-menu Repository/Clone...
+wait-git-window Clone - TortoiseGit
+expect-git-dialog-field Clone - TortoiseGit : tool = Git
+git-set Clone - TortoiseGit : url = $T/remote.git
+expect-git-dialog-field Clone - TortoiseGit : directory = $T/remote
+git-set Clone - TortoiseGit : directory = $T/cloned
+git-snapshot Clone - TortoiseGit = $T/clone.png
+git-click Clone - TortoiseGit : OK
 wait-git-result Git Command Progress = Success
 git-click Git Command Progress : Close
 wait-row cloned

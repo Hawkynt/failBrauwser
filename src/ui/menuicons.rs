@@ -47,6 +47,25 @@ pub fn icon_names(label: &str) -> &'static [&'static str] {
         "Remove" => &["list-remove", "edit-delete"],
         "Move Up" => &["go-up"],
         "Move Down" => &["go-down"],
+        "Open as" => &["document-open", "package-x-generic"],
+        "Archive" => &["package-x-generic", "application-x-archive", "archive-manager"],
+        "VeraCrypt / TrueCrypt" | "BitLocker" | "LUKS" | "dm-crypt (plain)" => &["drive-harddisk-encrypted", "dialog-password", "changes-prevent"],
+        "Repository" => &["folder-remote", "network-server"],
+        "Clone" => &["folder-download", "folder-remote", "edit-copy"],
+        "Commit" => &["vcs-commit", "document-save"],
+        "Pull" => &["vcs-pull", "go-down"],
+        "Push" => &["vcs-push", "go-up"],
+        "Sync" => &["emblem-synchronizing", "view-refresh"],
+        "Stash" => &["vcs-stash", "archive-insert", "document-save-as"],
+        "Switch/Checkout" => &["vcs-branch", "go-jump"],
+        "Revert" => &["document-revert", "edit-undo"],
+        "Check for modifications" => &["edit-find", "system-search"],
+        "Diff" | "Diff with previous version" => &["vcs-diff", "view-split-left-right", "edit-find-replace"],
+        "Show Log" => &["vcs-log", "document-open-recent", "x-office-document"],
+        "Browse Repository" => &["folder-remote", "system-file-manager"],
+        "Blame" => &["vcs-annotate", "format-justify-left", "accessories-text-editor"],
+        "Delete (keep local)" | "Delete and add to ignore list" => &["edit-delete", "list-remove"],
+        "Settings" => &["preferences-system", "preferences-other"],
         _ => &[],
     }
 }
@@ -189,6 +208,12 @@ mod tests {
             "Create _Link on Desktop", "Create _Folder…", "Create _Document…", "Select _All", "Show _Hidden Files", "_Show Hidden Entry", "_Hide",
             "_Hide Mounted Volumes", "_Properties…", "_Empty Trash", "_Restore", "_Pin to Side Panel", "_Add Current Folder", "_Add Server…",
             "_Remove", "Re_move", "Move _Up", "Move _Down",
+            // Open as and the volume kinds a name cannot tell (M14).
+            "Open _as", "_Archive", "VeraCrypt / TrueCrypt", "BitLocker", "LUKS", "dm-crypt (plain)",
+            // The Repository submenu (M15).
+            "_Repository", "Clone…", "Commit", "Pull", "Push", "Sync", "Stash", "Switch/Checkout…", "Revert",
+            "Check for modifications", "Diff", "Diff with previous version", "Show Log", "Browse Repository", "Blame",
+            "Rename", "Delete", "Delete (keep local)", "Delete and add to ignore list", "Settings",
         ] {
             assert!(!icon_names(label).is_empty(), "no icon for {label:?}");
         }
