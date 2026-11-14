@@ -29,6 +29,11 @@ A fast, native GTK 3 file manager for Linux and Windows, in the spirit of Thunar
   to tap.
 - **Links on the desktop** from the right-click menu of files, folders, side panel entries,
   drives (in the side panel and on the drives page) and the folder tree: standard `.desktop` links every desktop understands.
+- **Links the way Link Shell Extension makes them.** Drag with the right mouse button and drop:
+  *Move here*, *Copy here*, *Create Archive here…*, *Create Link here* (symbolic link, hard link,
+  junction, shell link — what the target's filesystem can hold) and *Drop As* Smart Copy, Smart
+  Mirror, DeLorean Copy, Hardlink Clone and Symbolic Link Clone. Overlay icons mark hard links,
+  junctions and symbolic links; folders moved keep the links inside them pointing right.
 - **Trash shared with Thunar** and other file managers (freedesktop.org spec): browse it,
   restore to the original place, delete permanently, empty.
 - **Thumbnails** for pictures, videos and documents (shared with other file managers), and
@@ -246,6 +251,18 @@ file's icon or name drags it, and dragging from the empty part of a row draws a 
 rectangle; pressing one of several selected files drags them all, shown as a stack with their
 count. Middle-click a folder to open it in a new tab.
 
+Drag with the **right** mouse button and a menu opens where you drop, asking what to do:
+
+| Item | Does |
+|---|---|
+| *Move here* / *Copy here* | what a plain drag does |
+| *Create Archive here…* | the Compress window for what is dragged, the archive written into the folder dropped on |
+| *Create Link here* ▸ | *Symbolic Link*, *Hard Link*, *Junction*, *Shell Link* — each only where it can be made (see Links) |
+| *Drop As* ▸ | *Smart Copy*, *Smart Mirror*, *DeLorean Copy*, *Hardlink Clone*, *Symbolic Link Clone* (when folders are dragged) |
+| *Cancel* | nothing |
+
+A right click that does not move opens the right-click menu as before.
+
 **Columns:** *View → Columns* or right-click a column header. For folders, *Size* shows
 everything inside, added up on background threads (“…” until known, “≥” while counting);
 sorting by size sorts folders by that total. Symbolic links are never followed (a link to `/`
@@ -307,6 +324,65 @@ some desktops want before they trust it; a second link of the same name gets a n
 (`Music (2).desktop`). A link to a phone that is not open points to its `mtp://` address.
 The Drives entry has no address other programs know, so its link is an entry of type
 `Application` that starts `failbrauwser drives:///` and opens the drives page.
+
+**Links:** failBrauwser makes and shows links the way Hermann Schinagl's Link Shell Extension
+(LSE) does on Windows; its documentation is the specification followed, item by item.
+
+*What can be made where.* The *Create Link here* submenu offers only what the folder dropped on
+can hold:
+
+| Link | Made when | Linux | Windows |
+|---|---|---|---|
+| *Symbolic Link* | the target filesystem keeps symbolic links (not FAT, exFAT, ISO 9660) | `symlink` | `CreateSymbolicLinkW` (developer mode or the privilege) |
+| *Hard Link* | files only, on the same filesystem as the source, one that keeps hard links (not FAT, exFAT) | `link` | `CreateHardLinkW` |
+| *Junction* | folders, local NTFS or ReFS | — | a mount-point reparse point |
+| *Shell Link* | always | a `.desktop` link (as *Create Link on Desktop* writes) | a `.lnk` file |
+
+Symbolic links are relative when source and link are on the same filesystem, absolute otherwise
+(*Edit → Links → Relative Symbolic Links* turns relative ones off). A link made in the folder of
+its source gets a free name: `notes (hardlink).txt`, `notes (symlink).txt`, `Music (junction)`.
+
+*Overlay icons* (*Edit → Links → Link Overlays*, on by default), at the bottom right of the icon
+so they never cover a version-control overlay:
+
+| Overlay | On |
+|---|---|
+| a red arrow | a file with more than one hard link |
+| a chain of three links | a junction |
+| a light green arrow | a symbolic link; greyed with a red stroke when its target is gone |
+
+*Pick and drop without dragging.* *Pick Link Source* in the right-click menu of files and folders
+remembers them; the right-click menu of a folder or of empty space then offers *Drop As* ▸ with
+the same items as the drag menu (and *Replace Symbolic Link* / *Replace Junction* on a link:
+the link keeps its name and points at the picked folder), and *Cancel Link Creation*.
+
+*The tree operations* treat the dragged folders as one tree (links between them are inner links):
+
+- **Smart Copy** copies the tree and makes its inner links again inside the copy: a symbolic link
+  or junction pointing into the tree points at the same place in the copy, and files hard-linked
+  to each other inside the tree are hard-linked to each other in the copy (saturated: all their
+  names inside; unsaturated: the names outside are not followed). A file is copied only when the
+  source is newer than what the destination already has. Times of files and folders are kept.
+- **Smart Mirror** is a Smart Copy that also makes the destination equal to the source: items
+  whose time differs are copied again, items the source no longer has are deleted.
+- **DeLorean Copy** makes backups that share unchanged files. The first drop is a Smart Copy into
+  `<name> - <YYYY-MM-DD HH-MM-SS>`; each later drop into the same folder hard-link-clones the newest
+  earlier backup into a new dated folder and smart-mirrors the source onto it: unchanged files stay
+  hard links to the earlier backup, changed ones are copied anew (the earlier backup keeps its own
+  copy), removed ones are removed only from the new backup. Offered for one folder at a time.
+- **Hardlink Clone** makes the folders again and every file a hard link to its source (same
+  filesystem only); **Symbolic Link Clone** makes every file a symbolic link to its source.
+- **Outer links** — links in the tree pointing outside it — follow *Edit → Links → Outer Links*:
+  *Unroll* (default: what they point at is copied in their place; loops are cut), *Splice* (the
+  link is made again pointing at the same outside target) or *Crop* (left out).
+- **Smart Move:** a folder moved within a filesystem (dragged, cut and pasted, renamed) keeps its
+  links right: absolute links inside pointing into the folder point at its new place, relative
+  links inside pointing outside are rewritten so they reach the same target. *Edit → Links →
+  Smart Move*, on by default.
+
+*Link properties.* The Properties window of a link has a *Link* tab: what it points at (with
+*Open Target* and, for symbolic links and junctions, the target editable), and for a file with
+several hard links all its other names, searched for on its filesystem.
 
 **Light and dark mode:** failBrauwser follows the desktop's colour scheme while it runs (the
 `org.freedesktop.appearance` portal setting and GNOME's `color-scheme`, as the desktop's
