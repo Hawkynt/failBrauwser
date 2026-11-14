@@ -4,10 +4,13 @@
 //! Smart Move). LSE is closed freeware; its own documentation is the specification followed
 //! (README: Links), and every rule here is checked against real filesystems in the tests.
 
+pub mod backup;
+pub mod helper;
 pub mod make;
 pub mod moved;
 pub mod siblings;
 pub mod tree;
+pub mod volume;
 
 use std::path::{Component, Path, PathBuf};
 
@@ -19,10 +22,12 @@ pub enum LinkKind {
     Junction,
     /// The platform's link file: `.lnk` on Windows, a `.desktop` link elsewhere.
     Shell,
+    /// A whole local drive shown in a new folder (see `volume`).
+    Mountpoint,
 }
 
 impl LinkKind {
-    pub const ALL: [LinkKind; 4] = [LinkKind::Symbolic, LinkKind::Hard, LinkKind::Junction, LinkKind::Shell];
+    pub const ALL: [LinkKind; 5] = [LinkKind::Symbolic, LinkKind::Hard, LinkKind::Junction, LinkKind::Shell, LinkKind::Mountpoint];
 
     /// The menu label.
     pub fn label(self) -> &'static str {
@@ -31,6 +36,7 @@ impl LinkKind {
             LinkKind::Hard => "Hard Link",
             LinkKind::Junction => "Junction",
             LinkKind::Shell => if cfg!(windows) { "Shell Link (.lnk)" } else { "Shell Link (.desktop)" },
+            LinkKind::Mountpoint => "Volume Mountpoint",
         }
     }
 
@@ -41,6 +47,7 @@ impl LinkKind {
             LinkKind::Hard => "hardlink",
             LinkKind::Junction => "junction",
             LinkKind::Shell => "link",
+            LinkKind::Mountpoint => "mountpoint",
         }
     }
 
@@ -51,6 +58,7 @@ impl LinkKind {
             LinkKind::Hard => "hard",
             LinkKind::Junction => "junction",
             LinkKind::Shell => "shell",
+            LinkKind::Mountpoint => "mountpoint",
         }
     }
 
@@ -65,6 +73,8 @@ pub struct FsCaps {
     pub symlinks: bool,
     pub hardlinks: bool,
     pub junctions: bool,
+    /// A folder of it can show a drive (a Volume Mountpoint).
+    pub mountpoints: bool,
 }
 
 /// Magic numbers of `statfs` (`linux/magic.h`, and `fs/ntfs3/super.c` for ntfs3).
@@ -83,7 +93,8 @@ pub mod magic {
 /// (network and FUSE ones among them) are offered both; the client's answer then decides.
 pub fn caps_linux(magic: u64) -> FsCaps {
     let none = matches!(magic, magic::MSDOS | magic::EXFAT | magic::ISOFS);
-    FsCaps { symlinks: !none, hardlinks: !none, junctions: false }
+    // Linux mounts on a folder of any filesystem.
+    FsCaps { symlinks: !none, hardlinks: !none, junctions: false, mountpoints: true }
 }
 
 /// What a Windows volume of filesystem `name` (`GetVolumeInformationW`) holds: NTFS everything,
@@ -91,11 +102,12 @@ pub fn caps_linux(magic: u64) -> FsCaps {
 /// and exFAT nothing.
 pub fn caps_windows(name: &str) -> FsCaps {
     match name.to_ascii_uppercase().as_str() {
-        "NTFS" => FsCaps { symlinks: true, hardlinks: true, junctions: true },
-        "REFS" => FsCaps { symlinks: true, hardlinks: true, junctions: true },
+        // Volume mount points: NTFS folders only (SetVolumeMountPointW).
+        "NTFS" => FsCaps { symlinks: true, hardlinks: true, junctions: true, mountpoints: true },
+        "REFS" => FsCaps { symlinks: true, hardlinks: true, junctions: true, mountpoints: false },
         "FAT" | "FAT12" | "FAT16" | "FAT32" | "EXFAT" | "CDFS" | "UDF" => FsCaps::default(),
         // Third-party filesystems (LSE lists Btrfs by default): offered, the call decides.
-        _ => FsCaps { symlinks: true, hardlinks: true, junctions: false },
+        _ => FsCaps { symlinks: true, hardlinks: true, junctions: false, mountpoints: false },
     }
 }
 
@@ -130,11 +142,14 @@ pub struct Source {
     pub is_dir: bool,
     /// The filesystem the entry itself lives on.
     pub dev: Option<u64>,
+    /// The top folder of a local drive (it can become a Volume Mountpoint).
+    pub volume: bool,
 }
 
 impl Source {
     pub fn of(path: &Path) -> Source {
-        Source { path: path.to_path_buf(), is_dir: path.is_dir(), dev: crate::osprim::entry_device(path) }
+        let is_dir = path.is_dir();
+        Source { path: path.to_path_buf(), is_dir, dev: crate::osprim::entry_device(path), volume: is_dir && volume::is_volume_root(path) }
     }
 }
 
@@ -155,6 +170,9 @@ pub fn offered(sources: &[Source], caps: FsCaps, dest_dev: Option<u64>) -> Vec<L
         out.push(LinkKind::Junction);
     }
     out.push(LinkKind::Shell);
+    if caps.mountpoints && sources.iter().all(|s| s.volume) {
+        out.push(LinkKind::Mountpoint);
+    }
     out
 }
 
@@ -265,12 +283,13 @@ mod tests {
 
     #[test]
     fn filesystems_that_keep_no_links_are_not_offered_them() {
-        assert_eq!(caps_linux(magic::EXT4), FsCaps { symlinks: true, hardlinks: true, junctions: false });
+        assert_eq!(caps_linux(magic::EXT4), FsCaps { symlinks: true, hardlinks: true, junctions: false, mountpoints: true });
         assert_eq!(caps_linux(magic::BTRFS), caps_linux(magic::EXT4));
         assert_eq!(caps_linux(magic::NTFS3), caps_linux(magic::EXT4));
         for m in [magic::MSDOS, magic::EXFAT, magic::ISOFS] {
-            assert_eq!(caps_linux(m), FsCaps::default(), "{m:#x}");
+            assert_eq!(caps_linux(m), FsCaps { mountpoints: true, ..FsCaps::default() }, "{m:#x}: no links, but a drive can be mounted on its folders");
         }
+        assert!(caps_windows("NTFS").mountpoints && !caps_windows("ReFS").mountpoints && !caps_windows("FAT32").mountpoints);
         assert!(caps_windows("NTFS").junctions && caps_windows("ntfs").hardlinks);
         assert_eq!(caps_windows("FAT32"), FsCaps::default());
         assert_eq!(caps_windows("exFAT"), FsCaps::default());
@@ -286,12 +305,12 @@ mod tests {
     }
 
     fn src(p: &str, is_dir: bool, dev: u64) -> Source {
-        Source { path: p.into(), is_dir, dev: Some(dev) }
+        Source { path: p.into(), is_dir, dev: Some(dev), volume: false }
     }
 
     #[test]
     fn hard_links_only_for_files_on_the_same_filesystem() {
-        let all = FsCaps { symlinks: true, hardlinks: true, junctions: true };
+        let all = FsCaps { symlinks: true, hardlinks: true, junctions: true, mountpoints: true };
         assert_eq!(offered(&[src("/a/f", false, 1)], all, Some(1)), {
             let mut v = vec![LinkKind::Symbolic, LinkKind::Hard];
             if cfg!(windows) {
@@ -305,6 +324,17 @@ mod tests {
         assert_eq!(offered(&[src("/a/f", false, 1)], FsCaps::default(), Some(1)), [LinkKind::Shell]);
         assert!(offered(&[], all, Some(1)).is_empty());
         assert_eq!(offered(&[src("/a/d", true, 1)], all, Some(1)).contains(&LinkKind::Junction), cfg!(windows));
+    }
+
+    #[test]
+    fn a_volume_mountpoint_only_for_drives_and_where_a_drive_can_be_mounted() {
+        let all = FsCaps { symlinks: true, hardlinks: true, junctions: true, mountpoints: true };
+        let drive = Source { volume: true, ..src("/run/media/me/STICK", true, 7) };
+        assert_eq!(offered(&[drive.clone()], all, Some(1)).last(), Some(&LinkKind::Mountpoint));
+        assert!(!offered(&[drive.clone(), src("/a/d", true, 1)], all, Some(1)).contains(&LinkKind::Mountpoint), "every source a drive");
+        assert!(!offered(&[drive], FsCaps { mountpoints: false, ..all }, Some(1)).contains(&LinkKind::Mountpoint));
+        assert!(!offered(&[src("/a/d", true, 1)], all, Some(1)).contains(&LinkKind::Mountpoint));
+        assert_eq!(LinkKind::from_id("mountpoint"), Some(LinkKind::Mountpoint));
     }
 
     #[test]

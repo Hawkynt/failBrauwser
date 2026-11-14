@@ -16,6 +16,10 @@ use std::path::{Path, PathBuf};
 /// asks for a relative symbolic link where one can be; `icon` is the themed icon a `.desktop`
 /// link shows. Gives the path made.
 pub fn create(kind: LinkKind, source: &Path, dest_dir: &Path, relative: bool, icon: &str) -> io::Result<PathBuf> {
+    if kind == LinkKind::Mountpoint {
+        let exe = std::env::current_exe()?;
+        return super::volume::create(source, dest_dir, &super::helper::Elevation::admin(&exe));
+    }
     let name = source.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no name"))?;
     if kind == LinkKind::Shell {
         let url = crate::desktoplink::file_url(source).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no address"))?;
@@ -35,7 +39,7 @@ pub fn make_at(kind: LinkKind, target: &Path, link: &Path, relative: bool) -> io
         LinkKind::Symbolic => symlink(target, link, relative),
         LinkKind::Hard => std::fs::hard_link(target, link),
         LinkKind::Junction => junction(target, link),
-        LinkKind::Shell => Err(io::Error::from(io::ErrorKind::Unsupported)),
+        LinkKind::Shell | LinkKind::Mountpoint => Err(io::Error::from(io::ErrorKind::Unsupported)),
     }
 }
 
@@ -49,6 +53,12 @@ pub fn symlink(target: &Path, link: &Path, relative: bool) -> io::Result<()> {
 /// Points the existing symbolic link or junction `link` at `target`, keeping its kind and name:
 /// the new link is made beside it and renamed over it, so the name is never missing.
 pub fn retarget(link: &Path, target: &Path, relative: bool) -> io::Result<()> {
+    retarget_with(link, target, relative, false)
+}
+
+/// [`retarget`]; `backup` (Backup Mode) gives the new link the owner, extended attributes and
+/// times of the old one (on Windows its security descriptor).
+pub fn retarget_with(link: &Path, target: &Path, relative: bool, backup: bool) -> io::Result<()> {
     let junction = is_junction(link);
     let meta = std::fs::symlink_metadata(link)?;
     if !meta.file_type().is_symlink() && !junction {
@@ -61,6 +71,12 @@ pub fn retarget(link: &Path, target: &Path, relative: bool) -> io::Result<()> {
         self::junction(target, &tmp)?;
     } else {
         symlink(target, &tmp, relative)?;
+    }
+    if backup {
+        if let Err(e) = super::backup::copy_meta(link, &tmp) {
+            let _ = remove_link(&tmp);
+            return Err(e);
+        }
     }
     #[cfg(windows)]
     {
@@ -105,7 +121,8 @@ pub fn target_of(link: &Path) -> io::Result<PathBuf> {
 pub fn is_junction(path: &Path) -> bool {
     #[cfg(windows)]
     {
-        win::reparse_tag(path) == Some(win::IO_REPARSE_TAG_MOUNT_POINT)
+        // A volume mount point carries the same tag; it names a volume, not a folder.
+        win::reparse_tag(path) == Some(win::IO_REPARSE_TAG_MOUNT_POINT) && !super::volume::is_mountpoint(path)
     }
     #[cfg(not(windows))]
     {

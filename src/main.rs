@@ -49,6 +49,11 @@ fn main() -> gtk::glib::ExitCode {
         };
         return if ok { gtk::glib::ExitCode::SUCCESS } else { gtk::glib::ExitCode::FAILURE };
     }
+    // Backup Mode and Volume Mountpoints, as the administrator through pkexec (links/helper.rs).
+    let os: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if os.get(1).is_some_and(|a| a == failbrauwser::links::helper::ARG) {
+        std::process::exit(failbrauwser::links::helper::main(&os[2..]));
+    }
     // Opens the LVM volumes of an encrypted drive, as root through pkexec (see lvm.rs).
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--lvm") {

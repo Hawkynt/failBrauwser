@@ -15,8 +15,9 @@ pub struct Fixed {
 }
 
 /// Puts the links inside `new` (moved from `old`) right; `relative` spells rewritten links
-/// relative where they can be.
-pub fn after_move(old: &Path, new: &Path, relative: bool) -> Fixed {
+/// relative where they can be; `backup` (Backup Mode) keeps the owner and attributes of each
+/// link rewritten.
+pub fn after_move(old: &Path, new: &Path, relative: bool, backup: bool) -> Fixed {
     let mut fixed = Fixed::default();
     let (old, new) = (super::lexical(old), super::lexical(new));
     let mut stack = vec![new.clone()];
@@ -43,7 +44,7 @@ pub fn after_move(old: &Path, new: &Path, relative: bool) -> Fixed {
             if resolve(&p, &raw) == want {
                 continue;
             }
-            match make::retarget(&p, &want, relative) {
+            match make::retarget_with(&p, &want, relative, backup) {
                 Ok(()) => fixed.links.push(p),
                 Err(e) => fixed.errors.push((p, e.to_string())),
             }
@@ -75,7 +76,7 @@ mod tests {
         std::fs::create_dir_all(new.parent().unwrap()).unwrap();
         std::fs::rename(&old, &new).unwrap();
 
-        let fixed = after_move(&old, &new, true);
+        let fixed = after_move(&old, &new, true, false);
         assert!(fixed.errors.is_empty(), "{:?}", fixed.errors);
         assert_eq!(fixed.links, [new.join("abs-in"), new.join("rel-out")]);
         for n in ["abs-in", "rel-in"] {

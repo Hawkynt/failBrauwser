@@ -31,6 +31,20 @@ impl TreeOp {
         }
     }
 
+    /// The id the menus and the administrator helper use.
+    pub fn id(self) -> &'static str {
+        match self {
+            TreeOp::SmartCopy => "smart-copy",
+            TreeOp::SmartMirror => "smart-mirror",
+            TreeOp::HardlinkClone => "hardlink-clone",
+            TreeOp::SymlinkClone => "symlink-clone",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<TreeOp> {
+        [TreeOp::SmartCopy, TreeOp::SmartMirror, TreeOp::HardlinkClone, TreeOp::SymlinkClone].into_iter().find(|o| o.id() == id)
+    }
+
     fn mirrors(self) -> bool {
         self == TreeOp::SmartMirror
     }
@@ -71,11 +85,14 @@ pub struct Options {
     pub outer: Outer,
     /// Symbolic links made are relative where they can be.
     pub relative: bool,
+    /// Backup Mode: owner, permissions, extended attributes and holes are kept too (see
+    /// `backup`); run as the administrator to read and give everything.
+    pub backup: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { outer: Outer::Unroll, relative: true }
+        Options { outer: Outer::Unroll, relative: true, backup: false }
     }
 }
 
@@ -176,7 +193,7 @@ pub fn delorean(source: &Path, dest_dir: &Path, stamp: &str, opts: Options, prog
     let mut report = Report::default();
     if let Some(prev) = previous {
         // The earlier backup as it is, its own links spliced as they are.
-        report.absorb(run(TreeOp::HardlinkClone, &[(prev, new.clone())], Options { outer: Outer::Splice, relative: opts.relative }, progress));
+        report.absorb(run(TreeOp::HardlinkClone, &[(prev, new.clone())], Options { outer: Outer::Splice, ..opts }, progress));
         if !report.errors.is_empty() || report.cancelled {
             return Ok((new, report));
         }
@@ -267,7 +284,12 @@ impl Run<'_> {
                 }
             }
         }
-        if let Ok(m) = std::fs::metadata(src) {
+        if self.opts.backup {
+            // Last, so a folder made read-only still takes what goes into it.
+            if let Err(e) = super::backup::copy_meta(src, dst) {
+                self.fail(dst, e);
+            }
+        } else if let Ok(m) = std::fs::metadata(src) {
             let (a, mt) = crate::osprim::times(&m);
             crate::osprim::set_times(dst, a, mt, true);
         }
@@ -286,7 +308,7 @@ impl Run<'_> {
                     Err(e) => self.fail(dst, e),
                 }
             }
-            TreeOp::SymlinkClone => self.symlink_to(src, dst, false),
+            TreeOp::SymlinkClone => self.symlink_to(src, dst, false, None),
             TreeOp::SmartCopy | TreeOp::SmartMirror => self.smart_file(src, dst, meta),
         }
     }
@@ -309,7 +331,7 @@ impl Run<'_> {
             Ok(d) if d.is_file() && !d.file_type().is_symlink() => {
                 let (src_t, dst_t) = (crate::osprim::times(meta).1, crate::osprim::times(&d).1);
                 if self.op.mirrors() {
-                    src_t == dst_t && meta.len() == d.len() && crate::osprim::mode_of(meta) == crate::osprim::mode_of(&d)
+                    src_t == dst_t && meta.len() == d.len() && crate::osprim::mode_of(meta) == crate::osprim::mode_of(&d) && (!self.opts.backup || super::backup::same_owner(meta, &d))
                 } else {
                     dst_t >= src_t
                 }
@@ -319,7 +341,7 @@ impl Run<'_> {
         if up_to_date {
             self.report.kept += 1;
         } else {
-            match copy_replace(src, dst, meta) {
+            match copy_replace(src, dst, meta, self.opts.backup) {
                 Ok(()) => self.report.copied += 1,
                 Err(e) => return self.fail(dst, e),
             }
@@ -330,11 +352,12 @@ impl Run<'_> {
     }
 
     /// A symbolic link at `dst` to `target` (an absolute path), unless `dst` already is one
-    /// storing what would be stored.
-    fn symlink_to(&mut self, target: &Path, dst: &Path, junction: bool) {
+    /// storing what would be stored; in Backup Mode it carries what the link `like` carries.
+    fn symlink_to(&mut self, target: &Path, dst: &Path, junction: bool, like: Option<&Path>) {
         let stored = if junction { lexical(target) } else { super::spelling(dst, target, self.opts.relative) };
         if std::fs::read_link(dst).is_ok_and(|t| t == stored) {
             self.report.kept += 1;
+            self.keep_meta(like, dst);
             return;
         }
         let is_dir = std::fs::metadata(target).is_ok_and(|m| m.is_dir());
@@ -346,8 +369,20 @@ impl Run<'_> {
             }
         });
         match r {
-            Ok(()) => self.report.linked += 1,
+            Ok(()) => {
+                self.report.linked += 1;
+                self.keep_meta(like, dst);
+            }
             Err(e) => self.fail(dst, e),
+        }
+    }
+
+    /// Backup Mode: what `like` carries given to `dst`.
+    fn keep_meta(&mut self, like: Option<&Path>, dst: &Path) {
+        if let (true, Some(src)) = (self.opts.backup, like) {
+            if let Err(e) = super::backup::copy_meta(src, dst) {
+                self.fail(dst, e);
+            }
         }
     }
 
@@ -359,7 +394,7 @@ impl Run<'_> {
         let abs = resolve(src, &raw);
         let junction = super::make::is_junction(src);
         if let Some(mapped) = self.map(&abs) {
-            return self.symlink_to(&mapped, dst, junction);
+            return self.symlink_to(&mapped, dst, junction, Some(src));
         }
         match self.opts.outer {
             Outer::Crop => {
@@ -367,7 +402,7 @@ impl Run<'_> {
                     let _ = clear_if_present(dst);
                 }
             }
-            Outer::Splice => self.symlink_to(&abs, dst, junction),
+            Outer::Splice => self.symlink_to(&abs, dst, junction, Some(src)),
             Outer::Unroll => {
                 let (Ok(meta), Ok(real)) = (std::fs::metadata(src), std::fs::canonicalize(src)) else {
                     // A dead link has nothing to unroll.
@@ -418,13 +453,20 @@ fn clear_if_present(p: &Path) -> io::Result<()> {
 }
 
 /// Copies `src` beside `dst` and renames it over `dst`: never written through the old name.
-fn copy_replace(src: &Path, dst: &Path, meta: &std::fs::Metadata) -> io::Result<()> {
+/// `backup` keeps holes, owner, permissions and extended attributes too.
+fn copy_replace(src: &Path, dst: &Path, meta: &std::fs::Metadata, backup: bool) -> io::Result<()> {
     let dir = dst.parent().unwrap_or(Path::new("."));
     let tmp = dir.join(format!(".{}.fb-copy", dst.file_name().unwrap_or_default().to_string_lossy()));
+    let _ = std::fs::remove_file(&tmp);
     let r = (|| {
-        std::fs::copy(src, &tmp)?;
-        let (a, m) = crate::osprim::times(meta);
-        crate::osprim::set_times(&tmp, a, m, true);
+        if backup {
+            super::backup::copy_data(src, &tmp)?;
+            super::backup::copy_meta(src, &tmp)?;
+        } else {
+            std::fs::copy(src, &tmp)?;
+            let (a, m) = crate::osprim::times(meta);
+            crate::osprim::set_times(&tmp, a, m, true);
+        }
         if let Ok(d) = std::fs::symlink_metadata(dst) {
             if d.is_dir() && !d.file_type().is_symlink() {
                 std::fs::remove_dir_all(dst)?;
@@ -499,13 +541,13 @@ mod tests {
     fn outer_links_are_spliced_or_cropped_as_asked() {
         let (t, s) = fixture();
         let d = t.path().join("spliced");
-        go(TreeOp::SmartCopy, &s, &d, Options { outer: Outer::Splice, relative: true });
+        go(TreeOp::SmartCopy, &s, &d, Options { outer: Outer::Splice, relative: true, backup: false });
         assert_eq!(std::fs::read_link(d.join("outer")).unwrap(), Path::new("../out"));
         let d = t.path().join("absolute");
-        go(TreeOp::SmartCopy, &s, &d, Options { outer: Outer::Splice, relative: false });
+        go(TreeOp::SmartCopy, &s, &d, Options { outer: Outer::Splice, relative: false, backup: false });
         assert_eq!(std::fs::read_link(d.join("outer")).unwrap(), t.path().join("out").canonicalize().unwrap());
         let d = t.path().join("cropped");
-        go(TreeOp::SmartCopy, &s, &d, Options { outer: Outer::Crop, relative: true });
+        go(TreeOp::SmartCopy, &s, &d, Options { outer: Outer::Crop, relative: true, backup: false });
         assert!(std::fs::symlink_metadata(d.join("outer")).is_err());
     }
 
@@ -517,7 +559,7 @@ mod tests {
         symlink("../one/f", t.path().join("two/to-one")).unwrap();
         let dest = t.path().join("dest");
         let pairs = destinations(&[t.path().join("one"), t.path().join("two")], &dest);
-        let r = run(TreeOp::SmartCopy, &pairs, Options { outer: Outer::Crop, relative: false }, &mut |_| true);
+        let r = run(TreeOp::SmartCopy, &pairs, Options { outer: Outer::Crop, relative: false, backup: false }, &mut |_| true);
         assert!(r.errors.is_empty());
         assert_eq!(std::fs::read_link(dest.join("two/to-one")).unwrap(), dest.join("one/f"));
     }
