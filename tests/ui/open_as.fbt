@@ -1,0 +1,60 @@
+# M14 "Open as": the kind the user names, not the one a name suggests.
+# What each choice reads out, byte for byte, is pinned in tests/archive_helper.rs and
+# tests/archive_vfs.rs: a clipboard transfer on this host answers later than one 20 s step of
+# this script can span (measured 2026-11-11, docs/WINDOWS.md), so the reading stays there.
+
+# The menu offers the container kinds that no name can tell apart.
+open $T/w
+select plain.img
+expect-menu-item VeraCrypt / TrueCrypt
+expect-menu-item dm-crypt (plain)
+
+# A dm-crypt (plain) volume carries no header at all: nothing in the bytes says what it is, so the
+# choice is the only door — and that choice asks for its passphrase before it reads a byte.
+open $T/w
+select plain.img
+action win.open-as-volume DmCryptPlain
+wait-dialog Passphrase for
+dialog-entry Passphrase for = s3cret
+dialog-button Passphrase for : Unlock
+wait-row volume.img
+
+# A VeraCrypt container under a name that says nothing: detection cannot reach it, the choice can,
+# and the ask comes first — nothing is searched before an answer exists. Answered, the volume
+# inside is listed.
+open $T/w
+select disk.bin
+action win.open-as-volume VeraCrypt
+wait-dialog Passphrase for
+dialog-entry Passphrase for = test
+dialog-button Passphrase for : Unlock
+wait-row metadata.ini
+wait-row volume.img
+
+# Opening the same file again asks no second time: the session holds its passphrase.
+open $T/w
+select disk.bin
+action win.open-as-volume VeraCrypt
+wait-row metadata.ini
+
+# A refused prompt is not a failed opening: the file opens without a passphrase, and a VeraCrypt
+# reader with nothing to search answers the shell of a locked volume.
+open $T/w
+select locked.bin
+action win.open-as-volume VeraCrypt
+wait-dialog Passphrase for
+dialog-button Passphrase for : Cancel
+wait-row volume.img
+wait-no-row metadata.ini
+
+# A program answers the Archive entry with what is inside it instead of being run, which is what
+# its name alone would do. The program is the helper itself: a PE on Windows, whose resources are
+# listed; an ELF elsewhere, whose loader and dynamic symbols are.
+open $T/w
+select setup.exe
+expect-menu-item Archive
+action win.open-as-archive
+!win wait-row MANIFEST
+!win wait-row VERSION
+!unix wait-row interp.txt
+!unix wait-row symbols_dyn.txt

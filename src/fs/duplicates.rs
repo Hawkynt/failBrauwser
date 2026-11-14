@@ -1,6 +1,7 @@
 //! Finding duplicates: files with the same bytes, and pictures that show the same thing even
 //! at another resolution or saved again (compared by what they show, not by their metadata).
 
+use crate::osprim;
 use gtk::gdk_pixbuf::{InterpType, Pixbuf};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -18,7 +19,6 @@ pub struct Found {
 
 /// Every regular file below `root` (links are not followed).
 pub fn walk(root: &Path, cancel: &AtomicBool) -> Vec<Found> {
-    use std::os::unix::fs::MetadataExt;
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -31,7 +31,7 @@ pub fn walk(root: &Path, cancel: &AtomicBool) -> Vec<Found> {
             if m.is_dir() {
                 stack.push(e.path());
             } else if m.is_file() {
-                out.push(Found { path: e.path(), size: m.len(), mtime: m.mtime() });
+                out.push(Found { path: e.path(), size: m.len(), mtime: osprim::times(&m).1.0 });
             }
         }
     }
@@ -275,7 +275,9 @@ mod tests {
         let files = walk(d, &AtomicBool::new(false));
         assert_eq!(files.len(), 8);
         let groups = exact_groups(&files, &AtomicBool::new(false), &AtomicUsize::new(0));
-        let names: Vec<Vec<String>> = groups.iter().map(|g| g.iter().map(|f| f.path.strip_prefix(d).unwrap().display().to_string()).collect()).collect();
+        // Stable separator for the expected groups; Windows displays backslashes.
+        let rel_key = |rel: &std::path::Path| rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+        let names: Vec<Vec<String>> = groups.iter().map(|g| g.iter().map(|f| rel_key(f.path.strip_prefix(d).unwrap())).collect()).collect();
         assert_eq!(names, [vec!["a.bin", "sub/a copy.bin"], vec!["x.txt", "y.txt"]]);
         assert!(is_picture_name("IMG_1.JPG") && !is_picture_name("notes.txt"));
     }

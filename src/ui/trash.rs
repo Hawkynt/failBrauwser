@@ -11,7 +11,6 @@ use failbrauwser::ops::job::{Answer, Question};
 use failbrauwser::ops::names::free_name;
 use failbrauwser::trash::{self, TrashItem};
 use gtk::prelude::*;
-use std::os::unix::fs::MetadataExt;
 use std::rc::Rc;
 
 /// The bar at the top of the trash view: how much is in it, Restore and Empty Trash.
@@ -147,8 +146,8 @@ pub fn restore_selection(w: &Window) {
                             dst: item.original.clone(),
                             src_size: here.as_ref().map(|m| m.len()).unwrap_or(0),
                             dst_size: there.as_ref().map(|m| m.len()).unwrap_or(0),
-                            src_mtime: here.as_ref().map(|m| m.mtime()).unwrap_or(0),
-                            dst_mtime: there.as_ref().map(|m| m.mtime()).unwrap_or(0),
+                            src_mtime: here.as_ref().map(|m| failbrauwser::osprim::times(m).1.0).unwrap_or(0),
+                            dst_mtime: there.as_ref().map(|m| failbrauwser::osprim::times(m).1.0).unwrap_or(0),
                             dst_is_dir: there.is_some_and(|m| m.is_dir()),
                         };
                         let parent = item.original.parent().unwrap_or(std::path::Path::new("/")).to_path_buf();
@@ -157,7 +156,7 @@ pub fn restore_selection(w: &Window) {
                             Answer::KeepBoth => done.push(trash::restore(item, Some(&parent.join(free_name(&parent, &name, None))))?),
                             Answer::Replace => {
                                 // What is in the way goes to the trash instead of being lost.
-                                if let Err(e) = gtk::gio::File::for_path(&item.original).trash(gtk::gio::Cancellable::NONE) {
+                                if let Err(e) = trash::trash_file(&item.original) {
                                     ctx.record_error(format!("{}: {e}", item.original.display()));
                                     continue;
                                 }

@@ -255,8 +255,12 @@ fn iso_edits_keep_rock_ridge_joliet_and_boot_records() {
     let long = "a name that is much longer than the sixty-four characters Joliet can hold.txt";
     fs::write(src.join(long), "long").unwrap();
     fs::write(src.join("run.sh"), "#!/bin/sh\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(src.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    // The executable bit is what Rock Ridge records on Unix; there is none on Windows.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(src.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
     fs::write(src.join("boot/isolinux.bin"), vec![0x5au8; 4096]).unwrap();
     fs::write(src.join("boot/efi.img"), vec![0xa5u8; 32768]).unwrap();
     let iso = dir.path().join("b.iso");
@@ -291,6 +295,88 @@ fn iso_edits_keep_rock_ridge_joliet_and_boot_records() {
     assert!(names.contains(&long.to_string()), "{names:?}");
 }
 
+// ── M14 "Open as": the kind the user chose, not one a name suggests ──
+
+/// The data area of `test.sha256.hc`, recorded when the real VeraCrypt program wrote it.
+const VERACRYPT_SHA256_IMAGE: &str = "2b15dbe4544a853ca15311dd1dc83162c6cc06c6c470d98ca427b26093a9fb41";
+
+fn volume_fixture(name: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/veracrypt").join(name)
+}
+
+fn sha256_of(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(fs::read(path).unwrap());
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A VeraCrypt header is random-looking bytes, so a renamed container is beyond detection: the
+/// chosen kind is what reaches it (M14).
+#[test]
+fn a_chosen_kind_opens_a_container_whose_name_cannot_tell_it() {
+    let Some(h) = helper() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let lying = dir.path().join("disk.bin");
+    fs::copy(volume_fixture("test.sha256.hc"), &lying).unwrap();
+
+    let detected = h.list(&lying, None).unwrap();
+    assert_ne!(detected.format, "VeraCrypt", "neither the name nor the bytes say volume");
+
+    let forced = h.list_as(&lying, "VeraCrypt", Some("test")).unwrap();
+    assert_eq!(forced.format, "VeraCrypt");
+    assert!(!forced.writable, "a chosen container opens read-only");
+    let mut names: Vec<String> = forced.entries.iter().map(|e| e.name.clone()).collect();
+    names.sort();
+    assert_eq!(names, ["metadata.ini", "volume.img"]);
+
+    let out = dir.path().join("out");
+    h.extract_as(&lying, None, &out, "VeraCrypt", Some("test")).unwrap();
+    assert_eq!(sha256_of(&out.join("volume.img")), VERACRYPT_SHA256_IMAGE);
+}
+
+/// Without a passphrase the chosen kind still answers with the volume as a shell: nothing is
+/// searched while there is no passphrase to search with.
+#[test]
+fn a_chosen_kind_without_a_passphrase_lists_the_volume_as_encrypted() {
+    let Some(h) = helper() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let lying = dir.path().join("disk.bin");
+    fs::copy(volume_fixture("test.sha512.hc"), &lying).unwrap();
+
+    let listing = h.list_as(&lying, "VeraCrypt", None).unwrap();
+    assert_eq!(listing.format, "VeraCrypt");
+    assert_eq!(listing.entries.len(), 1);
+    assert_eq!(listing.entries[0].name, "volume.img");
+    assert_eq!(listing.entries[0].method, "encrypted");
+}
+
+#[test]
+fn a_chosen_kind_that_is_not_a_format_is_refused_by_name() {
+    let Some(h) = helper() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let lying = dir.path().join("disk.bin");
+    fs::copy(volume_fixture("test.sha512.hc"), &lying).unwrap();
+
+    let error = h.list_as(&lying, "NoSuchKind", None).unwrap_err();
+    assert!(error.message.contains("NoSuchKind"), "the refusal names the kind: {error}");
+}
+
+/// A wrong kind is the kind's own refusal: the chosen reader says so and writes nothing.
+#[test]
+fn a_wrong_chosen_kind_answers_an_error_and_extracts_nothing() {
+    let Some(h) = helper() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let lying = dir.path().join("disk.bin");
+    fs::copy(volume_fixture("test.sha512.hc"), &lying).unwrap();
+    let out = dir.path().join("out");
+
+    let error = h.extract_as(&lying, None, &out, "BitLocker", None).unwrap_err();
+    let leftovers: Vec<_> = fs::read_dir(&out).into_iter().flatten().flatten().collect();
+    assert!(leftovers.is_empty(), "a wrong kind wrote {:?}", leftovers.iter().map(|e| e.path()).collect::<Vec<_>>());
+    assert!(error.message.contains("FVE-FS") || error.message.contains("MSWIN4.1"), "the refusal is the reader's own: {error}");
+}
+
 /// The format table compiled into the program matches what the helper reports
 /// (`FB_REGEN_FORMATS=1` rewrites it).
 #[test]
@@ -322,6 +408,7 @@ fn formats_table() {
 }
 
 #[test]
+#[cfg(unix)] // the stuck stimulus is a FIFO; the Windows abort twin comes with the harness milestone
 fn abort_ends_a_request_that_never_finishes() {
     let Some(h) = helper() else { return };
     let dir = tempfile::tempdir().unwrap();

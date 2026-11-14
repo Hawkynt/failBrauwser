@@ -3,6 +3,7 @@
 //! Used by the UI tests (in a headless compositor) and to take the README screenshots.
 //!
 //! Script lines: `open <path>`, `tab <path>`, `select <name>…`, `action <name> [arg]`,
+//! `mouse-back` / `mouse-forward` (the mouse's own back and forward keys, written as `!win` lines),
 //! `answer <replace|skip|keepboth|cancel|delete>`, `text <reply for the next text prompt>`,
 //! `wait-idle`, `wait-exists <path>`, `wait-missing <path>`, `expect-rows <n>`,
 //! `expect-selected <name>`, `expect-location <text>`, `screenshot <file>`, `sleep <ms>`,
@@ -107,6 +108,18 @@ pub fn start(app: &Rc<AppCtx>, window: &Rc<Window>) {
         .lines()
         .enumerate()
         .map(|(i, l)| (i + 1, l.trim().to_string()))
+        .filter_map(|(i, l)| {
+            // A `!win ` line runs on Windows only, a `!unix ` line on Unix only;
+            // the other platform never sees the line at all.
+            let (marker, mine) = match l.strip_prefix("!win ") {
+                Some(_) => ("!win ", cfg!(windows)),
+                None => match l.strip_prefix("!unix ") {
+                    Some(_) => ("!unix ", cfg!(unix)),
+                    None => ("", true),
+                },
+            };
+            mine.then(|| (i, l[marker.len()..].to_string()))
+        })
         .filter(|(_, l)| !l.is_empty() && !l.starts_with('#'))
         .collect();
     let runner = Rc::new(RefCell::new(Runner { steps, window: window.clone(), app: app.clone(), waiting: None, current: (0, String::new()) }));
@@ -236,12 +249,49 @@ fn find_dialog(text: &str) -> Option<gtk::MessageDialog> {
         .find(|d| d.text().is_some_and(|t| t.contains(text)) || d.secondary_text().is_some_and(|t| t.contains(text)))
 }
 
+/// Path-text equality that ignores separator spelling: scenario lines keep `$T/…`
+/// slashes on Windows while location displays come back with `\`. On Unix the
+/// strings must match exactly (`\` is an ordinary name character there).
+fn same_path_text(got: &str, want: &str) -> bool {
+    let (got, want) = if cfg!(windows) { (got.replace('/', "\\"), want.replace('/', "\\")) } else { (got.to_string(), want.to_string()) };
+    got == want
+}
+
 fn idle(r: &Runner) -> bool {
     !r.app.jobs.is_busy() && r.window.panes().iter().all(|p| !p.is_loading() && !p.refresh_pending())
 }
 
+/// The title the drives page gives the machine's own system volume: Windows scripts
+/// use `$C` for it where Linux scripts name the root filesystem `File System`.
+#[cfg(windows)]
+fn system_drive_title() -> String {
+    let drive = std::env::var("SYSTEMDRIVE").unwrap_or_else(|_| "C:".into());
+    failbrauwser::win::storage::volumes().into_iter().find(|v| v.mount_point().is_some_and(|m| m.starts_with(drive.as_str()))).map(|v| v.title()).unwrap_or_default()
+}
+
+/// A scenario's stand-in for a hand on the mouse's back or forward key: the press-and-release pair
+/// that key produces, posted to this window's own handle as the input driver posts it. What listens
+/// for it is `win::xbuttons`, which is why this can only be done to a Win32 window.
+#[cfg(windows)]
+fn post_side_key(w: &Window, back: bool) -> Result<(), String> {
+    use failbrauwser::win::xbuttons::SideKey;
+    failbrauwser::win::xbuttons::press(&w.win, if back { SideKey::Back } else { SideKey::Forward })
+}
+
+/// X11 hands the same two keys to GDK as buttons 8 and 9, and the pane acts on those directly;
+/// there is no message to post there, and driving the X server's input from inside the program is a
+/// story of its own — the scenarios keep these steps behind `!win`.
+#[cfg(not(windows))]
+fn post_side_key(_: &Window, _: bool) -> Result<(), String> {
+    Err("the mouse's back and forward keys can only be posted to a Win32 window".into())
+}
+
 fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
     let (cmd, arg) = step.split_once(' ').map(|(c, a)| (c, a.trim())).unwrap_or((step, ""));
+    let arg_c = arg.to_string();
+    #[cfg(windows)]
+    let arg_c = if arg_c.contains("$C") { arg_c.replace("$C", &system_drive_title()) } else { arg_c };
+    let arg = arg_c.as_str();
     let w = r.window.clone();
     match cmd {
         "open" => {
@@ -263,6 +313,12 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
                 return Err(format!("selected {got} of {}", names.len()));
             }
         }
+        "select-none" => {
+            w.current_pane().select_names(&[]);
+            if let Some(kept) = w.current_pane().selected_items().first() {
+                return Err(format!("{} is still selected", kept.display_name()));
+            }
+        }
         "action" => {
             let (name, param) = arg.split_once(' ').map(|(n, p)| (n, Some(p))).unwrap_or((arg, None));
             let variant = param.map(|p| p.to_variant());
@@ -280,6 +336,9 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             }
             group.activate_action(short, variant.as_ref());
         }
+        // Deliberately not guarded by an enabled check the way `action` is: past the end of the
+        // history the real key simply does nothing, and a scenario has to be able to press it.
+        "mouse-back" | "mouse-forward" => post_side_key(&w, cmd == "mouse-back")?,
         "sidebar-drives" => {
             super::sidebar::for_window(&w).ok_or("no sidebar")?.click_drives();
             wait(r, |r| Ok(idle(r)));
@@ -458,6 +517,31 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             if !super::trash::click_bar(&w.current_pane(), arg) {
                 return Err(format!("trash bar button {arg:?} is not shown or not clickable"));
             }
+        }
+        "wait-bin" | "wait-no-bin" => {
+            // wait-bin <name> / wait-no-bin <name>: the shell's Recycle Bin holds (or no
+            // longer holds) an item that was deleted from `name` — Windows twin of the
+            // XDG `wait-exists …/Trash/files/…` checks, which have no such paths here.
+            #[cfg(windows)]
+            {
+                let want = arg.to_string();
+                let want2 = want.clone();
+                let holds = move || failbrauwser::win::recyclebin::list().is_ok_and(|b| b.iter().any(|i| i.original.file_name().is_some_and(|n| n.to_string_lossy() == want)));
+                // `cmd`, never `step`: step still carries the argument ("wait-bin a.txt").
+                let want_present = cmd == "wait-bin";
+                let found = holds();
+                if want_present == found {
+                    return Ok(());
+                }
+                // wait() polls until the check answers true, so it must answer for the
+                // state this verb is heading to — present for wait-bin, gone for wait-no-bin.
+                wait(r, move |_| {
+                    let b = failbrauwser::win::recyclebin::list().unwrap_or_default();
+                    Ok(b.iter().any(|i| i.original.file_name().is_some_and(|n| n.to_string_lossy() == want2)) == want_present)
+                });
+            }
+            #[cfg(not(windows))]
+            return Err(format!("{step} is Windows-only"));
         }
         "expect-icon-size" => {
             // expect-icon-size <list|icons> <pixels>
@@ -999,11 +1083,11 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         "wait-location" => {
             // For locations reached asynchronously (after probing a file).
             let want = arg.to_string();
-            wait(r, move |r| Ok(r.window.current_location().display() == want && idle(r)));
+            wait(r, move |r| Ok(same_path_text(&r.window.current_location().display(), &want) && idle(r)));
         }
         "expect-location" => {
             let loc = w.current_location().display();
-            if loc != arg {
+            if !same_path_text(&loc, arg) {
                 return Err(format!("location is {loc}"));
             }
         }
@@ -1161,7 +1245,7 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         "expect-tree-root" => {
             let sb = super::sidebar::for_window(&w).ok_or("no sidebar")?;
             let root = sb.root_path().map(|p| p.display().to_string()).unwrap_or_default();
-            if root != arg {
+            if !same_path_text(&root, arg) {
                 return Err(format!("tree root is {root}"));
             }
         }
@@ -1169,7 +1253,7 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             let want = arg.to_string();
             wait(r, move |r| {
                 let sb = super::sidebar::for_window(&r.window).ok_or("no sidebar")?;
-                Ok(sb.selected_path().is_some_and(|p| p.display().to_string() == want))
+                Ok(sb.selected_path().is_some_and(|p| same_path_text(&p.display().to_string(), &want)))
             });
         }
         "tree-expand" => {
@@ -1232,7 +1316,7 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             println!("SELFTEST OK");
             std::process::exit(0);
         }
-        _ => match super::git::testing::step(&w, cmd, arg) {
+        _ => match super::vcs::testing::step(&w, cmd, arg) {
             Some(Ok(Some(check))) => wait(r, move |_| check()),
             Some(Ok(None)) => {}
             Some(Err(e)) => return Err(e),

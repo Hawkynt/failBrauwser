@@ -24,7 +24,7 @@ fn run(script: &str, setup: impl FnOnce(&Path), check: impl FnOnce(&Path)) {
     run_with(script, true, setup, check);
 }
 
-/// `enabled`: the Git integration is switched on (Edit → Git Integration) from the start.
+/// `enabled`: the Git integration is switched on (Edit → Version Control Integration) from the start.
 fn run_with(script: &str, enabled: bool, setup: impl FnOnce(&Path), check: impl FnOnce(&Path)) {
     if !(have("sway") || have("tilewin")) || !["grim", "dbus-run-session", "git"].iter().all(|t| have(t)) {
         eprintln!("headless UI tools or git missing, skipping {script}");
@@ -36,7 +36,7 @@ fn run_with(script: &str, enabled: bool, setup: impl FnOnce(&Path), check: impl 
     std::fs::write(t.join("gitconfig"), "[user]\n\tname = Ann Tester\n\temail = ann@example.org\n[init]\n\tdefaultBranch = main\n").unwrap();
     if enabled {
         std::fs::create_dir_all(t.join("config/failbrauwser")).unwrap();
-        std::fs::write(t.join("config/failbrauwser/settings.ini"), "[General]\ngit_integration=true\n").unwrap();
+        std::fs::write(t.join("config/failbrauwser/settings.ini"), "[General]\nvcs_integration=true\n").unwrap();
     }
     setup(t);
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -67,7 +67,7 @@ fn repo(t: &Path) {
 
 #[test]
 fn overlays_and_menus() {
-    run_with("git_overlays.fbt", false, |t| {
+    run_with("vcs_overlays.fbt", false, |t| {
         repo(t);
         std::fs::create_dir_all(t.join("plain")).unwrap();
     }, keep_snapshots);

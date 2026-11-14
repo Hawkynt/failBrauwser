@@ -19,6 +19,18 @@ public class RebuildEditSemanticsTests {
   [TearDown]
   public void TearDown() { try { Directory.Delete(this._dir, true); } catch (IOException) { } }
 
+  /// <summary>The edit-normal form of an entry name: forward slashes, no root prefix, no trailing slash.</summary>
+  private static string Normalize(string entryName) {
+    var s = entryName.Replace('\\', '/');
+    while (true) {
+      if (s.StartsWith("./", StringComparison.Ordinal)) s = s[2..];
+      else if (s.StartsWith('/')) s = s[1..];
+      else break;
+    }
+    while (s.Contains("//", StringComparison.Ordinal)) s = s.Replace("//", "/", StringComparison.Ordinal);
+    return s.TrimEnd('/');
+  }
+
   private string MakeTarGz() {
     var src = Path.Combine(this._dir, "src");
     Directory.CreateDirectory(Path.Combine(src, "sub"));
@@ -38,7 +50,7 @@ public class RebuildEditSemanticsTests {
   }
 
   private static string[] Names(string archive)
-    => ArchiveOperations.List(archive, null).Select(e => RebuildStaging.Normalize(e.Name)).Order(StringComparer.Ordinal).ToArray();
+    => ArchiveOperations.List(archive, null).Select(e => Normalize(e.Name)).Order(StringComparer.Ordinal).ToArray();
 
   [Test]
   public void Remove_RootFile_LeavesSameNamedFileInSubfolder() {
@@ -56,6 +68,7 @@ public class RebuildEditSemanticsTests {
 
   [Test]
   public void Remove_IsCaseSensitive() {
+    if (OperatingSystem.IsWindows()) Assert.Inconclusive("the fixture stages a.txt and A.TXT through the volume, and NTFS keeps them apart only with per-directory case sensitivity on (docs/WINDOWS.md)");
     var archive = this.MakeTarGz();
     ArchiveOperations.Remove(archive, ["A.TXT"]);
     Assert.That(Names(archive), Does.Contain("a.txt"));
@@ -72,7 +85,7 @@ public class RebuildEditSemanticsTests {
   public void Rebuild_KeepsEntryTimes() {
     var archive = this.MakeTarGz();
     ArchiveOperations.Remove(archive, ["sub/b.txt"]);
-    var entry = ArchiveOperations.List(archive, null).Single(e => RebuildStaging.Normalize(e.Name) == "sub/a.txt");
+    var entry = ArchiveOperations.List(archive, null).Single(e => Normalize(e.Name) == "sub/a.txt");
     Assert.That(entry.LastModified?.ToUniversalTime(), Is.EqualTo(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc)));
   }
 
@@ -87,11 +100,16 @@ public class RebuildEditSemanticsTests {
   }
 
   [Test]
-  public void Staging_RemoveEntries_IgnoresTraversal() {
-    var staging = Directory.CreateDirectory(Path.Combine(this._dir, "stage")).FullName;
-    var outside = Path.Combine(this._dir, "outside.txt");
-    File.WriteAllText(outside, "keep");
-    RebuildStaging.RemoveEntries(staging, ["../outside.txt"]);
-    Assert.That(File.Exists(outside), Is.True);
+  public void Remove_TraversalEntryName_DeletesNothingOutsideTheArchive() {
+    var archive = this.MakeTarGz();
+    var sentinel = Path.Combine(Path.GetTempPath(), $"fb_semantics_sentinel_{Guid.NewGuid():N}.txt");
+    File.WriteAllText(sentinel, "keep");
+    try {
+      ArchiveOperations.Remove(archive, [$"../{Path.GetFileName(sentinel)}"]);
+      Assert.That(Names(archive), Is.EqualTo(new[] { "a.txt", "sub", "sub/a.txt", "sub/b.txt" }));
+      Assert.That(File.Exists(sentinel), Is.True);
+    } finally {
+      try { File.Delete(sentinel); } catch (IOException) { }
+    }
   }
 }

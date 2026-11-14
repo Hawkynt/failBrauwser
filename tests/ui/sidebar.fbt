@@ -8,7 +8,9 @@ expect-location $T/a/b
 expect-tree-root $T/a/b
 action win.tree-root root
 open $T/a/b/c
-expect-tree-root /
+# The tree's filesystem root: "/" on Unix, the volume root of the folder on Windows.
+!unix expect-tree-root /
+!win expect-tree-root $TROOT
 wait-tree-selected $T/a/b/c
 action win.up
 expect-location $T/a/b
@@ -34,7 +36,8 @@ action win.tree-root current
 open $T/a
 wait-tree-children $T/a = b, other
 action win.drives
-wait-drive File System
+!unix wait-drive File System
+!win wait-drive $C
 tree-click $T/a/b
 expect-location $T/a/b
 expect-tree-root $T/a/b

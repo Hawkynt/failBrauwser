@@ -7,9 +7,9 @@
 
 use super::{ArchiveError, ArchiveTree, Helper, Result};
 use crate::location::ArchiveLoc;
+use crate::osprim;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -18,12 +18,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 struct Stamp {
     mtime_ns: i128,
     size: u64,
-    ino: u64,
+    ino: u128,
 }
 
 fn stamp(p: &Path) -> Result<Stamp> {
     let m = std::fs::metadata(p).map_err(|e| ArchiveError::new("notfound", format!("{}: {e}", p.display())))?;
-    Ok(Stamp { mtime_ns: m.mtime() as i128 * 1_000_000_000 + m.mtime_nsec() as i128, size: m.len(), ino: m.ino() })
+    let mt = osprim::times(&m).1;
+    Ok(Stamp { mtime_ns: mt.0 as i128 * 1_000_000_000 + mt.1 as i128, size: m.len(), ino: osprim::identity(p, &m).id })
 }
 
 #[derive(Debug)]
@@ -35,10 +36,13 @@ pub struct Archive {
 }
 
 type NestedKey = (PathBuf, Vec<String>);
+/// A listing is keyed by the file it was read from *and* the kind it was read as: the same bytes
+/// answered by the detected reader and by a chosen one are two different answers (M14 *Open as*).
+type ListingKey = (PathBuf, Option<String>);
 
 #[derive(Default)]
 struct State {
-    listings: HashMap<PathBuf, (Stamp, Arc<Archive>)>,
+    listings: HashMap<ListingKey, (Stamp, Arc<Archive>)>,
     /// Nested archive → (its extracted copy, the container's stamp when extracted).
     nested: HashMap<NestedKey, (PathBuf, Stamp)>,
     /// Per archive (nested ones have their own), for this session only.
@@ -80,9 +84,13 @@ impl Vfs {
         Ok(dir.keep())
     }
 
-    /// Remembers the password of the innermost archive of `loc` (until the program ends).
+    /// Remembers the password of the innermost archive of `loc` (until the program ends), and
+    /// drops the listings that were made without it: a locked volume answers the shell of itself,
+    /// and the passphrase asked for that shell is only worth having if the file is opened again.
     pub fn set_password(&self, loc: &ArchiveLoc, password: &str) {
-        self.state.lock().unwrap().passwords.insert(loc.archive_key(), password.to_string());
+        let mut st = self.state.lock().unwrap();
+        st.passwords.insert(loc.archive_key(), password.to_string());
+        st.listings.retain(|k, _| k.0 != loc.file);
     }
 
     pub fn has_password(&self, loc: &ArchiveLoc) -> bool {
@@ -99,7 +107,7 @@ impl Vfs {
     pub fn backing(&self, loc: &ArchiveLoc) -> Result<PathBuf> {
         let mut path = loc.file.clone();
         for depth in 1..=loc.nested.len() {
-            let container = ArchiveLoc { file: loc.file.clone(), nested: loc.nested[..depth - 1].to_vec(), inner: String::new() };
+            let container = ArchiveLoc { file: loc.file.clone(), nested: loc.nested[..depth - 1].to_vec(), inner: String::new(), force: None };
             let pw = self.password_for(&container);
             let key: NestedKey = (loc.file.clone(), loc.nested[..depth].to_vec());
             let parent_stamp = stamp(&path)?;
@@ -114,7 +122,12 @@ impl Vfs {
             let dir = self.cache.join("nested").join(hash_key(&key));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).map_err(io_err)?;
-            self.helper.extract(&path, Some(std::slice::from_ref(entry)), &dir, pw.as_deref())?;
+            // The file on disk is read as the chosen kind; deeper levels are archives found
+            // inside it, which are read as themselves.
+            match loc.force.as_deref().filter(|_| depth == 1) {
+                Some(kind) => self.helper.extract_as(&path, Some(std::slice::from_ref(entry)), &dir, kind, pw.as_deref())?,
+                None => self.helper.extract(&path, Some(std::slice::from_ref(entry)), &dir, pw.as_deref())?,
+            }
             let copy = dir.join(entry);
             if !copy.is_file() {
                 return Err(ArchiveError::new("notfound", format!("“{entry}” could not be extracted")));
@@ -125,18 +138,29 @@ impl Vfs {
         Ok(path)
     }
 
+    /// Where a location's listing belongs in the cache: the file it was read from, and the kind
+    /// it was read as whenever the file on disk itself is what gets read.
+    fn listing_key(loc: &ArchiveLoc, backing: &Path) -> ListingKey {
+        (backing.to_path_buf(), if loc.nested.is_empty() { loc.force.clone() } else { None })
+    }
+
     /// The listing of the innermost archive of `loc`.
     pub fn archive(&self, loc: &ArchiveLoc) -> Result<Arc<Archive>> {
         let backing = self.backing(loc)?;
         let st = stamp(&backing)?;
-        if let Some((s, a)) = self.state.lock().unwrap().listings.get(&backing) {
+        let key = Self::listing_key(loc, &backing);
+        if let Some((s, a)) = self.state.lock().unwrap().listings.get(&key) {
             if *s == st {
                 return Ok(a.clone());
             }
         }
-        let listing = self.helper.list(&backing, self.password_for(loc).as_deref())?;
+        let pw = self.password_for(loc);
+        let listing = match key.1.as_deref() {
+            Some(kind) => self.helper.list_as(&backing, kind, pw.as_deref())?,
+            None => self.helper.list(&backing, pw.as_deref())?,
+        };
         let archive = Arc::new(Archive { tree: ArchiveTree::build(&listing.entries), format: listing.format, writable: listing.writable, readonly_reason: listing.readonly_reason });
-        self.state.lock().unwrap().listings.insert(backing, (st, archive.clone()));
+        self.state.lock().unwrap().listings.insert(key, (st, archive.clone()));
         Ok(archive)
     }
 
@@ -148,7 +172,7 @@ impl Vfs {
         } else {
             st.nested.get(&(loc.file.clone(), loc.nested.clone()))?.0.clone()
         };
-        let (_, a) = st.listings.get(&backing)?;
+        let (_, a) = st.listings.get(&Self::listing_key(loc, &backing))?;
         Some(a.clone())
     }
 
@@ -157,7 +181,7 @@ impl Vfs {
         for depth in (1..=loc.nested.len()).rev() {
             let child_key: NestedKey = (loc.file.clone(), loc.nested[..depth].to_vec());
             let child = self.state.lock().unwrap().nested.get(&child_key).map(|x| x.0.clone()).ok_or_else(|| ArchiveError::new("error", "nested archive vanished"))?;
-            let parent_loc = ArchiveLoc { file: loc.file.clone(), nested: loc.nested[..depth - 1].to_vec(), inner: String::new() };
+            let parent_loc = ArchiveLoc { file: loc.file.clone(), nested: loc.nested[..depth - 1].to_vec(), inner: String::new(), force: None };
             let parent = self.backing(&parent_loc)?;
             let pw = self.password_for(&parent_loc);
             self.helper.add(&parent, &[(child, loc.nested[depth - 1].clone())], pw.as_deref())?;
@@ -202,7 +226,11 @@ impl Vfs {
     /// Returns where each requested entry ended up.
     pub fn extract(&self, loc: &ArchiveLoc, entries: &[String], dest: &Path) -> Result<Vec<PathBuf>> {
         let backing = self.backing(loc)?;
-        self.helper.extract(&backing, Some(entries), dest, self.password_for(loc).as_deref())?;
+        let pw = self.password_for(loc);
+        match loc.force.as_deref().filter(|_| loc.nested.is_empty()) {
+            Some(kind) => self.helper.extract_as(&backing, Some(entries), dest, kind, pw.as_deref())?,
+            None => self.helper.extract(&backing, Some(entries), dest, pw.as_deref())?,
+        }
         Ok(entries.iter().map(|e| dest.join(e)).collect())
     }
 
@@ -229,7 +257,11 @@ impl Vfs {
             std::fs::create_dir_all(&folder).map_err(io_err)?;
             (folder.clone(), folder)
         };
-        if let Err(e) = self.helper.extract(&backing, None, &extract_into, pw.as_deref()) {
+        let opened = match loc.force.as_deref().filter(|_| loc.nested.is_empty()) {
+            Some(kind) => self.helper.extract_as(&backing, None, &extract_into, kind, pw.as_deref()),
+            None => self.helper.extract(&backing, None, &extract_into, pw.as_deref()),
+        };
+        if let Err(e) = opened {
             if target.is_dir() {
                 let _ = std::fs::remove_dir_all(&target);
             } else {
@@ -243,7 +275,7 @@ impl Vfs {
     /// Forgets cached listings (e.g. after an external change).
     pub fn invalidate(&self, file: &Path) {
         let mut st = self.state.lock().unwrap();
-        st.listings.retain(|k, _| k != file);
+        st.listings.retain(|k, _| k.0 != file);
     }
 }
 

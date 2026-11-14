@@ -617,7 +617,26 @@ impl NetworkPage {
     }
 }
 
+/// Computers the workgroup/domain browse announces (the master browser's list), as
+/// (name, name): the Windows twin of GVfs's network browsing.
+#[cfg(windows)]
+async fn announced() -> Vec<(String, String)> {
+    let list = async {
+        gio::spawn_blocking(failbrauwser::win::wnet::browse_network)
+            .await
+            .map(std::result::Result::unwrap_or_default)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|n| (n.clone(), n))
+            .collect()
+    };
+    // A silent master browser must not hold the page: the await is cut off, the worker
+    // ends on the redirector's own timeout.
+    glib::future_with_timeout(Duration::from_secs(6), list).await.ok().unwrap_or_default()
+}
+
 /// Computers GVfs's network browsing announces (DNS-SD, WS-Discovery), as (name, address).
+#[cfg(not(windows))]
 async fn announced() -> Vec<(String, String)> {
     let dir = gio::File::for_uri("network:///");
     let list = async {
@@ -640,8 +659,45 @@ async fn announced() -> Vec<(String, String)> {
     glib::future_with_timeout(Duration::from_secs(4), list).await.ok().flatten().unwrap_or_default()
 }
 
+/// The folders a computer shares, through the redirector's own browsing. When it wants
+/// credentials the user is asked for a name and password, the session is signed in, and the
+/// answer is read again. An empty error: the user cancelled.
+#[cfg(windows)]
+async fn list_shares(parent: &gtk::Window, host: &str) -> Result<Vec<Share>, String> {
+    let answer = |host: &str| {
+        let h = host.to_string();
+        async move { gio::spawn_blocking(move || network::probe_shares(&h, Duration::from_secs(6))).await.unwrap_or(Probe::Unknown) }
+    };
+    match answer(host).await {
+        Probe::Shares(shares) => Ok(shares),
+        Probe::Nothing | Probe::Unknown => Err(format!("“{host}” did not answer as a file server.")),
+        Probe::Locked => {
+            let (tx, rx) = async_channel::unbounded();
+            let guess = std::env::var("USERNAME").unwrap_or_default();
+            util::ask_text(parent, "Sign In", &format!("User name for “{host}”:"), &guess, "Continue", false, move |u| {
+                let _ = tx.send_blocking(u);
+            });
+            let Ok(user) = rx.recv().await else { return Err(String::new()) };
+            let (tx, rx) = async_channel::unbounded();
+            util::ask_secret(parent, "Sign In", &format!("Password for {user}@{host}:"), move |p| {
+                let _ = tx.send_blocking(p);
+            });
+            let Ok(pass) = rx.recv().await else { return Err(String::new()) };
+            if let Err(e) = failbrauwser::win::wnet::connect(&format!("\\\\{host}"), Some(user.as_str()), Some(pass.as_str())) {
+                return Err(e.to_string());
+            }
+            match answer(host).await {
+                Probe::Shares(shares) => Ok(shares),
+                Probe::Locked => Err("The server refused these credentials.".into()),
+                Probe::Nothing | Probe::Unknown => Err(format!("“{host}” did not answer after signing in.")),
+            }
+        }
+    }
+}
+
 /// The folders a computer shares, through GVfs (asking for a password if the server wants
 /// one), else through `smbclient` as a guest. An empty error: the user cancelled.
+#[cfg(not(windows))]
 async fn list_shares(parent: &gtk::Window, host: &str) -> Result<Vec<Share>, String> {
     let dir = gio::File::for_uri(&format!("smb://{host}/"));
     let mut first_error = None;
@@ -679,6 +735,7 @@ async fn list_shares(parent: &gtk::Window, host: &str) -> Result<Vec<Share>, Str
     guest.ok_or_else(|| first_error.unwrap_or_else(|| "no answer".into()))
 }
 
+#[cfg(not(windows))] // only GVfs-backed listings enumerate gio children here
 async fn enumerate(dir: &gio::File) -> Result<Vec<Share>, glib::Error> {
     let e = dir.enumerate_children_future("standard::display-name,standard::name", gio::FileQueryInfoFlags::NONE, glib::Priority::DEFAULT).await?;
     let mut out = Vec::new();

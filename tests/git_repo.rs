@@ -1,6 +1,6 @@
 //! The git module against real repositories made with the git command.
 
-use failbrauwser::git::{self, RefLabel, Status};
+use failbrauwser::vcs::git::{self, RefLabel, Status};
 use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;

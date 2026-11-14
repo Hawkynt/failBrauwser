@@ -7,7 +7,6 @@ pub mod archive;
 pub mod chooser;
 pub mod clipformat;
 pub mod fs;
-pub mod git;
 pub mod config;
 pub mod desktoplink;
 pub mod devices;
@@ -16,7 +15,11 @@ pub mod location;
 pub mod lvm;
 pub mod network;
 pub mod ops;
+pub mod osprim;
+#[cfg(windows)]
+pub mod remote_fs;
 pub mod remote;
+pub mod vcs;
 pub mod search;
 pub mod servers;
 pub mod shortcuts;
@@ -24,3 +27,7 @@ pub mod thumbs;
 pub mod trash;
 pub mod update;
 pub mod wmtheme;
+#[cfg(windows)]
+pub mod win;
+#[cfg(windows)]
+pub mod wpd;

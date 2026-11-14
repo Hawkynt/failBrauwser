@@ -13,6 +13,9 @@ pub enum ClipSource {
     Local(PathBuf),
     /// An entry (file or folder) inside an archive: the archive's folder and the entry path.
     Archive(ArchiveLoc, String),
+    /// An entry on a remote server: the server, the path from its sign-in folder, and what
+    /// kind it is (so the walk does not have to ask).
+    Remote(failbrauwser::location::RemoteAt, String, bool),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,6 +96,7 @@ pub fn set(content: ClipContent) {
         .map(|i| match i {
             ClipSource::Local(p) => p.to_string_lossy().into_owned(),
             ClipSource::Archive(a, e) => format!("{}/{}", failbrauwser::location::Location::Archive(a.clone()).display(), e.rsplit('/').next().unwrap_or(e)),
+            ClipSource::Remote(t, e, _) => t.uri(e),
         })
         .collect::<Vec<_>>()
         .join("\n");

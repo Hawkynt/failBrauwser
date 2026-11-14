@@ -44,7 +44,7 @@ pub fn undo(ctx: &JobCtx, step: &Step) -> io::Result<Vec<PathBuf>> {
                 match copy::rename_noreplace(now, was) {
                     Ok(()) => back.push(was.clone()),
                     // Another drive: moved back by copying.
-                    Err(e) if e.raw_os_error() == Some(libc::EXDEV) => back.extend(move_across(ctx, now, was)?),
+                    Err(e) if crate::osprim::is_cross_device(&e) => back.extend(move_across(ctx, now, was)?),
                     Err(e) => ctx.record_error(format!("{}: {e}", now.display())),
                 }
             }

@@ -7,6 +7,8 @@ namespace FbArchive;
 /// <summary>
 /// Line based JSON protocol. Every request is one JSON object on one line of stdin and gets
 /// exactly one JSON object on one line of stdout. Requests are handled strictly in order.
+/// <c>--version</c> answers the protocol version and leaves; <c>--parent &lt;pid&gt;</c> names the
+/// instance this helper ends with (see <see cref="ParentWatch"/>).
 /// </summary>
 public static class Program {
   public const int ProtocolVersion = 1;
@@ -17,6 +19,7 @@ public static class Program {
       return 0;
     }
 
+    ParentWatch.StartIfAsked(args);
     var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
     var stdout = Console.OpenStandardOutput();
     Progress.Stdout = stdout;
@@ -54,9 +57,9 @@ public static class Program {
           case "quit": quit = true; break;
           case "formats": Commands.Formats(w); break;
           case "probe": Commands.Probe(w, Str(req, "path")); break;
-          case "list": Commands.List(w, Str(req, "archive"), OptStr(req, "password")); break;
+          case "list": Commands.List(w, Str(req, "archive"), OptStr(req, "password"), OptStr(req, "format")); break;
           case "extract":
-            Commands.Extract(Str(req, "archive"), Str(req, "dest"), OptStrArray(req, "entries"), OptStr(req, "password"));
+            Commands.Extract(Str(req, "archive"), Str(req, "dest"), OptStrArray(req, "entries"), OptStr(req, "password"), OptStr(req, "format"));
             break;
           case "options": Commands.Options(w, Str(req, "format")); break;
           case "add": Commands.Add(Str(req, "archive"), Items(req), OptStr(req, "password"), OptStr(req, "format"), Settings(req)); break;
@@ -73,31 +76,12 @@ public static class Program {
         w.WriteStartObject();
         w.WriteNumber("id", id);
         w.WriteBoolean("ok", false);
-        w.WriteString("code", Classify(ex));
-        w.WriteString("error", Flatten(ex));
+        w.WriteString("code", ErrorCodes.Code(ex));
+        w.WriteString("error", ErrorCodes.Message(ex));
         w.WriteEndObject();
       }
     }
     return buffer.ToArray();
-  }
-
-  private static string Classify(Exception ex) {
-    for (var e = ex; e != null; e = e.InnerException) {
-      var msg = e.Message;
-      if (msg.Contains("password", StringComparison.OrdinalIgnoreCase) || msg.Contains("encrypt", StringComparison.OrdinalIgnoreCase))
-        return "password";
-      if (e is NotSupportedException) return "unsupported";
-      if (e is FileNotFoundException or DirectoryNotFoundException) return "notfound";
-      if (e is UnauthorizedAccessException) return "permission";
-      if (e is ProtocolException) return "protocol";
-    }
-    return "error";
-  }
-
-  private static string Flatten(Exception ex) {
-    var sb = new StringBuilder(ex.Message);
-    for (var e = ex.InnerException; e != null; e = e.InnerException) sb.Append(": ").Append(e.Message);
-    return sb.ToString();
   }
 
   private static string Str(JsonElement req, string name)

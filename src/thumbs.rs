@@ -95,9 +95,14 @@ pub fn failed_before(root: &Path, path: &Path, mtime: i64) -> bool {
 }
 
 fn save(pb: &Pixbuf, dest: &Path, uri: &str, mtime: i64) -> bool {
+    #[cfg(unix)]
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     let Some(dir) = dest.parent() else { return false };
-    if std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).is_err() {
+    let mut mkdir = std::fs::DirBuilder::new();
+    mkdir.recursive(true);
+    #[cfg(unix)]
+    mkdir.mode(0o700);
+    if mkdir.create(dir).is_err() {
         return false;
     }
     // Written under a temporary name and renamed: readers never see half a file.
@@ -110,6 +115,7 @@ fn save(pb: &Pixbuf, dest: &Path, uri: &str, mtime: i64) -> bool {
         .savev(&tmp, "png", &[("tEXt::Thumb::URI", uri), ("tEXt::Thumb::MTime", &mtime_s), ("tEXt::Software", "failBrauwser")])
         .is_ok();
     if ok {
+        #[cfg(unix)]
         let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
         return std::fs::rename(&tmp, dest).is_ok();
     }
@@ -163,6 +169,7 @@ pub fn is_candidate(content_type: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
 
     fn png(path: &Path, w: i32, h: i32) {
@@ -172,7 +179,7 @@ mod tests {
     }
 
     fn mtime(p: &Path) -> i64 {
-        std::fs::metadata(p).unwrap().mtime()
+        crate::osprim::times(&std::fs::metadata(p).unwrap()).1.0
     }
 
     #[test]
@@ -197,6 +204,7 @@ mod tests {
         let uri = file_uri(&img).unwrap();
         let stored = thumb_path(&root, &uri, Flavor::Normal);
         assert!(stored.is_file());
+        #[cfg(unix)] // 0600 cache modes are the Unix story; Windows uses ACL inheritance
         assert_eq!(std::fs::metadata(&stored).unwrap().mode() & 0o777, 0o600);
         let (back, f) = load(&root, &img, m, Flavor::Normal).unwrap();
         assert_eq!(back.option("tEXt::Thumb::URI").as_deref(), Some(uri.as_str()));

@@ -1,7 +1,7 @@
 # TortoiseGit's Log Messages, TortoiseGitMerge and TortoiseGitBlame.
 open $T/repo
 click-empty
-git-menu TortoiseGit/Show log
+git-menu Repository/Show log
 wait-git-window Log Messages - TortoiseGit
 wait-git-log Log Messages = [main,v1] Second commit | First commit
 git-log-select Log Messages : Second commit
@@ -29,19 +29,19 @@ git-click Git Command Progress : Close
 git-close Log Messages
 # The log of one file: only the commits that changed it.
 select clean.txt
-git-menu TortoiseGit/Show log
+git-menu Repository/Show log
 wait-git-log Log Messages = [v0] First commit
 git-close Log Messages
 # Diff with previous version, Blame and Diff of a changed file.
 select changed.txt
-git-menu TortoiseGit/Diff with previous version
+git-menu Repository/Diff with previous version
 wait-git-diff TortoiseGitMerge = = one | = two | = three | + four
 git-close TortoiseGitMerge
-git-menu TortoiseGit/Blame
+git-menu Repository/Blame
 wait-git-blame TortoiseGitBlame = Ann Tester: one | Ann Tester: two | Ann Tester: three | Ann Tester: four
 git-snapshot TortoiseGitBlame = $T/blame.png
 git-close TortoiseGitBlame
-git-menu TortoiseGit/Diff
+git-menu Repository/Diff
 wait-git-diff TortoiseGitMerge = = one | ~ two|TWO | = three | = four
 git-snapshot TortoiseGitMerge = $T/diff-working.png
 git-close TortoiseGitMerge

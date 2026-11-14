@@ -405,7 +405,7 @@ pub static FORMATS: &[Format] = &[
     Format { id: "XxEncoding", name: "XXEncoding", kind: Kind::Wrapper, create: true, modify: false, password: false, dirs: false, multi: false, exts: &[".xxe", ".xx"] },
     Format { id: "Vdi", name: "VDI", kind: Kind::Filesystem, create: true, modify: true, password: false, dirs: false, multi: true, exts: &[".vdi"] },
     Format { id: "Veeam", name: "Veeam Backup & Replication", kind: Kind::Filesystem, create: false, modify: false, password: false, dirs: false, multi: false, exts: &[".vbk", ".vib", ".vrb"] },
-    Format { id: "VeraCrypt", name: "VeraCrypt / TrueCrypt", kind: Kind::Archive, create: true, modify: false, password: true, dirs: false, multi: true, exts: &[".hc", ".tc"] },
+    Format { id: "VeraCrypt", name: "VeraCrypt / TrueCrypt", kind: Kind::Archive, create: false, modify: false, password: true, dirs: false, multi: true, exts: &[".hc", ".tc"] },
     Format { id: "Vhd", name: "VHD", kind: Kind::Filesystem, create: true, modify: true, password: false, dirs: false, multi: true, exts: &[".vhd"] },
     Format { id: "Vhdx", name: "VHDX", kind: Kind::Filesystem, create: true, modify: true, password: false, dirs: false, multi: true, exts: &[".vhdx"] },
     Format { id: "Vib", name: "vSphere Installation Bundle", kind: Kind::Archive, create: true, modify: false, password: false, dirs: true, multi: true, exts: &[".vib"] },

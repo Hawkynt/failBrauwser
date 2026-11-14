@@ -5,7 +5,7 @@
 //! no escaping the folder) and other filesystems mounted below are not entered.
 
 use crate::archive::{Helper, is_browsable_name};
-use std::os::unix::fs::MetadataExt;
+use crate::osprim;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -81,7 +81,7 @@ pub struct Options {
 /// cancelled.
 pub fn search(root: &Path, q: &Query, opts: Options, helper: Option<&Helper>, cancel: &AtomicBool, mut found: impl FnMut(Hit)) -> bool {
     let Ok(meta) = std::fs::metadata(root) else { return true };
-    let dev = meta.dev();
+    let dev = osprim::identity(root, &meta).dev;
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         if cancel.load(Ordering::Relaxed) {
@@ -102,7 +102,7 @@ pub fn search(root: &Path, q: &Query, opts: Options, helper: Option<&Helper>, ca
                 found(Hit::File(path.clone()));
             }
             if m.is_dir() {
-                if m.dev() == dev {
+                if osprim::identity(&path, &m).dev == dev {
                     subdirs.push(path);
                 }
             } else if opts.archives && m.is_file() && is_browsable_name(&name) {
@@ -153,6 +153,9 @@ mod tests {
         fs::write(r.join("a/report.txt"), "").unwrap();
         fs::write(r.join("a/b/REPORT-2.txt"), "").unwrap();
         fs::write(r.join(".hidden/report-secret.txt"), "").unwrap();
+        // the loop link proves links are not followed — a Unix-only fixture (creating links
+        // on Windows needs Developer Mode; the rule itself is Unix-specific)
+        #[cfg(unix)]
         std::os::unix::fs::symlink(r, r.join("a/loop")).unwrap();
         let q = Query::new("report");
         let mut hits = Vec::new();

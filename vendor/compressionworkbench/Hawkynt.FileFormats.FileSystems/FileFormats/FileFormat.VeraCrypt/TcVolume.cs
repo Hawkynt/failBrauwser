@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Compression.Core.Checksums;
@@ -64,36 +65,81 @@ public sealed class TcVolume {
     return BinaryPrimitives.ReadUInt16BigEndian(area[4..]) <= 3 || Crc32.Compute(area[..188]) == BinaryPrimitives.ReadUInt32BigEndian(area[188..]);
   }
 
-  /// <summary>Tries every derivation and chain on <paramref name="header"/>; null when none opens it.</summary>
-  private static (TcKdf Kdf, TcCipherChain Chain, byte[] Area)? Decrypt(ReadOnlySpan<byte> header, ReadOnlySpan<byte> password, TcUnlockOptions o) {
-    var salt = header[..SaltSize];
+  /// <summary>
+  /// Tries the derivations on every header copy at once, and stops the rest as soon as one opens —
+  /// including the ones already hashing, which give up at their next checkpoint instead of finishing a
+  /// key that nothing reads. Twelve derivations per header copy one after another makes a right
+  /// password wait behind every cheaper one the table lists before the fitting one and a wrong one pay
+  /// for all of them, while nothing in a derivation depends on another: same salt in, key of its own
+  /// out. That ordering buys waiting and nothing else, so the search keeps it only for its answer —
+  /// which candidate opens the header is the volume's doing rather than the search's, because only the
+  /// derivation the volume was made with decrypts the area to magic whose CRC32 agrees. Argon2id stays
+  /// out of the batch and is tried after it, one at a time, because one such derivation alone asks for
+  /// 425 MB.
+  /// </summary>
+  private static (TcKdf Kdf, TcCipherChain Chain, byte[] Area, long Offset)? Search(IReadOnlyList<(long Offset, byte[] Header)> headers, ReadOnlySpan<byte> password, TcUnlockOptions o) {
+    var derivations = TcKdf.All.Where(static k => k.Prf != "argon2id").Where(k => (o.Prf is null || k.Prf.StartsWith(o.Prf, StringComparison.OrdinalIgnoreCase)) && (o.Pim <= 0 || k.VeraCrypt)).ToList();
     var mixed = new Dictionary<bool, byte[]>();
-    foreach (var kdf in TcKdf.All) {
-      if (o.Prf is { } prf && !kdf.Prf.StartsWith(prf, StringComparison.OrdinalIgnoreCase)) continue;
-      if (o.Pim > 0 && !kdf.VeraCrypt) continue;
-      byte[] pool;
+    foreach (var veraCrypt in new[] { false, true }) {
       try {
-        if (!mixed.TryGetValue(kdf.VeraCrypt, out pool!)) mixed[kdf.VeraCrypt] = pool = TcKdf.MixPassword(password, o.Keyfiles, kdf.VeraCrypt);
-      } catch (ArgumentException) {
-        continue; // longer than this generation's pool
-      }
-      var key = kdf.Derive(pool, salt, o.Pim);
-      try {
-        foreach (var chain in TcCipherChain.All) {
-          if (o.Cipher is { } c && !chain.Name.Contains(c, StringComparison.OrdinalIgnoreCase)) continue;
-          var area = header.Slice(SaltSize, EncryptedSize).ToArray();
-          using (var cipher = new TcSectorCipher(chain, key, headerKey: true))
-            cipher.DecryptHeader(area);
-          if (Valid(area, kdf.VeraCrypt))
-            return (kdf, chain, area);
-          CryptographicOperations.ZeroMemory(area);
-        }
-      } finally {
-        CryptographicOperations.ZeroMemory(key);
-      }
+        mixed[veraCrypt] = TcKdf.MixPassword(password, o.Keyfiles, veraCrypt);
+      } catch (ArgumentException) { /* longer than this generation's pool: tried only through the other */ }
     }
-    foreach (var p in mixed.Values) CryptographicOperations.ZeroMemory(p);
-    return null;
+    var hits = new ConcurrentBag<Hit>();
+    using var opened = new CancellationTokenSource();
+    var jobs = new List<(int Header, int Derivation)>();
+    for (var h = 0; h < headers.Count; ++h)
+      for (var d = 0; d < derivations.Count; ++d)
+        jobs.Add((h, d));
+    try {
+      Parallel.ForEach(jobs, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = opened.Token }, job => {
+        var kdf = derivations[job.Derivation];
+        if (opened.IsCancellationRequested || !mixed.TryGetValue(kdf.VeraCrypt, out var pool)) return;
+        TryHeader(kdf, pool, headers[job.Header], job, o, hits, opened.Token);
+        if (!hits.IsEmpty) opened.Cancel();
+      });
+    } catch (OperationCanceledException) { /* the stop a hit asks for, racing the jobs still queued */ }
+    if (hits.IsEmpty)
+      for (var h = 0; h < headers.Count && hits.IsEmpty; ++h)
+        for (var d = 0; d < TcKdf.All.Count; ++d) {
+          var kdf = TcKdf.All[d];
+          if (kdf.Prf != "argon2id" || !(o.Prf is null || kdf.Prf.StartsWith(o.Prf, StringComparison.OrdinalIgnoreCase)) || !(o.Pim <= 0 || kdf.VeraCrypt)) continue;
+          if (mixed.TryGetValue(kdf.VeraCrypt, out var pool))
+            TryHeader(kdf, pool, headers[h], (h, derivations.Count + d), o, hits, CancellationToken.None); // its place in the table is after every parallel candidate; it runs alone, so nothing asks it to stop
+        }
+    foreach (var pool in mixed.Values) CryptographicOperations.ZeroMemory(pool);
+    if (hits.IsEmpty) return null;
+    var best = hits.MinBy(static h => (h.Job.Header, h.Job.Derivation))!;
+    foreach (var other in hits)
+      if (!ReferenceEquals(other, best)) CryptographicOperations.ZeroMemory(other.Area);
+    return (best.Kdf, best.Chain, best.Area, best.Offset);
+  }
+
+  private sealed record Hit(TcKdf Kdf, TcCipherChain Chain, byte[] Area, long Offset, (int Header, int Derivation) Job);
+
+  private static void TryHeader(TcKdf kdf, byte[] pool, (long Offset, byte[] Header) header, (int Header, int Derivation) job, TcUnlockOptions o, ConcurrentBag<Hit> hits, CancellationToken cancel) {
+    // A derivation that was asked to stop had nothing to lose: of all the candidates only the one
+    // the volume was made with can decrypt the area to magic whose CRC32 agrees, so a candidate
+    // overtaken by another did not miss the answer.
+    byte[] key;
+    try { key = kdf.Derive(pool, header.Header.AsSpan(0, SaltSize), o.Pim, cancel); }
+    catch (OperationCanceledException) { return; }
+    try {
+      foreach (var chain in TcCipherChain.All) {
+        if (o.Cipher is { } c && !chain.Name.Contains(c, StringComparison.OrdinalIgnoreCase)) continue;
+        var area = header.Header.AsSpan(SaltSize, EncryptedSize).ToArray();
+        using (var cipher = new TcSectorCipher(chain, key, headerKey: true))
+          cipher.DecryptHeader(area);
+        if (!Valid(area, kdf.VeraCrypt)) {
+          CryptographicOperations.ZeroMemory(area);
+          continue;
+        }
+        hits.Add(new Hit(kdf, chain, area, header.Offset, job));
+        return;
+      }
+    } finally {
+      CryptographicOperations.ZeroMemory(key);
+    }
   }
 
   /// <summary>Opens the volume's header with <paramref name="password"/>; null when it does not open (wrong password, wrong header kind, not a volume).</summary>
@@ -103,21 +149,26 @@ public sealed class TcVolume {
     var o = options ?? new();
     var pw = Encoding.UTF8.GetBytes(password);
     var length = stream.Length;
+    // No kind asked tries the standard header, then the hidden one, as VeraCrypt does with a single
+    // password. All candidate headers go into one search, standard ones first, so the search's
+    // preference for the earliest header keeps that order.
     TcHeaderKind[] kinds = o.Header is { } only ? [only] : [TcHeaderKind.Standard, TcHeaderKind.Hidden];
-    var header = new byte[HeaderSize];
-    try {
-      foreach (var kind in kinds) {
-        long[] offsets = kind == TcHeaderKind.Standard
-          ? [0, length - BackupHeaderFromEnd]
-          : [HiddenHeaderOffset, length - OldHiddenFromEnd, length - HiddenBackupFromEnd];
-        foreach (var offset in offsets.Where(x => x >= 0 && x + HeaderSize <= length).Distinct()) {
-          stream.Position = offset;
-          stream.ReadExactly(header);
-          if (Decrypt(header, pw, o) is not { } found) continue;
-          return FromArea(found.Kdf, found.Chain, found.Area, offset, kind, length);
-        }
+    var headers = new List<(long Offset, byte[] Header)>();
+    var kindAt = new Dictionary<long, TcHeaderKind>();
+    foreach (var kind in kinds) {
+      long[] offsets = kind == TcHeaderKind.Standard
+        ? [0, length - BackupHeaderFromEnd]
+        : [HiddenHeaderOffset, length - OldHiddenFromEnd, length - HiddenBackupFromEnd];
+      foreach (var offset in offsets.Where(x => x >= 0 && x + HeaderSize <= length).Distinct()) {
+        if (!kindAt.TryAdd(offset, kind)) continue;
+        stream.Position = offset;
+        var header = new byte[HeaderSize];
+        stream.ReadExactly(header);
+        headers.Add((offset, header));
       }
-      return null;
+    }
+    try {
+      return Search(headers, pw, o) is not { } found ? null : FromArea(found.Kdf, found.Chain, found.Area, found.Offset, kindAt[found.Offset], length);
     } finally {
       CryptographicOperations.ZeroMemory(pw);
     }

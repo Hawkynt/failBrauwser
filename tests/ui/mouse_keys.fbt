@@ -1,0 +1,26 @@
+# The mouse's back and forward keys walk this tab's history. On Windows GDK reports no such
+# button at all, so the program takes the keys from its own window procedure (src\win\xbuttons.rs);
+# these steps post the press-and-release pair the input driver sends for a real click.
+open $T/a
+open $T/a/b
+open $T/a/b/c
+!win mouse-back
+!win wait-location $T/a/b
+!win mouse-back
+!win expect-location $T/a
+!win mouse-forward
+!win wait-location $T/a/b
+!win mouse-forward
+!win expect-location $T/a/b/c
+# Forward is spent here: pressing it changes nothing, and the toolbar's button says so.
+!win wait-idle
+!win expect-disabled win.forward
+!win mouse-forward
+!win wait-idle
+!win expect-location $T/a/b/c
+# Back over the three steps this tab took, and the back key runs out with the third of them.
+!win mouse-back
+!win mouse-back
+!win mouse-back
+!win wait-idle
+!win expect-disabled win.back

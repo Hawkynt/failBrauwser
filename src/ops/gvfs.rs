@@ -4,6 +4,10 @@
 //! folder blocks for good. Before a share is listed or written to, [`check`] asks it with a
 //! timeout on a separate thread. While such a question is still unanswered, later checks
 //! of that share fail at once instead of piling up more stuck threads.
+//!
+//! On Windows the same machinery guards UNC paths (`\\server\share`): there is no fuse
+//! layer to hang, but a dead server blocks the redirector just as hard, and the
+//! server+share prefix is the share root everything below caches on.
 
 use std::collections::HashMap;
 use std::io;
@@ -20,11 +24,33 @@ pub fn fuse_root() -> PathBuf {
 }
 
 /// Whether `p` lies on a GVfs share exposed by gvfsd-fuse.
+#[cfg(unix)]
 pub fn is_gvfs_path(p: &Path) -> bool {
     p.starts_with(fuse_root()) || p.starts_with(gtk::glib::home_dir().join(".gvfs"))
 }
 
+/// Whether `p` is on a network share: a UNC path with both a server and a share. Windows
+/// has no FUSE layer, but a dead server blocks the path just the same, so the checks,
+/// free-space caches and staging rules below work on UNC paths exactly as on GVfs folders.
+#[cfg(windows)]
+pub fn is_gvfs_path(p: &Path) -> bool {
+    unc_parts(p).is_some()
+}
+
+/// `\\server\share` for a path on a UNC share (the prefix Windows itself parses out).
+#[cfg(windows)]
+fn unc_parts(p: &Path) -> Option<(std::path::PathBuf, std::ffi::OsString, std::ffi::OsString)> {
+    match p.components().next()? {
+        std::path::Component::Prefix(pc) => match pc.kind() {
+            std::path::Prefix::UNC(server, prefix) if !server.is_empty() && !prefix.is_empty() => Some((pc.as_os_str().into(), server.to_os_string(), prefix.to_os_string())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The share's top folder (`…/gvfs/smb-share:server=…,share=…`) for a path on it.
+#[cfg(unix)]
 pub fn share_root(p: &Path) -> Option<PathBuf> {
     for base in [fuse_root(), gtk::glib::home_dir().join(".gvfs")] {
         if let Ok(rest) = p.strip_prefix(&base) {
@@ -34,8 +60,15 @@ pub fn share_root(p: &Path) -> Option<PathBuf> {
     None
 }
 
+/// The share's top folder (`\\server\share`) for a path on a UNC share.
+#[cfg(windows)]
+pub fn share_root(p: &Path) -> Option<PathBuf> {
+    unc_parts(p).map(|(root, ..)| root)
+}
+
 /// A readable name for the share: `share on server` for SMB, the device's name for a phone,
 /// else its folder name.
+#[cfg(unix)]
 pub fn share_name(root: &Path) -> String {
     if let Some((_, name, _)) = crate::devices::named_root(root).filter(|(r, ..)| r == root) {
         return name;
@@ -45,6 +78,15 @@ pub fn share_name(root: &Path) -> String {
     match (field("share="), field("server=")) {
         (Some(share), Some(server)) => format!("{share} on {server}"),
         _ => dir,
+    }
+}
+
+/// The same name for a UNC share: `share on server` (phones are MTP, never a path here).
+#[cfg(windows)]
+pub fn share_name(root: &Path) -> String {
+    match unc_parts(root) {
+        Some((_, server, share)) => format!("{} on {}", share.to_string_lossy(), server.to_string_lossy()),
+        None => root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
     }
 }
 
@@ -163,11 +205,46 @@ pub fn free_space_cached(dir: &Path, read: fn(&Path) -> Option<u64>) -> Option<u
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn on_share(rest: &str) -> PathBuf {
         fuse_root().join("smb-share:server=192.168.1.198,share=gamingcrypt-drive").join(rest)
     }
 
     #[test]
+    #[cfg(windows)] // UNC roots are the Windows view of the same model
+    fn unc_share_paths_and_names() {
+        let p = Path::new(r"\\nas\Music\2026\album");
+        assert!(is_gvfs_path(&p));
+        assert_eq!(share_root(p), Some(PathBuf::from(r"\\nas\Music")));
+        assert_eq!(share_name(&PathBuf::from(r"\\nas\Music")), "Music on nas");
+        assert!(!is_gvfs_path(Path::new(r"C:\work")));
+        assert!(!is_gvfs_path(Path::new(r"\\nas"))); // the server itself is not a share
+        assert_eq!(share_root(Path::new(r"C:\work")), None);
+        assert!(check(Path::new(r"C:\work"), Duration::from_millis(1)).is_ok());
+    }
+
+    #[test]
+    #[cfg(windows)] // the fixture hangs the fake probe, never the network
+    fn a_dead_unc_times_out_and_later_checks_fail_fast() {
+        let p = Path::new(r"\\fb-probe.test\nothere\x");
+        let (release, wait) = mpsc::channel::<()>();
+        let e = check_with(&p, Duration::from_millis(100), move |_| {
+            let _ = wait.recv();
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(not_responding_share(&e), share_root(&p));
+        assert_eq!(e.to_string(), "“nothere on fb-probe.test” is not responding.");
+        let t = Instant::now();
+        assert!(check_with(&p, Duration::from_secs(5), |_| Ok(())).is_err());
+        assert!(t.elapsed() < Duration::from_secs(1));
+        forget(&share_root(&p).unwrap());
+        assert!(check_with(&p, Duration::from_secs(5), |_| Ok(())).is_ok());
+        release.send(()).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)] // the fixtures speak the fuse folder naming of GVfs
     fn share_paths_and_names() {
         let p = on_share("Windows Games/GTA4");
         assert!(is_gvfs_path(&p));
@@ -179,6 +256,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // builds its fixture under the fuse root
     fn a_hanging_share_times_out_and_later_checks_fail_fast() {
         let p = on_share("hang-test");
         let (release, wait) = mpsc::channel::<()>();

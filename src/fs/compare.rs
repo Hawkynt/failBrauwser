@@ -2,9 +2,9 @@
 //! side, what differs; and copying the missing and newer ones across (never deleting).
 
 use crate::ops::job::JobCtx;
+use crate::osprim;
 use std::collections::BTreeMap;
 use std::io::{self, Read};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -53,7 +53,7 @@ fn walk(root: &Path, cancel: &AtomicBool, out: &mut BTreeMap<PathBuf, Meta>) -> 
             if m.is_dir() {
                 stack.push(r.clone());
             }
-            out.insert(r, Meta { size: if m.is_dir() { 0 } else { m.len() }, mtime: m.mtime(), dir: m.is_dir() });
+            out.insert(r, Meta { size: if m.is_dir() { 0 } else { m.len() }, mtime: osprim::times(&m).1.0, dir: m.is_dir() });
         }
     }
     Ok(())
@@ -195,7 +195,8 @@ pub fn copy_across(ctx: &JobCtx, from: &Path, to: &Path, rels: &[PathBuf]) -> io
         let res = (|| -> io::Result<()> {
             let meta = std::fs::symlink_metadata(&src)?;
             if meta.file_type().is_symlink() {
-                std::os::unix::fs::symlink(std::fs::read_link(&src)?, &tmp)?;
+                let target = std::fs::read_link(&src)?;
+                osprim::make_symlink(&target, &tmp, std::fs::metadata(&target).is_ok_and(|m| m.is_dir()))?;
             } else {
                 let mut r = std::fs::File::open(&src)?;
                 let mut w = std::fs::File::create(&tmp)?;
@@ -230,6 +231,11 @@ mod tests {
     use super::*;
     use std::time::{Duration, SystemTime};
 
+    // Stable separator for the expected lists; Windows displays backslashes.
+    fn rel_key(rel: &Path) -> String {
+        rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")
+    }
+
     fn put(p: &Path, text: &str, age_secs: u64) {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, text).unwrap();
@@ -256,7 +262,7 @@ mod tests {
         put(&r.join("sneaky.bin"), "BBBB", 500);
         let no = AtomicBool::new(false);
         let rows = compare(&l, &r, false, &no).unwrap();
-        let show: Vec<(String, State)> = rows.iter().map(|x| (x.rel.display().to_string(), x.state)).collect();
+        let show: Vec<(String, State)> = rows.iter().map(|x| (rel_key(&x.rel), x.state)).collect();
         assert_eq!(
             show,
             [

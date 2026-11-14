@@ -1,10 +1,9 @@
 //! What kind of storage a path lives on. Copies pick their parallelism and write
 //! pacing from this.
 
-use std::ffi::CString;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceClass {
@@ -40,6 +39,20 @@ impl DeviceClass {
 
 /// Classifies the device holding `path` (which must exist).
 pub fn classify(path: &Path) -> DeviceClass {
+    #[cfg(unix)]
+    return unix_classify(path);
+    #[cfg(windows)]
+    return win_classify(path);
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        DeviceClass::Fast
+    }
+}
+
+#[cfg(unix)]
+fn unix_classify(path: &Path) -> DeviceClass {
+    use std::os::unix::fs::MetadataExt;
     let Ok(meta) = std::fs::metadata(path) else { return DeviceClass::Fast };
     if let Some(c) = classify_by_fs_type(path) {
         return c;
@@ -50,7 +63,28 @@ pub fn classify(path: &Path) -> DeviceClass {
     classify_sysfs(&sys).unwrap_or(DeviceClass::Fast)
 }
 
+/// First cut at Windows: volume type only. `win::storage` (drives milestone) adds the
+/// rotational/SSD answer from the storage device descriptor.
+#[cfg(windows)]
+fn win_classify(path: &Path) -> DeviceClass {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    use windows::Win32::System::WindowsProgramming::{DRIVE_REMOVABLE, DRIVE_REMOTE};
+    // GetDriveTypeW wants the volume root; UNC roots answer DRIVE_REMOTE there too.
+    let root = crate::win::volume::volume_root_path(path).unwrap_or_else(|| path.to_path_buf());
+    let w: Vec<u16> = OsStr::new(&root).encode_wide().chain(std::iter::once(0)).collect();
+    match unsafe { GetDriveTypeW(windows::core::PCWSTR(w.as_ptr())) } {
+        DRIVE_REMOVABLE => DeviceClass::Removable,
+        DRIVE_REMOTE => DeviceClass::Network,
+        _ => DeviceClass::Fast,
+    }
+}
+
+#[cfg(unix)]
 fn classify_by_fs_type(path: &Path) -> Option<DeviceClass> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
     let c = CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut st: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
@@ -74,6 +108,7 @@ fn classify_by_fs_type(path: &Path) -> Option<DeviceClass> {
 
 /// Reads `removable`, `queue/rotational` and the bus path of a block device in sysfs.
 /// Partitions carry none of these themselves; their parent disk does.
+#[cfg(unix)]
 pub fn classify_sysfs(dev_link: &Path) -> Option<DeviceClass> {
     let dev = std::fs::canonicalize(dev_link).ok()?;
     let disk = if dev.join("partition").exists() { dev.parent()?.to_path_buf() } else { dev.clone() };
@@ -101,9 +136,11 @@ pub fn classify_sysfs(dev_link: &Path) -> Option<DeviceClass> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::fs;
 
     #[test]
+    #[cfg(unix)] // sysfs layouts are a Linux notion
     fn classifies_fake_sysfs_trees() {
         let root = tempfile::tempdir().unwrap();
         let usb = root.path().join("devices/pci0/usb2/2-1/host6/block/sdb");
@@ -128,6 +165,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // the probe paths ("/", "/dev/shm") are Linux paths
     fn real_paths_classify_without_panicking() {
         let _ = classify(Path::new("/"));
         assert_eq!(classify(Path::new("/dev/shm")), DeviceClass::Memory);

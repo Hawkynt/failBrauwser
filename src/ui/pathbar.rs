@@ -62,10 +62,13 @@ pub fn crumbs_for(loc: &Location) -> Vec<Crumb> {
             }
             let (label, icon) = match &l {
                 Location::Dir(p) if *p == glib::home_dir() => (l.title(), Some("user-home-symbolic")),
-                Location::Dir(p) if p.parent().is_none() => ("/".to_string(), None),
+                // Every tree roots at its own root: "/" on Unix, "C:\" or "\\server\share" on Windows.
+                Location::Dir(p) if p.parent().is_none() => (p.display().to_string(), None),
                 Location::Archive(a) if a.inner.is_empty() => (l.title(), Some("package-x-generic-symbolic")),
                 Location::Network(h) if h.is_empty() => (l.title(), Some("network-workgroup-symbolic")),
                 Location::Network(_) => (l.title(), Some("network-server-symbolic")),
+                // The sign-in folder is a remote tree's root crumb.
+                Location::Remote(r) if r.inner.is_empty() => (l.title(), Some("network-server-symbolic")),
                 _ => (l.title(), None),
             };
             Crumb { label, icon, location: l }
@@ -281,8 +284,10 @@ mod tests {
     fn paths_start_at_the_root_even_below_home() {
         let loc = Location::Dir(glib::home_dir().join("Music/Albums"));
         let c = crumbs_for(&loc);
-        assert_eq!(c[0].label, "/");
-        assert_eq!(c[0].location, Location::Dir(PathBuf::from("/")));
+        // The lexical root of this platform: "/" on Unix, "C:\" under a Windows home.
+        let root = glib::home_dir().ancestors().last().unwrap().to_path_buf();
+        assert_eq!(c[0].label, root.display().to_string());
+        assert_eq!(c[0].location, Location::Dir(root));
         let home = c.iter().find(|x| x.location == Location::home()).unwrap();
         assert_eq!(home.icon, Some("user-home-symbolic"));
         assert_eq!(c.last().unwrap().label, "Albums");
@@ -309,6 +314,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // the mtp:host=… fuse folder naming; Windows phone crumbs arrive with WPD
     fn paths_on_a_phone_start_at_the_phone() {
         let root = failbrauwser::ops::gvfs::fuse_root().join("mtp:host=Google_Pixel_7_28041FDH2000ZA");
         let c = crumbs_for(&Location::Dir(root.join("Internal shared storage/DCIM")));

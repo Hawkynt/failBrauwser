@@ -1,6 +1,6 @@
 # failBrauwser
 
-A fast, native GTK 3 file manager in the spirit of Thunar — that opens archives like folders.
+A fast, native GTK 3 file manager for Linux and Windows, in the spirit of Thunar — that opens archives like folders.
 
 ![failBrauwser showing a home folder with folder sizes, shortcuts and folder tree](docs/screenshots/main.png)
 
@@ -39,11 +39,12 @@ A fast, native GTK 3 file manager in the spirit of Thunar — that opens archive
   theme, the time and items left; pause and resume, copies to the same drive wait in a queue instead
   of fighting each other, and optional read-back verification.
 - **Custom actions** from Thunar (`uca.xml`) in the right-click menu, and *Open Terminal Here*.
-- **Git the TortoiseGit way.** Overlay icons on the files and folders of working trees (a
-  green tick, a red exclamation mark, a blue plus, …), *Git Sync…*, *Git Commit -> "main"…*
-  and the *TortoiseGit* submenu in the right-click menu, and TortoiseGit's dialogs: Commit,
-  Log Messages with the revision graph, side-by-side diffs, Blame, Pull, Push, Switch, Merge,
-  Resolve, Revert and more. Off until switched on in *Edit → Git Integration (TortoiseGit)*.
+- **Version control the TortoiseGit way, for Git, Mercurial, Subversion, CVS and Visual
+  Source Safe.** Overlay icons on the files and folders of working copies (a green tick, a red
+  exclamation mark, a blue plus, …), *Git Sync…* / *SVN Update*, *Commit -> "main"…* and the
+  *Repository* submenu in the right-click menu, and TortoiseGit's dialogs: Commit, Log Messages
+  with the revision graph, side-by-side diffs, Blame, Pull, Push, Switch, Merge, Resolve, Revert
+  and more. Off until switched on in *Edit → Version Control Integration*.
 - **More details.** Folder sizes in the *Size* column (recursive, symlink-safe), a
   configurable column set, shortcuts and a folder tree rooted at the current folder, your home
   or `/`.
@@ -85,20 +86,55 @@ current desktop theme (here: Adwaita dark with Breeze colors and a Windows XP ic
 
 The script builds everything, installs the program, the archive helper, a launcher and the icon,
 and registers a background instance that starts with your session (`--no-autostart` to skip
-that; windows then take a moment longer the first time). It also makes failBrauwser the open
+that; windows then take a moment longer the first time).
+
+failBrauwser's own icon is a **blue folder** with a paper sheet, a zipper and a speed bolt
+(`data/icons/org.failbrauwser.FailBrauwser.svg`). It is the window icon everywhere, and on
+Windows the same picture is compiled into both program files (`data\icons\failbrauwser.ico`,
+rendered from the svg by `winpack\mkico.ps1`), so Explorer, the Start Menu entry and the
+titlebar all carry it; the packaged tree also ships the svg under
+`share\icons\hicolor\scalable\apps\`, where GTK looks it up by application id. It also makes failBrauwser the open
 and save dialog of applications that ask the desktop portal for one (`--no-file-chooser` to
 keep the desktop's; see *File chooser for other applications* below).
+
+On Windows (PowerShell, in a checkout with the [toolchain below](#requirements) set up):
+
+```powershell
+winpack\package.ps1           # build release and pack failbrauwser-<version>-x86_64-windows.zip
+winpack\install.ps1           # install it for your user (default %LOCALAPPDATA%\Programs)
+winpack\install.ps1 -Prefix D:\Apps\failBrauwser
+```
+
+`package.ps1` also builds `failbrauwser-<version>-x86_64-windows.exe`: the whole application
+as one file — run it once and it unpacks itself into your Programs folder and starts; that
+single file is all that folder needs (see [docs/WINDOWS.md](docs/WINDOWS.md)). An unpack that
+cannot be applied — a running instance holding that folder's program file, say — leaves your
+installed copy untouched and says why in a window rather than doing nothing quietly.
+
+Starting failBrauwser on Windows never opens a console window: the program file is linked as
+a windowed program, so a double-click, the Start Menu entry and the single-file launcher each
+show only failBrauwser's own window. Started from a terminal it still answers `--help`,
+`--version` and `--quit` in that terminal, and the archive helper it starts runs without a
+window of its own and ends together with the instance that started it.
+
+`winpack\bootstrap.ps1` fetches the pinned GTK stack (list in `winpack\packages.txt`) into
+`winpack\sysroot` from the MSYS2 repository named in `winpack\mirror.txt` — here the company
+Artifactory's mirror of `repo.msys2.org`; point it at any reachable MSYS2 tree — and
+`winpack\genimports.ps1` makes its MSVC import libraries; `winpack\build.ps1 -Release` is the
+plain build without packaging. Uninstalling is deleting that folder and the Start Menu entry.
+See [docs/WINDOWS.md](docs/WINDOWS.md) for the full picture of how the two systems line up.
 
 ### Updating
 
 *Help → Check for Updates* says whether GitHub has a newer release and installs either the
 newest **release** — its ready-built package (`failbrauwser-<version>-<arch>-linux.tar.gz`,
-installed with `install.sh --prebuilt`) — or builds the current **source** (needs what a build
-needs, below). Both install into the same place with the options of the last install (kept in
+installed with `install.sh --prebuilt`; on Windows `failbrauwser-<version>-x86_64-windows.zip`,
+whose files replace the install folder while the program runs) — or builds the current
+**source** (needs what a build needs, below; Linux only, since it runs `install.sh`). Both install into the same place with the options of the last install (kept in
 `~/.config/failbrauwser/install-options`); the download, source included, is deleted when it is
 done, and failBrauwser restarts as the new version. The window shows the installer's output. A
-copy installed for everyone (`--system`) is updated from a terminal. `scripts/package.sh`
-makes the release package.
+copy installed for everyone (`--system`) is updated from a terminal. `scripts/package.sh` and
+`winpack\package.ps1` make the release packages.
 
 ### Requirements
 
@@ -135,7 +171,7 @@ works.
 | Keys | Action |
 |---|---|
 | <kbd>Ctrl</kbd>+<kbd>N</kbd> / <kbd>Ctrl</kbd>+<kbd>T</kbd> | New window / tab |
-| <kbd>Alt</kbd>+<kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd>, <kbd>Backspace</kbd> | Back, forward, up |
+| <kbd>Alt</kbd>+<kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd>, <kbd>Backspace</kbd>, the mouse's back/forward keys | Back, forward, up |
 | <kbd>Alt</kbd>+<kbd>Home</kbd> / <kbd>Alt</kbd>+<kbd>D</kbd> / <kbd>Alt</kbd>+<kbd>N</kbd> | Home / Drives / Network |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | Type a location (also paths through archives: `~/a.zip/docs`) |
 | <kbd>Ctrl</kbd>+<kbd>C</kbd> <kbd>X</kbd> <kbd>V</kbd> | Copy, cut, paste (works with other file managers too) |
@@ -389,11 +425,45 @@ NTFS, HFS+, SquashFS, VHD/VHDX, VMDK, QCOW2, VDI, UDF, …) and packages (`.deb`
 `.whl`, …). A file without a suffix, or with one that says nothing (`.bin`, `.img`, `.dat`),
 opens as a folder too when the library recognises its contents and no application is set up
 for it. Files that belong to another program — office documents, e-books, pictures, fonts,
-programs and installers, databases — still open with that program; *Open as Archive* shows
-what is inside them, and inside audio and video files too. *Extract Here*, *Extract To…* and
+programs and installers, databases — still open with that program; the *Open as* submenu's
+*Archive* entry shows what is inside them instead, and inside audio and video files too.
+*Extract Here*, *Extract To…* and
 *Compress…* are in the context menu. Long archive operations show a progress bar with the
 bytes done. Formats the library can only read are shown read-only, and the status bar says
 why.
+
+**Encrypted volumes:** TrueCrypt (4.3–7.1a) and VeraCrypt (1.0–2.1) container files
+(`.hc`, `.tc`; any other file through *Open as*) open the same way: the password is asked for once (a wrong
+one asks again), and the FAT, exFAT, NTFS or ext4 volume inside is browsed and its files
+extracted like anywhere else. The whole volume shows as read-only — creating, resizing or
+re-keying a volume stays with the VeraCrypt program — and keyfiles and hidden volumes are
+not supported.
+
+*Open as* gathers these decisions for one selected file: *Archive* enters whatever the
+library detects without launching the program that owns the suffix, and *VeraCrypt /
+TrueCrypt*, *BitLocker*, *LUKS* and *dm-crypt (plain)* run that kind's own reader over the
+bytes — decided by you rather than by a name. A VeraCrypt header's bytes are
+indistinguishable from random noise, so a renamed container (`.bin`, `.img`, no suffix)
+cannot be recognized from the file; that is what the volume choices are for, and a
+headerless dm-crypt (plain) volume can be reached through no other door. A volume choice
+asks for the passphrase before the file is opened, so that answer is what reads it; *Archive*
+waits until a reader asks. The same one-ask password prompt serves any choice, and any chosen
+container opens read-only.
+
+What a wrong choice answers is the kind's own doing, and saying so is its job: BitLocker and
+LUKS carry plaintext headers, so their readers refuse foreign bytes as soon as the volume is
+read — opening or copying an entry of that chosen view reports it and writes nothing, while
+*Extract Here* on the file itself never sees the choice — a VeraCrypt choice has to search the
+file for a header that answers the passphrase before it can tell, and a headerless dm-crypt
+(plain) mapping cannot tell a wrong passphrase from a right one, exactly as `cryptsetup
+--type plain` cannot. A VeraCrypt choice that was refused its passphrase answers with the volume as
+an unreadable shell marked *encrypted*: nothing is searched while there is no passphrase to search
+with, and the reading that needs one asks again.
+
+A volume file that another program holds open cannot be read at all: VeraCrypt keeps a mounted
+container closed to every other reader at any sharing, so failBrauwser reports the file as being in
+use and stops there. It never dismounts a volume, never takes a file away from the program holding
+it, and invents no result for it.
 
 **Compressed files** such as `notes.txt.gz` show the one file inside; open it, edit it and
 save, and the file is compressed again. *Extract Here* gives `notes.txt` itself.
@@ -451,34 +521,131 @@ it with an example). *Open Terminal Here* is built in and uses `$TERMINAL`, the 
 choice (`xdg-terminal-exec`, Xfce's, or Debian's `x-terminal-emulator`) or the first terminal
 found.
 
-**Git:** off until you switch it on in *Edit → Git Integration (TortoiseGit)* (switching it
-off again takes the overlays and menu items away). Then folders that are Git working trees show the state of each file and folder as an
-overlay icon in TortoiseGit's place, its lower left corner: a green tick for unchanged, a red
-exclamation mark for changed, a blue plus for added (or renamed), a red cross for deleted, a
-yellow warning sign for a conflict, a purple question mark for files Git does not know and a
-grey bar for ignored ones. A folder shows what is most important inside it, and a folder that
-is a working tree of its own shows from outside whether it has uncommitted changes. The icons
-follow edits, commits and checkouts as they happen (the repository is watched) and are read
-again when the window comes back into use; *Settings → Icon Overlays* in the TortoiseGit
-submenu turns them off. The right-click menu has, as in Explorer, *Git Sync…*,
-*Git Commit -> "branch"…* and the *TortoiseGit* submenu: *Pull…*, *Fetch…*, *Push…*, *Diff*,
-*Diff with previous version*, *Show log*, *Show Reflog*, *Blame*, *Check for modifications*,
-*Stash Save* / *Stash Pop*, *Resolve…*, *Revert…*, *Clean up…*, *Switch/Checkout…*, *Merge…*,
-*Create Branch…*, *Create Tag…*, *Export…*, *Add…*, *Delete*, *Delete (keep local)*,
-*Rename…*, *Add to ignore list*, *Create Patch Serial…*, *Apply Patch Serial…*, *Settings* and
-*About*, each where it applies (Diff for changed files, Add for unversioned ones, Resolve
-during a merge with conflicts); outside working trees, folders offer *Git Clone…* and *Git
-Create repository here…*. The dialogs are TortoiseGit's, laid out and worded as there:
+**Version control:** off until you switch it on in *Edit → Version Control Integration*
+(switching it off again takes the overlays and the menu items away; a `git_integration=true` left
+by an older version counts as switched on). Then a folder some version-control tool manages works
+the way TortoiseGit works in Explorer — for every tool alike, Git, Mercurial, Subversion, CVS and
+Visual Source Safe:
+
+| Working copy of | How the folder is recognised | Client |
+|---|---|---|
+| Git | a `.git` folder, or a `.git` file naming the repository it points at (`gitdir:` — linked worktrees and submodules) | `git` |
+| Mercurial | an `.hg` folder | `hg` |
+| Subversion | an `.svn` folder — one at the root since 1.7, one in every folder before that | `svn` |
+| CVS | a `CVS` folder holding its `Repository` file | `cvs` |
+| Visual Source Safe | a `vssver.scc` (6.0) or `vssver2.scc` (2005) file in the folder itself, because VSS records the binding folder by folder | `ss` |
+
+The nearest marker above the folder decides which tool a folder belongs to; where two markers
+sit in the folder itself, Git answers first, then Mercurial, Subversion, CVS and Visual Source
+Safe. A bare repository — `HEAD`, `objects` and `refs` without a working tree — is not a working
+copy, and neither is a folder that only contains one somewhere deeper down: the marker has to be
+the folder's own or one of its parents'.
+
+*Overlays.* Each file and folder of a working copy shows its state as an overlay icon in
+TortoiseGit's place, its lower left corner, with TortoiseGit's icons whatever the tool: a green
+tick for unchanged, a red exclamation mark for changed, a blue plus for added (or renamed or
+copied), a red cross for deleted (or missing), a yellow warning sign for a conflict, a purple
+question mark for files the tool does not know and a grey bar for ignored ones. A folder shows what
+is most important inside it, and a folder that is a working copy of its own shows from outside
+whether it has uncommitted changes. The icons follow edits, commits and checkouts as they happen
+(the folder and the tool's own data folder are watched) and are read again when the window comes
+back into use; *Settings → Icon Overlays* turns them off. Where the states come from:
+
+| | Git | Mercurial | Subversion | CVS | Visual Source Safe |
+|---|---|---|---|---|---|
+| states | `git status --porcelain=v2` and `git ls-files` | `hg status --all` and `hg resolve --list` | `svn status --verbose --xml --no-ignore` | the folder's own `CVS/Entries` (see below) | `ss Status` and `ss Dir` |
+| conflict | an unmerged index entry | `hg resolve --list` says `U` | `conflicted` or a tree conflict | a `Result of merge+` / conflict time stamp in `CVS/Entries` | — |
+
+CVS asks its server for every `cvs status`, so the overlays read what CVS itself keeps in the
+working copy instead, as TortoiseCVS does (rung 3, the CVS manual's *Entries* format): revision `0`
+is added, a revision starting with `-` removed, a time stamp carrying a conflict mark conflicted, a
+file whose modification time differs from the recorded one changed, a name missing from `Entries`
+unversioned unless `.cvsignore` or CVS's default ignore list names it. Visual Source Safe shows a
+file checked out to anyone as changed.
+
+*The right-click menu.* Inside a working copy it has, as in Explorer, *⟨Tool⟩ Sync…* (Git,
+Mercurial) or *⟨Tool⟩ Update* (Subversion, CVS, Visual Source Safe), *⟨Tool⟩ Commit ->
+"branch"…* and the *Repository* submenu; outside one, folders offer *Repository* with *Clone…*
+and, for Git and Mercurial, *Create repository here…*. The "branch" is the tool's own word for
+where the working copy is: Git's branch (or `(no branch)`), Mercurial's `hg branch`, Subversion's
+path inside its repository (`^/trunk`), CVS's sticky tag (or `HEAD`) and Visual Source Safe's
+project. The submenu holds TortoiseGit's items in TortoiseGit's sections, each where it applies
+(Diff for changed files, Add for unversioned ones, Resolve while there are conflicts) and each
+only where the folder's tool has it — what a tool has no equivalent for is left out rather than
+greyed out:
+
+| Item | Git | Mercurial | Subversion | CVS | Visual Source Safe |
+|---|---|---|---|---|---|
+| Sync… (top level) | fetch, pull, push | `hg pull`, `hg push` | — | — | — |
+| Update (top level) | — | — | `svn update` | `cvs update -d` | `ss Get -R` |
+| Commit -> "branch"… (top level) | `git commit` | `hg commit` | `svn commit` | `cvs commit` | `ss Checkin` |
+| Pull… | `git pull` | `hg pull --update` | — | — | — |
+| Fetch… | `git fetch` | `hg pull` | — | — | — |
+| Push… | `git push` | `hg push` | — | — | — |
+| Diff | against the index and `HEAD` | against `.` | against `BASE` | against the revision in `CVS/Entries` | against the current version |
+| Diff with previous version | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Show log | `git log` | `hg log` | `svn log --xml --verbose` | `cvs log` | `ss History` |
+| Show Reflog | `git reflog` | — | — | — | — |
+| Blame | `git blame --porcelain` | `hg annotate -Tjson` | `svn blame --xml` | `cvs annotate` | — |
+| Check for modifications | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Stash Save / Stash Pop | `git stash` | `hg shelve` / `hg unshelve` | — | — | — |
+| Resolve… | `git add` | `hg resolve --mark` | `svn resolve --accept working` | — | — |
+| Revert… | `git restore` | `hg revert --no-backup` | `svn revert` | `cvs update -C` | `ss UndoCheckout` |
+| Clean up… | `git clean` | `hg purge` | `svn cleanup --remove-unversioned` | — | — |
+| Get Lock… / Release Lock | — | — | `svn lock` / `svn unlock` | — | `ss Checkout` / `ss UndoCheckout` |
+| Switch/Checkout… | `git switch` | `hg update` | `svn switch` | `cvs update -r` | `ss Get -V` |
+| Merge… | `git merge` | `hg merge` | `svn merge` | `cvs update -j` | — |
+| Create Branch… | `git branch` | `hg branch` | `svn copy` to `^/branches/…` | `cvs tag -b` | — |
+| Create Tag… | `git tag` | `hg tag` | `svn copy` to `^/tags/…` | `cvs tag` | `ss Label` |
+| Export… | `git archive` | `hg archive` | `svn export` | `cvs export` | — |
+| Add… | `git add` | `hg add` | `svn add` | `cvs add` | `ss Add` |
+| Delete | `git rm` | `hg remove` | `svn delete` | `cvs remove -f` | `ss Delete` |
+| Delete (keep local) | `git rm --cached` | `hg forget` | `svn delete --keep-local` | `cvs remove`, the file put back | — |
+| Rename… | `git mv` | `hg rename` | `svn move` | — | `ss Rename` |
+| Add to ignore list | `.gitignore` | `.hgignore` | the `svn:ignore` property | `.cvsignore` | — |
+| Create Patch Serial… | `git format-patch` | `hg export` | `svn diff` into a file | `cvs diff -u` into a file | — |
+| Apply Patch Serial… | `git am` | `hg import` | `svn patch` | — | — |
+| Clone… (outside) | `git clone` | `hg clone` | `svn checkout` | `cvs checkout` | — |
+| Create repository here… (outside) | `git init` | `hg init` | — | — | — |
+| Settings, About | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+A central-store tool (Subversion, CVS, Visual Source Safe) has nothing to pull, fetch, push or
+sync: its *Update* fetches and merges in one step. CVS has no rename and no patch of its own,
+Visual Source Safe no ignore list, no blame and no merge.
+
+*The windows* are TortoiseGit's, laid out and worded as there, and the same for every tool:
 *Commit* ticks the changed files (the *Check:* links, *Show Unversioned Files*, *Show Whole
-Project*, *Amend Last Commit*, *Commit & Push*) and commits exactly what is ticked; *Log
-Messages* shows the revision graph, the kinds of change of each commit and its branch and tag
-labels, the message and changed files of the commit selected, and switches, branches, tags,
-resets, reverts or cherry-picks at a commit from its right-click menu; a double click on a
-changed file opens its diff side by side (removed lines red, added lines yellow, as in
-TortoiseGitMerge); every command runs in the *Git Command Progress* window, which shows what
-git prints and ends in green *Success* or a red error, with *Push…* after a commit. Passwords
-and key passphrases git or ssh ask for come in a window of their own. Git itself does the
-work: the `git` command must be installed.
+Project*, plus *Amend Last Commit* and *Commit & Push* where the tool can) and commits exactly
+what is ticked — unversioned files ticked are added first; *Log Messages* shows the history with
+the kinds of change of each revision, its branch and tag labels, the message and changed files of
+the revision selected, and the revision graph where the tool records parents (Git, Mercurial;
+Subversion's, CVS's and Visual Source Safe's history is one line); its right-click menu switches,
+branches, tags, reverts or compares at a revision where the tool can. CVS records no changesets,
+so its log groups the file revisions that share author and message and lie within five minutes of
+each other into one entry, as `cvsps` does. A double click on a changed file opens its diff side by
+side: rows the two sides share, the line number on each side, removed lines red and added lines
+yellow as in TortoiseGitMerge, inside a changed pair the words that actually changed standing out,
+unchanged runs folded to three lines with the range they hide named, and *next change* / *previous
+change* walking the changes; nothing in that view is carried by colour alone. *Blame* shows each
+line with its revision, author and date. Every command runs in the *⟨Tool⟩ Command Progress*
+window, which shows what the client prints and ends in green *Success* or a red error quoting the
+client's own words, with *Push…* after a commit where the tool pushes. A command whose client would
+otherwise open an editor or a prompt is asked for the word it needs before anything runs (the commit
+message, the address to clone, the branch to switch to), and passwords and key passphrases a client
+or ssh asks for come in a window of their own.
+
+Nothing here runs over a tool's head: every command goes through that tool's own command-line
+client, asked inside the working copy — so the clients must be installed — and reading is done
+through their machine-readable output, or for CVS the working copy's `CVS/Entries`. Git, Mercurial,
+Subversion and CVS are measured against working copies their own clients make; Visual Source Safe
+runs on Windows only, so its commands are pinned against recorded `ss` output and unmeasured here.
+
+The shape of the diff view was learned from ShiftDiff (LGPL-3.0-or-later), which differs whole
+files and trees side by side; its behaviour — rows aligned by construction, the marker gutter,
+word-level highlighting inside a changed pair, folded unchanged runs, walking between changes — is
+re-implemented here for GTK and for what a version-control client reports, with no code, markup or
+naming taken from it. Its relationship ribbons and its detection of moved blocks are left out,
+because a client's diff of a working copy reports changes, not two trees to relate.
 
 **Trash:** *Move to Trash* (<kbd>Delete</kbd>) follows the freedesktop.org Trash
 specification, exactly like Thunar, Nautilus and Dolphin: the file goes to
@@ -569,10 +736,11 @@ src/
     shortcuts.rs   side panel entries: order, names, hidden ones, saved
     thumbs.rs      freedesktop.org thumbnail cache
     actions.rs     custom actions (Thunar uca.xml)
-    git.rs         Git working trees through the git command: status, changes, log, blame, diffs, graph
+    vcs/           version control, tool-neutral: working-copy detection, states, changes, history,
+                   blame, diffs, graph; one backend per tool (git, hg, svn, cvs, ss) over its client
     appearance.rs  light or dark: the theme variant for the desktop's colour scheme
   ui/              GTK: window, tabs, sidebar, drives page, jobs, clipboard, dnd, archives
-    git/           TortoiseGit's overlays, menus and dialogs
+    vcs/           TortoiseGit's overlays, menus and dialogs, for every tool
 helper/FbArchive/  fb-archive: C# (NativeAOT) host for CompressionWorkbench's archive logic
 tests/             engine, archive and headless UI tests
 ```
@@ -586,7 +754,11 @@ every local change), so this repository builds on its own.
 failBrauwser uses the archive logic of CompressionWorkbench (`Compression.Lib`) through a
 small NativeAOT helper, `fb-archive`, spoken to with one JSON object per line on stdin/stdout.
 It starts in about 15 ms, only when an archive is opened, and exits after 45 s without work,
-so plain browsing never carries the .NET runtime. Nested archives are extracted into
+so plain browsing never carries the .NET runtime. It also ends as soon as the failBrauwser
+instance that started it is gone, however that instance ends — normal exit, a killed process
+or a request still running: the program names its own process id as `--parent` when it starts
+the helper, and the helper waits for that process and quits. No `fb-archive` is left behind
+once the last window closes. Nested archives are extracted into
 `$XDG_RUNTIME_DIR/failbrauwser`, edited there and written back into their containers.
 
 ### Changes to CompressionWorkbench
@@ -655,14 +827,20 @@ such a script (see `src/ui/selftest.rs` for the commands).
   entries of their own. `helper/FbArchive.Tests/format-baseline.tsv` lists each one.
 - CD images (CDI, MDF, NRG, BIN) show plain ISO 9660 names (upper case); BIN/CUE and ODS-1
   are read-only.
+- Opening an encrypted volume costs that volume's own key derivation, whatever the container's size:
+  measured on a 512 KiB test container in the release build, three to six seconds for a SHA-256 or
+  SHA-512 volume, five to thirteen for one written with Whirlpool, BLAKE2s or Streebog, and about
+  half a minute to refuse a wrong passphrase, which has to try every candidate first. The candidates
+  run side by side and stop at the one that opens, but the arithmetic belongs to the volume.
 - Edits to formats without in-place modification rebuild the archive.
 - Hybrid ISO images are read-only; Rock Ridge names longer than about 170 bytes are
   shortened when an ISO is rebuilt.
 - The folder total in the status bar follows changes in the folder itself; changes deeper
   down show after <kbd>F5</kbd>.
-- Git: TortoiseGit's *Rebase*, *Bisect*, submodules, *Revision graph*, *Repo-browser*,
-  *Daemon*, *Send Mail* and its three-way merge editor are not there; conflicts are edited in
-  the file and marked with *Resolve…*. Overlays of folders below the one shown follow changes
+- Version control: TortoiseGit's *Rebase*, *Bisect*, submodules, *Revision graph*,
+  *Repo-browser*, *Daemon*, *Send Mail* and its three-way merge editor are not there; conflicts are
+  edited in the file and marked with *Resolve…*. Visual Source Safe is pinned against recorded
+  output only. Overlays of folders below the one shown follow changes
   made there by other programs when the folder or repository changes or the window is used
   again.
 

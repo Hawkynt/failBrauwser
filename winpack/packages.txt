@@ -1,0 +1,6 @@
+# Pinned UCRT64 MSYS2 packages for the Windows GTK sysroot (name + exact "version-rel").
+# Their full dependency closure is resolved from the repo database by bootstrap.ps1;
+# bump these deliberately and re-run: bootstrap.ps1 -Clean
+# The version must exist in the mirror's ucrt64.db or bootstrap fails loudly.
+mingw-w64-ucrt-x86_64-gtk3 3.24.52-1
+mingw-w64-ucrt-x86_64-pkgconf 1~3.0.10-1

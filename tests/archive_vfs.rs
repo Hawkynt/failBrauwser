@@ -163,6 +163,121 @@ fn compressed_files_are_edited_and_extracted() {
     }
 }
 
+// ── M14 "Open as": a container opened as the kind the user chose ──
+
+fn volume_fixture(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/veracrypt").join(name)
+}
+
+fn sha256_of(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(fs::read(path).unwrap());
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// One file read two ways answers two different listings, so the listing cache has to keep the
+/// chosen kind apart from the detected one instead of serving whichever came first.
+#[test]
+fn a_chosen_kind_and_the_detected_one_keep_their_own_listing() {
+    use std::sync::Arc;
+    let d = tempfile::tempdir().unwrap();
+    let Some(v) = vfs(&d.path().join("cache")) else { return };
+    let lying = d.path().join("disk.bin");
+    fs::copy(volume_fixture("test.sha256.hc"), &lying).unwrap();
+
+    let seen = ArchiveLoc::root(lying.clone());
+    let chosen = ArchiveLoc::root_as(lying.clone(), "VeraCrypt");
+    v.set_password(&chosen, "test");
+
+    let detected = v.archive(&seen).unwrap();
+    assert_ne!(detected.format, "VeraCrypt", "neither the name nor the bytes say volume");
+
+    let forced = v.archive(&chosen).unwrap();
+    assert_eq!(forced.format, "VeraCrypt");
+    assert!(forced.tree.get("volume.img").is_some(), "the chosen reader shows the volume");
+    assert!(!Arc::ptr_eq(&detected, &forced), "one file, two answers: the cache keeps them apart");
+
+    // Asking again brings the cached answer: no second search behind it.
+    assert!(Arc::ptr_eq(&forced, &v.archive(&chosen).unwrap()));
+    assert!(Arc::ptr_eq(&detected, &v.archive(&seen).unwrap()));
+}
+
+/// A chosen container opens read-only, and extracting from it runs the chosen reader.
+#[test]
+fn a_chosen_kind_extracts_the_volume_and_refuses_edits() {
+    let d = tempfile::tempdir().unwrap();
+    let Some(v) = vfs(&d.path().join("cache")) else { return };
+    let lying = d.path().join("disk.bin");
+    fs::copy(volume_fixture("test.sha256.hc"), &lying).unwrap();
+    let chosen = ArchiveLoc::root_as(lying, "VeraCrypt");
+    v.set_password(&chosen, "test");
+
+    assert!(!v.archive(&chosen).unwrap().writable, "a chosen container opens read-only");
+    assert_eq!(v.mkdir(&chosen, "nope").unwrap_err().code, "unsupported");
+
+    let out = d.path().join("out");
+    let got = v.extract(&chosen, &["volume.img".into()], &out).unwrap();
+    // The data area as recorded when the real VeraCrypt program wrote this container.
+    assert_eq!(sha256_of(&got[0]), "2b15dbe4544a853ca15311dd1dc83162c6cc06c6c470d98ca427b26093a9fb41");
+}
+
+/// A locked volume answers the shell of itself, and that shell is what asks for the passphrase.
+/// Keeping that answer after the passphrase arrived would throw the ask away.
+#[test]
+fn a_passphrase_set_after_a_locked_listing_reopens_the_volume() {
+    let d = tempfile::tempdir().unwrap();
+    let Some(v) = vfs(&d.path().join("cache")) else { return };
+    let lying = d.path().join("disk.bin");
+    fs::copy(volume_fixture("test.sha256.hc"), &lying).unwrap();
+    let chosen = ArchiveLoc::root_as(lying, "VeraCrypt");
+
+    let locked = v.archive(&chosen).unwrap();
+    assert!(locked.tree.get("volume.img").is_some());
+    assert!(locked.tree.get("metadata.ini").is_none(), "with no passphrase yet: the shell alone");
+
+    v.set_password(&chosen, "test");
+    let opened = v.archive(&chosen).unwrap();
+    assert!(opened.tree.get("metadata.ini").is_some(), "the passphrase that was asked is used");
+    assert!(!std::sync::Arc::ptr_eq(&locked, &opened), "the shell answer was replaced, not kept");
+}
+
+#[test]
+fn a_chosen_kind_that_is_not_a_format_is_refused_by_name() {
+    let d = tempfile::tempdir().unwrap();
+    let Some(v) = vfs(&d.path().join("cache")) else { return };
+    let lying = d.path().join("disk.bin");
+    fs::copy(volume_fixture("test.sha512.hc"), &lying).unwrap();
+    let error = v.archive(&ArchiveLoc::root_as(lying, "NoSuchKind")).unwrap_err();
+    assert!(error.message.contains("NoSuchKind"), "the refusal names the kind: {error}");
+}
+
+/// A dm-crypt (plain) container has no header at all: nothing about the file says what it is,
+/// so the choice is the only way in — and it answers without a search.
+#[test]
+fn a_headerless_volume_reopens_only_through_its_chosen_kind() {
+    let d = tempfile::tempdir().unwrap();
+    let Some(v) = vfs(&d.path().join("cache")) else { return };
+    let payload = d.path().join("payload");
+    fs::write(&payload, vec![0xABu8; 4096]).unwrap();
+    let plain = d.path().join("disk.img");
+    v.helper().create(&plain, "DmCryptPlain", &[(payload.clone(), "volume.img".into())], Some("pw")).unwrap();
+
+    let seen = ArchiveLoc::root(plain.clone());
+    let blind = v.archive(&seen).unwrap_err();
+    assert_eq!(blind.code, "unsupported", "the file carries no marker, so detection has nothing to find: {blind}");
+
+    let chosen = ArchiveLoc::root_as(plain, "DmCryptPlain");
+    v.set_password(&chosen, "pw");
+    let a = v.archive(&chosen).unwrap();
+    assert_eq!(a.format, "DmCryptPlain");
+    assert!(a.tree.get("volume.img").is_some());
+
+    let out = d.path().join("out");
+    let got = v.extract(&chosen, &["volume.img".into()], &out).unwrap();
+    assert_eq!(fs::read(&got[0]).unwrap(), fs::read(&payload).unwrap());
+}
+
 #[test]
 fn failed_extraction_leaves_nothing_behind() {
     let d = tempfile::tempdir().unwrap();
