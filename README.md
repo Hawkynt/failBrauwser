@@ -339,10 +339,19 @@ can hold:
 | *Hard Link* | files only, on the same filesystem as the source, one that keeps hard links (not FAT, exFAT) | `link` | `CreateHardLinkW` |
 | *Junction* | folders, local NTFS or ReFS | — | a mount-point reparse point |
 | *Shell Link* | always | a `.desktop` link (as *Create Link on Desktop* writes) | a `.lnk` file |
+| *Volume Mountpoint* | the source is the top folder of a local drive (not a network share) | a bind mount of the drive into a new folder | `SetVolumeMountPointW` on a new folder (NTFS) |
 
 Symbolic links are relative when source and link are on the same filesystem, absolute otherwise
 (*Edit → Links → Relative Symbolic Links* turns relative ones off). A link made in the folder of
 its source gets a free name: `notes (hardlink).txt`, `notes (symlink).txt`, `Music (junction)`.
+
+*Volume Mountpoints* show a whole local drive in a folder of your choice: drag the top folder of
+a drive (as the side panel opens it) with the right button, or pick it, and drop it as *Volume
+Mountpoint*. A new folder named like the drive is made and the drive is mounted there; making and
+removing one asks for the administrator password (polkit), as LSE asks for elevation. *Unmount
+Volume* in the right-click menu of such a folder takes the drive out of it again and leaves the
+empty folder. On Linux it lasts until it is unmounted or the computer restarts (Windows keeps
+it). The *Link* tab of its Properties names the drive mounted there.
 
 *Overlay icons* (*Edit → Links → Link Overlays*, on by default), at the bottom right of the icon
 so they never cover a version-control overlay:
@@ -383,6 +392,17 @@ link of the same kind that reaches the same target from its new place.
   links right: absolute links inside pointing into the folder point at its new place, relative
   links inside pointing outside are rewritten so they reach the same target. *Edit → Links →
   Smart Move*, on by default.
+
+- **Backup Mode** (*Edit → Links → Backup Mode*, off by default) runs Smart Copy, Smart Mirror,
+  DeLorean Copy, the clones, Smart Move and *Replace Symbolic Link / Junction* as the
+  administrator (polkit asks for the password once per run), so folders you cannot read are
+  copied too, and keeps everything the files carry: owner and group, permissions (also setuid,
+  setgid, sticky), access control lists and every other extended attribute (`user.*`,
+  `security.*` such as SELinux labels and file capabilities, `trusted.*`), access and
+  modification times, and the holes of sparse files. Links made or rewritten keep the owner and
+  attributes of the link they stand for. Smart Mirror in Backup Mode also copies files whose
+  owner changed. On Windows it copies with the backup and restore privileges, alternate streams,
+  attributes and security descriptors included.
 
 *Link properties.* The Properties window of a link has a *Link* tab: what it points at (with
 *Open Target* and, for symbolic links and junctions, the target editable), and for a file with
@@ -814,7 +834,8 @@ src/
     desktoplink.rs links on the desktop (freedesktop.org .desktop files of type Link)
     links/         links the way Link Shell Extension makes them: what each filesystem holds,
                    overlays, making and retargeting links, the tree operations, Smart Move,
-                   hard link siblings
+                   hard link siblings, Volume Mountpoints, Backup Mode and its administrator
+                   helper (`failbrauwser --links …`, run through pkexec)
     search.rs      file name search, also inside archives
     shortcuts.rs   side panel entries: order, names, hidden ones, saved
     thumbs.rs      freedesktop.org thumbnail cache
@@ -928,10 +949,11 @@ such a script (see `src/ui/selftest.rs` for the commands).
   output only. Overlays of folders below the one shown follow changes
   made there by other programs when the folder or repository changes or the window is used
   again.
-- Links: Link Shell Extension's *Volume Mountpoint* and its *Backup Mode* (copying ACLs,
-  encrypted files and alternate streams with backup privileges) are not there. Junctions, `.lnk`
-  links and the hard link names Windows lists are built from Microsoft's documentation and not yet
-  measured on Windows. Finding the other names of a hard link on Linux searches its whole
+- Links: a Volume Mountpoint made on Linux is gone after a restart (no `/etc/fstab` entry is
+  written). Backup Mode cannot copy fscrypt-encrypted files whose key is not loaded (Linux has no
+  raw export of encrypted files as Windows' `ReadEncryptedFileRaw`), nor set creation times.
+  Junctions, Volume Mountpoints, Backup Mode, `.lnk` links and the hard link names Windows lists
+  are built from Microsoft's documentation and not yet measured on Windows. Finding the other names of a hard link on Linux searches its whole
   filesystem, which takes a while on a big one.
 
 ## License
