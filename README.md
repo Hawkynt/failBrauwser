@@ -354,7 +354,9 @@ so they never cover a version-control overlay:
 *Pick and drop without dragging.* *Pick Link Source* in the right-click menu of files and folders
 remembers them; the right-click menu of a folder or of empty space then offers *Drop As* ▸ with
 the same items as the drag menu (and *Replace Symbolic Link* / *Replace Junction* on a link:
-the link keeps its name and points at the picked folder), and *Cancel Link Creation*.
+the link keeps its name and points at the picked folder), and *Cancel Link Creation*. Links
+dragged or picked themselves can also be dropped as a *Symbolic Link Copy* / *Junction Copy*: a
+link of the same kind that reaches the same target from its new place.
 
 *The tree operations* treat the dragged folders as one tree (links between them are inner links):
 
@@ -808,6 +810,9 @@ src/
     devices.rs     phones and cameras (MTP, PTP, AFC): kinds, names, advice when they fail
     config.rs      settings
     desktoplink.rs links on the desktop (freedesktop.org .desktop files of type Link)
+    links/         links the way Link Shell Extension makes them: what each filesystem holds,
+                   overlays, making and retargeting links, the tree operations, Smart Move,
+                   hard link siblings
     search.rs      file name search, also inside archives
     shortcuts.rs   side panel entries: order, names, hidden ones, saved
     thumbs.rs      freedesktop.org thumbnail cache
@@ -817,6 +822,8 @@ src/
     appearance.rs  light or dark: the theme variant for the desktop's colour scheme
   ui/              GTK: window, tabs, sidebar, drives page, jobs, clipboard, dnd, archives
     vcs/           TortoiseGit's overlays, menus and dialogs, for every tool
+    links.rs       the right-drag drop menu, Pick Link Source / Drop As, tree jobs, Smart Move
+    linkicons.rs   the link overlays
 helper/FbArchive/  fb-archive: C# (NativeAOT) host for CompressionWorkbench's archive logic
 tests/             engine, archive and headless UI tests
 ```
@@ -919,6 +926,11 @@ such a script (see `src/ui/selftest.rs` for the commands).
   output only. Overlays of folders below the one shown follow changes
   made there by other programs when the folder or repository changes or the window is used
   again.
+- Links: Link Shell Extension's *Volume Mountpoint* and its *Backup Mode* (copying ACLs,
+  encrypted files and alternate streams with backup privileges) are not there. Junctions, `.lnk`
+  links and the hard link names Windows lists are built from Microsoft's documentation and not yet
+  measured on Windows. Finding the other names of a hard link on Linux searches its whole
+  filesystem, which takes a while on a big one.
 
 ## License
 

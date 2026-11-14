@@ -894,6 +894,24 @@ fn right_click_menus_have_icons() {
 }
 
 #[test]
+#[cfg(unix)] // the fixture makes Unix symbolic links
+fn links_their_overlays_and_the_right_drag_menu() {
+    run("links.fbt", |t| {
+        let d = t.join("d");
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::create_dir_all(t.join("dest/sub2")).unwrap();
+        std::fs::create_dir_all(t.join("dest2")).unwrap();
+        std::fs::write(d.join("plain.txt"), "plain").unwrap();
+        std::fs::write(d.join("hard1.txt"), "h").unwrap();
+        std::fs::hard_link(d.join("hard1.txt"), d.join("hard2.txt")).unwrap();
+        std::os::unix::fs::symlink("plain.txt", d.join("sym")).unwrap();
+        std::os::unix::fs::symlink("nowhere", d.join("dead")).unwrap();
+        std::fs::write(d.join("sub/inner.txt"), "i").unwrap();
+        std::os::unix::fs::symlink("inner.txt", d.join("sub/to-inner")).unwrap();
+    });
+}
+
+#[test]
 fn dragging_from_a_name_and_several_items() {
     run("drag_start.fbt", |t| {
         std::fs::create_dir_all(t.join("d")).unwrap();

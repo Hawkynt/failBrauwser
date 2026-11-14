@@ -70,6 +70,21 @@ pub fn retarget(link: &Path, target: &Path, relative: bool) -> io::Result<()> {
     std::fs::rename(&tmp, link)
 }
 
+/// Copies the symbolic link or junction `link` into `dest_dir` so that it reaches the same target
+/// from there (LSE's *Symbolic Link Copy* / *Junction Copy*); gives the link made.
+pub fn copy_link(link: &Path, dest_dir: &Path, relative: bool) -> io::Result<PathBuf> {
+    let raw = target_of(link)?;
+    let target = super::resolve(link, &raw);
+    let kind = if is_junction(link) { LinkKind::Junction } else { LinkKind::Symbolic };
+    let name = link.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no name"))?;
+    let mut out = dest_dir.join(name);
+    if std::fs::symlink_metadata(&out).is_ok() {
+        out = dest_dir.join(free_name(dest_dir, name, Some(kind.name_tag())));
+    }
+    make_at(kind, &target, &out, relative)?;
+    Ok(out)
+}
+
 /// Removes a link itself, never what it points at.
 pub fn remove_link(link: &Path) -> io::Result<()> {
     #[cfg(windows)]
@@ -266,6 +281,19 @@ mod tests {
         assert_eq!(std::fs::read_link(&l).unwrap(), Path::new("two"));
         assert!(retarget(&d.path().join("one"), &d.path().join("two"), true).is_err(), "a folder is no link");
         assert!(!is_junction(&l));
+    }
+
+    #[test]
+    fn a_copied_link_reaches_the_same_target_from_its_new_place() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("a")).unwrap();
+        std::fs::create_dir_all(d.path().join("deep/er")).unwrap();
+        std::fs::write(d.path().join("t.txt"), "t").unwrap();
+        std::os::unix::fs::symlink("../t.txt", d.path().join("a/l")).unwrap();
+        let c = copy_link(&d.path().join("a/l"), &d.path().join("deep/er"), true).unwrap();
+        assert_eq!(std::fs::read_link(&c).unwrap(), Path::new("../../t.txt"));
+        assert_eq!(std::fs::read_to_string(&c).unwrap(), "t");
+        assert!(copy_link(&d.path().join("t.txt"), d.path(), true).is_err(), "a file is no link");
     }
 
     #[test]

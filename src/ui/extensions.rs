@@ -16,6 +16,7 @@ use std::rc::Rc;
 
 pub fn window_created(w: &Rc<Window>) {
     fileops::install_actions(w);
+    super::links::install_actions(w);
     w.add_action("extract-here", |w| archive::extract_selected(w, None));
     w.add_action("extract-to", archive::extract_to);
     w.add_action("compress", archive::compress);
@@ -210,6 +211,9 @@ pub fn context_menu_model(w: &Window, pane: &Rc<Pane>, items: &[Item]) -> gio::M
             menu.append_section(None, &g);
         }
         if local {
+            if let Some(l) = super::links::menu_section(w, items) {
+                menu.append_section(None, &l);
+            }
             section(&menu, &[("Create _Link on Desktop", "win.link-on-desktop")]);
             if let Some(s) = super::customactions::menu_section(w) {
                 menu.append_section(None, &s);
@@ -268,6 +272,11 @@ pub fn context_menu_model(w: &Window, pane: &Rc<Pane>, items: &[Item]) -> gio::M
         let s = gio::Menu::new();
         s.append_item(&super::menuicons::model_submenu("Open _as", &sub));
         menu.append_section(None, &s);
+    }
+    if local {
+        if let Some(l) = super::links::menu_section(w, items) {
+            menu.append_section(None, &l);
+        }
     }
     if items.iter().all(|i| i.path().is_some()) {
         section(&menu, &[("Create _Link on Desktop", "win.link-on-desktop")]);

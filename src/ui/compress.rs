@@ -113,6 +113,12 @@ pub fn show(w: &Window) {
     let pane = w.current_pane();
     let Location::Dir(dir) = pane.location() else { return };
     let items: Vec<PathBuf> = pane.selected_items().iter().filter_map(|i| i.path().cloned()).collect();
+    show_for(w, items, dir);
+}
+
+/// The Compress window for `items`, the archive written into `dir` (a right-drag's *Create
+/// Archive here…* names the folder dropped on). Named after the one item, else after `dir`.
+pub fn show_for(w: &Window, items: Vec<PathBuf>, dir: PathBuf) {
     if items.is_empty() {
         return;
     }

@@ -23,6 +23,8 @@ const INTERNAL: &str = "application/x-failbrauwser-items";
 thread_local! {
     /// What the drag started here carries, for choosing the default action and for archive entries.
     static DRAGGING: RefCell<Vec<ClipSource>> = const { RefCell::new(Vec::new()) };
+    /// The drag started here was made with the right mouse button: its drop asks what to do.
+    static RIGHT_DRAG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The size of each item's image in the drag image of several items.
@@ -80,7 +82,7 @@ fn targets() -> Vec<gtk::TargetEntry> {
 }
 
 pub fn setup(w: &Window, pane: &Rc<Pane>) {
-    let actions = gdk::DragAction::COPY | gdk::DragAction::MOVE | gdk::DragAction::LINK;
+    let actions = gdk::DragAction::COPY | gdk::DragAction::MOVE | gdk::DragAction::LINK | gdk::DragAction::ASK;
     enable_model_drag_source(pane.tree.upcast_ref(), actions);
     enable_model_drag_source(pane.icons.upcast_ref(), actions);
     for view in [pane.tree.upcast_ref::<gtk::Widget>(), pane.icons.upcast_ref()] {
@@ -102,7 +104,8 @@ fn enable_model_drag_source(view: &gtk::Widget, actions: gdk::DragAction) {
         .iter()
         .map(|(name, flags, info)| gtk::ffi::GtkTargetEntry { target: name.as_ptr() as *mut _, flags: *flags, info: *info })
         .collect();
-    let mask = gdk::ModifierType::BUTTON1_MASK.into_glib();
+    // The left button drags; the right one too, and its drop opens the drop menu.
+    let mask = (gdk::ModifierType::BUTTON1_MASK | gdk::ModifierType::BUTTON3_MASK).into_glib();
     unsafe {
         if let Some(tree) = view.downcast_ref::<gtk::TreeView>() {
             gtk::ffi::gtk_tree_view_enable_model_drag_source(tree.to_glib_none().0, mask, entries.as_ptr(), entries.len() as i32, actions.into_glib());
@@ -114,11 +117,13 @@ fn enable_model_drag_source(view: &gtk::Widget, actions: gdk::DragAction) {
 
 fn connect_source(view: &gtk::Widget, pane: &Rc<Pane>) {
     let p = Rc::downgrade(pane);
-    view.connect_drag_begin(move |_, _| {
+    view.connect_drag_begin(move |view, ctx| {
         if let Some(p) = p.upgrade() {
             let sources = fileops::selection_sources(&p);
             DRAGGING.with(|d| *d.borrow_mut() = sources);
         }
+        let held = view.window().map(|win| win.device_position(&ctx.device()).3).unwrap_or_else(gdk::ModifierType::empty);
+        RIGHT_DRAG.with(|r| r.set(held.contains(gdk::ModifierType::BUTTON3_MASK) && !held.contains(gdk::ModifierType::BUTTON1_MASK)));
     });
     // Several items: their icons stacked with how many there are, instead of GTK's image of
     // the one row pressed (set by the view's own handler, so this one runs after it).
@@ -140,7 +145,10 @@ fn connect_source(view: &gtk::Widget, pane: &Rc<Pane>) {
             }
         }),
     );
-    view.connect_drag_end(|_, _| DRAGGING.with(|d| d.borrow_mut().clear()));
+    view.connect_drag_end(|_, _| {
+        DRAGGING.with(|d| d.borrow_mut().clear());
+        RIGHT_DRAG.with(|r| r.set(false));
+    });
     view.connect_drag_data_get(|_, _, sel, info, _| {
         let sources = DRAGGING.with(|d| d.borrow().clone());
         if info == 1 {
@@ -211,7 +219,9 @@ fn choose_action(view: &gtk::Widget, ctx: &gdk::DragContext, dest: &Location) ->
         .unwrap_or_else(gdk::ModifierType::empty);
     let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
     let shift = mods.contains(gdk::ModifierType::SHIFT_MASK);
-    let want = if ctrl && shift {
+    let want = if RIGHT_DRAG.with(|r| r.get()) && allowed.contains(gdk::DragAction::ASK) {
+        gdk::DragAction::ASK
+    } else if ctrl && shift {
         gdk::DragAction::LINK
     } else if shift {
         gdk::DragAction::MOVE
@@ -273,6 +283,11 @@ fn connect_dest(view: &gtk::Widget, w: &Window, pane: &Rc<Pane>) {
         }
         let action = ctx.selected_action();
         ctx.drag_finish(true, false, time);
+        // A right-button drag (ours, or another program's that asks): the menu decides.
+        if action == gdk::DragAction::ASK || (info == 1 && RIGHT_DRAG.with(|r| r.get())) {
+            super::links::show_drop_menu(&w, view, x, y, sources, dest);
+            return;
+        }
         if action == gdk::DragAction::LINK {
             make_links(&w, &sources, &dest);
             return;
@@ -283,21 +298,7 @@ fn connect_dest(view: &gtk::Widget, w: &Window, pane: &Rc<Pane>) {
 }
 
 fn make_links(w: &Window, sources: &[ClipSource], dest: &Location) {
-    let Some(dir) = dest.local_path() else { return };
-    let mut made = Vec::new();
-    for s in sources {
-        let ClipSource::Local(p) = s else { continue };
-        let Some(name) = p.file_name() else { continue };
-        let mut link = dir.join(name);
-        if std::fs::symlink_metadata(&link).is_ok() {
-            link = dir.join(failbrauwser::ops::names::free_name(dir, name, Some("link")));
-        }
-        match failbrauwser::osprim::make_symlink(p, &link, p.is_dir()) {
-            Ok(()) => made.push(link),
-            Err(e) => super::util::show_error(&w.win, "Cannot create link", &e.to_string()),
-        }
-    }
-    fileops::select_created(w, dest, &made);
+    super::links::perform(&w.me(), "link-symbolic", sources, dest);
 }
 
 

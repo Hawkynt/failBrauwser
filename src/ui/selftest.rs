@@ -1015,6 +1015,40 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             wait(r, move |r| Ok(r.window.current_pane().send_button(&name, press, state, super::pane::Spot::Middle).is_ok()));
         }
         "drag-began" => w.current_pane().drag_began(),
+        "expect-link-overlay" => {
+            // expect-link-overlay <name> = hard|junction|symbolic|broken|none: the row's link overlay.
+            let (name, want) = arg.split_once(" = ").ok_or("usage: expect-link-overlay <name> = <overlay>")?;
+            let (name, want) = (name.trim().to_string(), want.trim().to_string());
+            wait(r, move |r| {
+                let code = r.window.current_pane().link_overlay(&name).unwrap_or(0);
+                let got = match failbrauwser::links::Overlay::from_code(code) {
+                    Some(failbrauwser::links::Overlay::Hard) => "hard",
+                    Some(failbrauwser::links::Overlay::Junction) => "junction",
+                    Some(failbrauwser::links::Overlay::Symbolic) => "symbolic",
+                    Some(failbrauwser::links::Overlay::Broken) => "broken",
+                    None => "none",
+                };
+                Ok(got == want)
+            });
+        }
+        "right-drop" => {
+            // right-drop <name> | <name> -> <folder>: items of the folder shown dragged with the
+            // right button and dropped on <folder>; the drop menu opens.
+            let (names, dest) = arg.split_once(" -> ").ok_or("usage: right-drop <names> -> <folder>")?;
+            let p = w.current_pane();
+            let here = p.location().local_path().ok_or("not a folder on disk")?.to_path_buf();
+            let sources: Vec<super::clipboard::ClipSource> = names.split(" | ").map(|n| super::clipboard::ClipSource::Local(here.join(n.trim()))).collect();
+            let view = p.view_widget();
+            super::links::show_drop_menu(&w, &view, 10, 10, sources, Location::Dir(PathBuf::from(dest.trim())));
+        }
+        "expect-drop-menu-item" | "expect-no-drop-menu-item" => {
+            // The drop menu open last has (or has not) the item "Parent/Child".
+            let all = super::links::open_drop_menu_labels();
+            if all.iter().any(|l| l == arg) != (cmd == "expect-drop-menu-item") {
+                return Err(format!("drop menu: {all:?}"));
+            }
+        }
+        "drop-menu" => super::links::click_open_drop_menu(arg)?,
         "right-click" => {
             // right-click <name>: the right mouse button pressed and released on an item.
             let name = arg.to_string();

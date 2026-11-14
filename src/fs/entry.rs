@@ -24,6 +24,8 @@ pub struct FileEntry {
     pub target_is_dir: bool,
     /// For symlinks: the target does not exist.
     pub broken: bool,
+    /// A Windows junction (a mount-point reparse point; `kind` is `Symlink` for it too).
+    pub junction: bool,
     /// Size of the file (a symlink reports its target's size).
     pub size: u64,
     pub mtime: i64,
@@ -75,6 +77,7 @@ impl FileEntry {
         }
         let content_type = guess_content_type(&name, kind, target_is_dir);
         let ident = osprim::identity(&path, lmeta);
+        let junction = kind == Kind::Symlink && crate::links::make::is_junction(&path);
         // The two names every Windows shell shows next to a file; a descriptor that will
         // not answer (a drive refusing security queries) leaves them absent, not wrong.
         #[cfg(windows)]
@@ -88,6 +91,7 @@ impl FileEntry {
             kind,
             target_is_dir,
             broken,
+            junction,
             size,
             mtime: osprim::times(lmeta).1.0,
             mode: osprim::mode_of(lmeta),
@@ -263,6 +267,7 @@ mod tests {
             kind: Kind::File,
             target_is_dir: false,
             broken: false,
+            junction: false,
             size: 0,
             mtime: 0,
             mode: 0,

@@ -128,6 +128,41 @@ pub fn install_app_actions(ctx: &Rc<AppCtx>) {
     });
     app.add_action(&a);
 
+    // Links (README: Links): overlays, relative symbolic links, Smart Move, outer links.
+    super::linkicons::set_enabled(ctx.settings.borrow().link_overlays);
+    for (name, get, set) in [
+        ("link-overlays", (|s: &failbrauwser::config::Settings| s.link_overlays) as fn(&failbrauwser::config::Settings) -> bool, (|s: &mut failbrauwser::config::Settings, v| s.link_overlays = v) as fn(&mut failbrauwser::config::Settings, bool)),
+        ("relative-symlinks", |s| s.relative_symlinks, |s, v| s.relative_symlinks = v),
+        ("smart-move", |s| s.smart_move, |s, v| s.smart_move = v),
+    ] {
+        let a = gio::SimpleAction::new_stateful(name, None, &get(&ctx.settings.borrow()).to_variant());
+        let c = Rc::downgrade(ctx);
+        a.connect_change_state(move |a, v| {
+            let Some(c) = c.upgrade() else { return };
+            let on = v.and_then(|v| v.get::<bool>()).unwrap_or(false);
+            a.set_state(&on.to_variant());
+            set(&mut c.settings.borrow_mut(), on);
+            c.save_settings_soon();
+            if name == "link-overlays" {
+                super::linkicons::set_enabled(on);
+                super::icons::clear_cache();
+                c.for_each_window(|w| w.panes().iter().for_each(|p| p.redraw_rows()));
+            }
+        });
+        app.add_action(&a);
+    }
+    let outer = ctx.settings.borrow().outer_links.id();
+    let a = gio::SimpleAction::new_stateful("outer-links", Some(glib::VariantTy::STRING), &outer.to_variant());
+    let c = Rc::downgrade(ctx);
+    a.connect_change_state(move |a, v| {
+        let Some(c) = c.upgrade() else { return };
+        let Some(id) = v.and_then(|v| v.get::<String>()) else { return };
+        a.set_state(&id.to_variant());
+        c.settings.borrow_mut().outer_links = failbrauwser::links::tree::Outer::from_id(&id);
+        c.save_settings_soon();
+    });
+    app.add_action(&a);
+
     let a = gio::SimpleAction::new("about", None);
     let c = Rc::downgrade(ctx);
     a.connect_activate(move |_, _| {
@@ -207,6 +242,18 @@ pub fn menubar_model() -> gio::Menu {
         item(s, "_Smooth Writes to Slow Drives", "app.smooth-writes");
         item(s, "_Verify Copies", "app.verify-copies");
         item(s, "_Version Control Integration", "app.vcs-integration");
+        let links = gio::Menu::new();
+        section(&links, |l| {
+            item(l, "Link _Overlays", "app.link-overlays");
+            item(l, "_Relative Symbolic Links", "app.relative-symlinks");
+            item(l, "_Smart Move", "app.smart-move");
+        });
+        let outer = gio::Menu::new();
+        outer.append(Some("_Unroll"), Some("app.outer-links::unroll"));
+        outer.append(Some("_Splice"), Some("app.outer-links::splice"));
+        outer.append(Some("_Crop"), Some("app.outer-links::crop"));
+        links.append_submenu(Some("Outer _Links"), &outer);
+        s.append_submenu(Some("_Links"), &links);
     });
     bar.append_submenu(Some("_Edit"), &edit);
 

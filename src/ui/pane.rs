@@ -93,6 +93,9 @@ pub struct Pane {
     /// The item pressed among several selected ones: the selection stays for a drag of them
     /// all, and a release without a drag selects only this one.
     press_in_selection: RefCell<Option<gtk::TreePath>>,
+    /// A right press on an item: its menu opens on release unless a drag starts (README: a
+    /// right-button drag opens the drop menu where it drops instead).
+    right_press: RefCell<Option<gdk::EventButton>>,
     /// Filter-as-you-type for the current folder (empty: everything).
     filter: RefCell<failbrauwser::search::Query>,
     /// Files of a type a file chooser asks for (folders are always shown).
@@ -225,6 +228,7 @@ impl Pane {
             thumbs: RefCell::new(std::collections::VecDeque::new()),
             scroll_pending: Cell::new(false),
             press_in_selection: RefCell::new(None),
+            right_press: RefCell::new(None),
             filter: RefCell::new(failbrauwser::search::Query::new("")),
             type_filter: RefCell::new(None),
             search_cancel: RefCell::new(None),
@@ -371,6 +375,11 @@ impl Pane {
         }
     }
 
+    /// The view shown: the list or the icons.
+    pub fn view_widget(&self) -> gtk::Widget {
+        if self.view_is_icons() { self.icons.clone().upcast() } else { self.tree.clone().upcast() }
+    }
+
     fn view_is_icons(&self) -> bool {
         self.stack.visible_child_name().as_deref() == Some("icons")
     }
@@ -417,6 +426,27 @@ impl Pane {
     pub fn unselect_all(&self) {
         self.icons.unselect_all();
         self.tree.selection().unselect_all();
+    }
+
+    /// The rows selected in the view shown.
+    fn selected_paths(&self) -> Vec<gtk::TreePath> {
+        if self.view_is_icons() {
+            self.icons.selected_items()
+        } else {
+            self.tree.selection().selected_rows().0
+        }
+    }
+
+    /// Selects exactly these rows in the view shown, leaving the cursor where it is.
+    fn select_paths(&self, paths: &[gtk::TreePath]) {
+        if self.view_is_icons() {
+            self.icons.unselect_all();
+            paths.iter().for_each(|p| self.icons.select_path(p));
+        } else {
+            let sel = self.tree.selection();
+            sel.unselect_all();
+            paths.iter().for_each(|p| sel.select_path(p));
+        }
     }
 
     /// Selects the rows with these names and scrolls the first into view.
@@ -1559,19 +1589,21 @@ impl Pane {
         // The release of a press among several selected items that did not become a drag.
         let weak = self.weak.borrow().clone();
         self.tree.connect_button_release_event(move |tree, ev| {
-            if let Some(path) = weak.upgrade().and_then(|p| p.press_in_selection.take()).filter(|_| ev.button() == 1) {
+            let Some(p) = weak.upgrade() else { return glib::Propagation::Proceed };
+            if let Some(path) = p.press_in_selection.take().filter(|_| ev.button() == 1) {
                 tree.selection().unselect_all();
                 tree.selection().select_path(&path);
             }
-            glib::Propagation::Proceed
+            p.right_released(ev)
         });
         let weak = self.weak.borrow().clone();
         self.icons.connect_button_release_event(move |icons, ev| {
-            if let Some(path) = weak.upgrade().and_then(|p| p.press_in_selection.take()).filter(|_| ev.button() == 1) {
+            let Some(p) = weak.upgrade() else { return glib::Propagation::Proceed };
+            if let Some(path) = p.press_in_selection.take().filter(|_| ev.button() == 1) {
                 icons.unselect_all();
                 icons.select_path(&path);
             }
-            glib::Propagation::Proceed
+            p.right_released(ev)
         });
         for w in [self.tree.upcast_ref::<gtk::Widget>(), self.icons.upcast_ref()] {
             let weak = self.weak.borrow().clone();
@@ -1683,6 +1715,21 @@ impl Pane {
     /// A drag of the selection started: the release that follows decides nothing.
     pub fn drag_began(&self) {
         self.press_in_selection.take();
+        self.right_press.take();
+    }
+
+    /// The right button let go: the menu of a press that did not become a drag opens.
+    fn right_released(&self, ev: &gdk::EventButton) -> glib::Propagation {
+        if ev.button() != 3 {
+            return glib::Propagation::Proceed;
+        }
+        match self.right_press.take() {
+            Some(press) => {
+                self.emit(PaneEvent::ContextMenu(Some(press)));
+                glib::Propagation::Stop
+            }
+            None => glib::Propagation::Proceed,
+        }
     }
 
     /// Sends a left button press or release onto the middle of the item `name` in the view
@@ -1762,12 +1809,30 @@ impl Pane {
             }
             3 => {
                 match &hit {
-                    Some(path) if !is_selected(path) => select_only(path),
-                    Some(_) => {}
-                    None => self.unselect_all(),
+                    Some(path) => {
+                        if !is_selected(path) {
+                            select_only(path);
+                        }
+                        // The menu waits for the release: the press may start a drag.
+                        *self.right_press.borrow_mut() = Some(ev.clone());
+                        // The view keeps the selection made here (it would select the row
+                        // under the pointer alone otherwise) and starts the drag from it.
+                        let selected = self.selected_paths();
+                        let weak = self.weak.borrow().clone();
+                        glib::idle_add_local_full(glib::Priority::HIGH, move || {
+                            if let Some(p) = weak.upgrade() {
+                                p.select_paths(&selected);
+                            }
+                            glib::ControlFlow::Break
+                        });
+                        glib::Propagation::Proceed
+                    }
+                    None => {
+                        self.unselect_all();
+                        self.emit(PaneEvent::ContextMenu(Some(ev.clone())));
+                        glib::Propagation::Stop
+                    }
                 }
-                self.emit(PaneEvent::ContextMenu(Some(ev.clone())));
-                glib::Propagation::Stop
             }
             2 => {
                 if let Some(path) = hit {
@@ -1917,6 +1982,19 @@ impl Pane {
                 self.store.set_value(iter, model::COL_GIT, &want.to_value());
             }
         }
+    }
+
+    /// Draws every row again (an overlay switched on or off).
+    pub fn redraw_rows(&self) {
+        self.tree.queue_draw();
+        self.icons.queue_draw();
+    }
+
+    /// The link overlay of the row `name` (tests).
+    pub fn link_overlay(&self, name: &str) -> Option<u32> {
+        let st = self.st.borrow();
+        let (_, iter) = st.by_name.get(&OsString::from(name)).and_then(|k| st.rows.get(k))?;
+        self.store.value(iter, model::COL_LINK as i32).get::<u32>().ok()
     }
 
     /// The Git overlay of the row `name` (tests).

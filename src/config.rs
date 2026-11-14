@@ -113,6 +113,14 @@ pub struct Settings {
     /// State overlays on files and folders of working copies (TortoiseGit's icons), while the
     /// version-control integration is on.
     pub vcs_overlays: bool,
+    /// Overlays on hard links, junctions and symbolic links (README: Links).
+    pub link_overlays: bool,
+    /// Symbolic links made are relative where they can be.
+    pub relative_symlinks: bool,
+    /// Links inside a folder moved within a filesystem are kept pointing right.
+    pub smart_move: bool,
+    /// What the tree operations do with links pointing outside the tree.
+    pub outer_links: crate::links::tree::Outer,
 }
 
 impl Default for Settings {
@@ -139,6 +147,10 @@ impl Default for Settings {
             smooth_writes: true,
             vcs_integration: false,
             vcs_overlays: true,
+            link_overlays: true,
+            relative_symlinks: true,
+            smart_move: true,
+            outer_links: crate::links::tree::Outer::Unroll,
         }
     }
 }
@@ -180,6 +192,12 @@ impl Settings {
         b("git_overlays", &mut s.vcs_overlays);
         b("vcs_integration", &mut s.vcs_integration);
         b("vcs_overlays", &mut s.vcs_overlays);
+        b("link_overlays", &mut s.link_overlays);
+        b("relative_symlinks", &mut s.relative_symlinks);
+        b("smart_move", &mut s.smart_move);
+        if let Ok(v) = kf.string(GROUP, "outer_links") {
+            s.outer_links = crate::links::tree::Outer::from_id(&v);
+        }
         i("window_width", &mut s.window_width, 300);
         i("window_height", &mut s.window_height, 200);
         i("sidebar_width", &mut s.sidebar_width, 0);
@@ -246,6 +264,10 @@ impl Settings {
         kf.set_boolean(GROUP, "verify_copies", self.verify_copies);
         kf.set_boolean(GROUP, "vcs_integration", self.vcs_integration);
         kf.set_boolean(GROUP, "vcs_overlays", self.vcs_overlays);
+        kf.set_boolean(GROUP, "link_overlays", self.link_overlays);
+        kf.set_boolean(GROUP, "relative_symlinks", self.relative_symlinks);
+        kf.set_boolean(GROUP, "smart_move", self.smart_move);
+        kf.set_string(GROUP, "outer_links", self.outer_links.id());
         kf.set_integer(GROUP, "window_width", self.window_width);
         kf.set_integer(GROUP, "window_height", self.window_height);
         kf.set_integer(GROUP, "sidebar_width", self.sidebar_width);
@@ -329,6 +351,10 @@ mod tests {
         s.zoom_icons = 4;
         s.vcs_overlays = false;
         s.vcs_integration = true;
+        s.link_overlays = false;
+        s.relative_symlinks = false;
+        s.smart_move = false;
+        s.outer_links = crate::links::tree::Outer::Splice;
         s.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), s);
     }

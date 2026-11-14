@@ -66,6 +66,16 @@ pub fn icon_names(label: &str) -> &'static [&'static str] {
         "Blame" => &["vcs-annotate", "format-justify-left", "accessories-text-editor"],
         "Delete (keep local)" | "Delete and add to ignore list" => &["edit-delete", "list-remove"],
         "Settings" => &["preferences-system", "preferences-other"],
+        // Links (README: Links) and the right-drag drop menu.
+        "Move here" => &["go-jump", "edit-cut"],
+        "Copy here" => &["edit-copy"],
+        "Create Archive here" => &["archive-insert", "package-x-generic", "application-x-archive"],
+        "Create Link here" | "Drop As" | "Pick Link Source" | "Symbolic Link" | "Hard Link" | "Junction" | "Shell Link (.desktop)" | "Shell Link (.lnk)" => &["emblem-symbolic-link", "insert-link"],
+        "Replace Symbolic Link" | "Replace Junction" | "Symbolic Link Copy" | "Junction Copy" => &["emblem-symbolic-link", "edit-find-replace"],
+        "Smart Copy" | "Hardlink Clone" | "Symbolic Link Clone" => &["edit-copy", "emblem-symbolic-link"],
+        "Smart Mirror" => &["emblem-synchronizing", "view-refresh"],
+        "DeLorean Copy" => &["document-open-recent", "appointment-soon", "edit-copy"],
+        "Cancel" | "Cancel Link Creation" => &["process-stop", "window-close"],
         _ => &[],
     }
 }
