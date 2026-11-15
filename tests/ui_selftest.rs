@@ -328,7 +328,9 @@ fn gtk3_applications_get_failbrauwsers_dialogs() {
 
 #[test]
 fn update_from_release_or_source() {
-    run_checked(
+    // Outside the checkout: the file:// addresses are made from the path, which must hold no
+    // space ("Working Copies") for curl to take them.
+    run_outside_the_working_copy(
         "update.fbt",
         &[],
         |t| {
@@ -359,6 +361,13 @@ fn update_from_release_or_source() {
                 fake(&root, "installed-args");
                 assert!(std::process::Command::new("tar").args(["czf"]).arg(t.join(&pkg)).arg("-C").arg(t.join("pkgroot")).arg("failbrauwser-99.0").status().unwrap().success());
                 fake(&t.join("srcroot/failBrauwser-main"), "built-args");
+                // The source's install.sh builds four crates, as install.sh says it, and waits
+                // at the third until the scenario has seen the progress bar.
+                let build = format!(
+                    "#!/bin/sh\necho \"$@\" > {t}/built-args\nprintf '\\033[1m==>\\033[0m %s\\n' 'Building failBrauwser: 4 crates'\nfor c in alpha beta gamma; do echo \"   Compiling $c v1.0.0\"; done\nwhile [ ! -f {t}/go ]; do sleep 0.1; done\necho '   Compiling failbrauwser v99.0.0'\necho installed\n",
+                    t = t.display()
+                );
+                std::fs::write(t.join("srcroot/failBrauwser-main/install.sh"), build).unwrap();
                 assert!(std::process::Command::new("tar").args(["czf"]).arg(t.join("source.tar.gz")).arg("-C").arg(t.join("srcroot")).arg("failBrauwser-main").status().unwrap().success());
             }
             std::fs::write(

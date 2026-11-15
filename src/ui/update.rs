@@ -17,6 +17,8 @@ pub struct Updater {
     release: gtk::RadioButton,
     source: gtk::RadioButton,
     target: gtk::Label,
+    /// How far the update is (README, Updates): the crates compiled, or a pulse.
+    bar: gtk::ProgressBar,
     log: gtk::TextView,
     log_scroll: gtk::ScrolledWindow,
     start: gtk::Button,
@@ -95,6 +97,11 @@ pub fn show(w: &Window) {
     target.set_xalign(0.0);
     target.set_line_wrap(true);
     target.style_context().add_class("dim-label");
+    let bar = gtk::ProgressBar::new();
+    bar.set_show_text(true);
+    bar.set_pulse_step(0.05);
+    bar.set_no_show_all(true);
+    bar.set_widget_name("update-progress");
     let log = gtk::TextView::new();
     log.set_editable(false);
     log.set_monospace(true);
@@ -110,7 +117,7 @@ pub fn show(w: &Window) {
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     buttons.pack_end(&start, false, false, 0);
     buttons.pack_end(&close, false, false, 0);
-    for wdg in [current_label.upcast_ref::<gtk::Widget>(), status.upcast_ref(), release.upcast_ref(), source.upcast_ref(), target.upcast_ref(), log_scroll.upcast_ref(), buttons.upcast_ref()] {
+    for wdg in [current_label.upcast_ref::<gtk::Widget>(), status.upcast_ref(), release.upcast_ref(), source.upcast_ref(), target.upcast_ref(), bar.upcast_ref(), log_scroll.upcast_ref(), buttons.upcast_ref()] {
         root.pack_start(wdg, false, false, 0);
     }
     root.set_child_packing(&log_scroll, true, true, 0, gtk::PackType::Start);
@@ -123,6 +130,7 @@ pub fn show(w: &Window) {
         release,
         source,
         target,
+        bar,
         log,
         log_scroll,
         start,
@@ -264,6 +272,9 @@ impl Updater {
         *self.running.borrow_mut() = Some(child);
         self.status.set_text(if package.is_some() { "Downloading and installing the release…" } else { "Downloading and building the source… (this takes a few minutes)" });
         self.log_scroll.show_all();
+        self.bar.set_fraction(0.0);
+        self.bar.set_text(Some("Starting"));
+        self.bar.show();
         self.update_buttons();
         let me = self.me();
         let log_path = dir.join("update.log");
@@ -275,9 +286,21 @@ impl Updater {
                 let mut end = buf.end_iter();
                 me.log.scroll_to_iter(&mut end, 0.0, false, 0.0, 1.0);
             }
+            let progress = update::progress(&text);
+            match progress.fraction {
+                Some(f) => me.bar.set_fraction(f),
+                None => me.bar.pulse(),
+            }
+            me.bar.set_text(Some(&progress.step));
             let finished = me.running.borrow_mut().as_mut().and_then(|c| c.try_wait().ok().flatten());
             let Some(exit) = finished else { return glib::ControlFlow::Continue };
             me.running.borrow_mut().take();
+            if exit.success() && progress.done {
+                me.bar.set_fraction(1.0);
+                me.bar.set_text(Some("Done"));
+            } else {
+                me.bar.set_text(Some(&format!("Stopped: {}", progress.step)));
+            }
             me.status.set_text(if exit.success() && text.contains("UPDATE FINISHED") {
                 "Updated. The new version starts in a moment."
             } else {
@@ -286,6 +309,11 @@ impl Updater {
             me.update_buttons();
             glib::ControlFlow::Break
         });
+    }
+
+    /// The progress bar's text and fraction (tests).
+    pub fn progress(&self) -> (String, f64) {
+        (self.bar.text().map(|t| t.to_string()).unwrap_or_default(), self.bar.fraction())
     }
 
     pub fn status_text(&self) -> String {
