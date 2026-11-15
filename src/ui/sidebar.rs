@@ -1171,6 +1171,19 @@ impl Sidebar {
             }
         });
         self.connect_drops();
+        // Files dropped on a folder of the tree go into it, as onto a folder in the list.
+        if let Some(w) = self.window.upgrade() {
+            let all = gdk::DragAction::COPY | gdk::DragAction::MOVE | gdk::DragAction::LINK | gdk::DragAction::ASK;
+            self.tree.drag_dest_set(gtk::DestDefaults::empty(), &super::dnd::drop_targets(), all);
+            let me = Rc::downgrade(self);
+            super::dnd::connect_drops(self.tree.upcast_ref(), &w, move |_, x, y| {
+                let sb = me.upgrade()?;
+                let (bx, by) = sb.tree.convert_widget_to_bin_window_coords(x, y);
+                let path = sb.tree.path_at_pos(bx, by).and_then(|(p, ..)| p)?;
+                let dir = sb.tree_dir_at(&path)?;
+                Some((Location::Dir(dir), Some(path)))
+            });
+        }
 
         let me = Rc::downgrade(self);
         self.tree.connect_button_press_event(move |tree, ev| {

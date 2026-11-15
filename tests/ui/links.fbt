@@ -1,0 +1,116 @@
+# Links (README: Links): the overlays, the menu a right-button drag opens where it drops, and
+# Pick Link Source / Drop As. $T/d holds plain.txt, hard1.txt and hard2.txt (one file), sym (a
+# symbolic link to plain.txt), dead (a symbolic link to nothing) and sub/ with inner.txt and a
+# link to it.
+open $T/d
+expect-link-overlay plain.txt = none
+expect-link-overlay hard1.txt = hard
+expect-link-overlay hard2.txt = hard
+expect-link-overlay sym = symbolic
+expect-link-overlay dead = broken
+expect-link-overlay sub = none
+
+# The Link tab: the other names of a hard link, the target of a symbolic link.
+select hard1.txt
+action win.properties
+wait-properties-text Hard link (2 names)
+wait-properties-text $T/d/hard2.txt
+properties-button Close
+select sym
+action win.properties
+wait-properties-text Symbolic link
+properties-button Open Target
+expect-selection plain.txt
+
+# A right click that does not move still opens the right-click menu.
+right-click plain.txt
+expect-context-menu file
+close-context-menu
+
+# A file dragged with the right button onto a folder on the same filesystem.
+right-drop plain.txt -> $T/dest
+expect-drop-menu-item Move here
+expect-drop-menu-item Copy here
+expect-drop-menu-item Create Archive here
+expect-drop-menu-item Create Link here/Symbolic Link
+expect-drop-menu-item Create Link here/Hard Link
+expect-drop-menu-item Create Link here/Shell Link (.desktop)
+expect-no-drop-menu-item Create Link here/Junction
+expect-no-drop-menu-item Drop As
+expect-drop-menu-item Cancel
+drop-menu Create Link here/Hard Link
+wait-exists $T/dest/plain.txt
+right-drop plain.txt -> $T/dest
+drop-menu Create Link here/Symbolic Link
+wait-exists $T/dest/plain (symlink).txt
+right-drop plain.txt -> $T/dest
+drop-menu Create Link here/Shell Link (.desktop)
+wait-exists $T/dest/plain.txt.desktop
+# A link dragged itself can be copied as a link reaching the same target from there.
+right-drop sym -> $T/dest/sub2
+expect-drop-menu-item Create Link here/Symbolic Link Copy
+drop-menu Create Link here/Symbolic Link Copy
+wait-exists $T/dest/sub2/sym
+open $T/dest
+expect-link-overlay plain.txt = hard
+expect-link-overlay plain (symlink).txt = symbolic
+open $T/d
+expect-link-overlay plain.txt = hard
+
+# A folder: the tree operations, and no hard link of a folder.
+right-drop sub -> $T/dest
+expect-no-drop-menu-item Create Link here/Hard Link
+expect-drop-menu-item Drop As/Smart Copy
+expect-drop-menu-item Drop As/Smart Mirror
+expect-drop-menu-item Drop As/DeLorean Copy
+expect-drop-menu-item Drop As/Symbolic Link Clone
+drop-menu Drop As/Hardlink Clone
+wait-exists $T/dest/sub/inner.txt
+wait-no-jobs
+open $T/dest/sub
+expect-link-overlay inner.txt = hard
+expect-link-overlay to-inner = symbolic
+
+open $T/d
+# A drive (here a link to the top folder of the root drive) can be shown in a folder as a
+# Volume Mountpoint; a plain folder cannot.
+right-drop drive -> $T/dest
+expect-drop-menu-item Create Link here/Volume Mountpoint
+drop-menu Cancel
+right-drop sub -> $T/dest
+expect-no-drop-menu-item Create Link here/Volume Mountpoint
+drop-menu Cancel
+
+# Backup Mode: the Smart Copy runs as the administrator (root of a user namespace here instead of
+# pkexec) and copies the file nobody may read, keeping its permissions.
+expect-file-mode $T/d/vault/sealed.txt = 0
+setenv FAILBRAUWSER_ELEVATE=unshare -r
+action app.backup-mode
+right-drop vault -> $T/dest3
+drop-menu Drop As/Smart Copy
+wait-exists $T/dest3/vault/sealed.txt
+wait-no-jobs
+expect-file-mode $T/dest3/vault/sealed.txt = 0
+action app.backup-mode
+setenv FAILBRAUWSER_ELEVATE=
+
+# Two folders: no DeLorean Copy (one folder at a time).
+right-drop sub | plain.txt -> $T/dest
+expect-no-drop-menu-item Drop As/DeLorean Copy
+drop-menu Cancel
+
+# Without dragging: Pick Link Source here, Drop As there.
+select sub
+action win.pick-link-source
+open $T/dest2
+expect-menu-item Drop As
+expect-menu-item Smart Copy
+expect-menu-item Cancel Link Creation
+action win.drop-as tree-smart-copy
+wait-exists $T/dest2/sub/inner.txt
+wait-no-jobs
+open $T/dest2/sub
+expect-link-overlay inner.txt = none
+expect-link-overlay to-inner = symbolic
+expect-no-menu-item Drop As
+quit

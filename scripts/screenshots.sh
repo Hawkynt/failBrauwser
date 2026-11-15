@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Renders the README screenshots in a headless compositor with the current desktop theme.
 #   scripts/screenshots.sh            → docs/screenshots/*.png
+#   scripts/screenshots.sh NAME…      → only those (main, vcs-overlays, link-overlays, …)
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+ONLY=" $* "
 WORK="$ROOT/target/screenshots"
 DEMO="$WORK/home"
 OUT="$ROOT/docs/screenshots"
@@ -65,8 +67,47 @@ with zipfile.ZipFile(os.path.join(dl, "backup.zip"), "w", zipfile.ZIP_DEFLATED) 
     z.writestr("README.txt", "Backups of the home server\n")
 PY
 
+# Links: a hard link, symbolic links to a file and a folder, a link whose target is gone.
+L="$DEMO/Links"
+mkdir -p "$L"
+printf 'Quarterly report\n' > "$L/report.txt"
+ln "$L/report.txt" "$L/report (hardlink).txt"
+ln -s report.txt "$L/latest report"
+ln -s ../Music "$L/Music"
+ln -s draft-2023.txt "$L/old draft"
+printf 'nothing special\n' > "$L/notes.txt"
+
+# A CVS working copy its own client made, in every state: unchanged, changed, added, a conflict
+# with a commit from elsewhere, unknown, ignored (and a symbolic link: both overlays at once).
+if command -v cvs >/dev/null; then
+    CV="$WORK/cvsroot"
+    cvs -Q -d "$CV" init
+    I="$WORK/import"
+    mkdir -p "$I/docs"
+    printf 'int score = 0;\nint main(void) { return score; }\n' > "$I/main.c"
+    printf 'int twice(int x) { return 2 * x; }\n' > "$I/util.c"
+    printf 'A small game.\n' > "$I/README"
+    printf 'How to play.\n' > "$I/docs/manual.txt"
+    printf '*.o\n' > "$I/.cvsignore"
+    (cd "$I" && cvs -Q -d "$CV" import -m "first" game vendor start)
+    (cd "$DEMO/Projects" && cvs -Q -d "$CV" checkout game)
+    (cd "$WORK" && cvs -Q -d "$CV" checkout -d game2 game && cd game2 && sed -i 's/score = 0/score = 10/' main.c && cvs -Q commit -m second)
+    G="$DEMO/Projects/game"
+    sleep 1.1 # CVS compares times in whole seconds
+    sed -i 's/score = 0/score = 99/' "$G/main.c"
+    (cd "$G" && cvs -Q update >/dev/null 2>&1) || true
+    sleep 1.1
+    printf 'int half(int x) { return x / 2; }\n' >> "$G/util.c"
+    printf 'void beep(void) {}\n' > "$G/sound.c"
+    (cd "$G" && cvs -Q add sound.c 2>/dev/null)
+    printf 'try this\n' > "$G/ideas.txt"
+    printf 'object\n' > "$G/main.o"
+    ln -s main.c "$G/latest.c"
+fi
+
 shoot() { # name, script lines…
     local name=$1; shift
+    if [ "$ONLY" != "  " ] && [[ "$ONLY" != *" $name "* ]]; then return 0; fi
     local t="$WORK/run-$name"; mkdir -p "$t"
     printf '%s\n' "$@" > "$t/steps.fbt"
     FB_THEME_HOME="$HOME" HOME="$DEMO" "$ROOT/tests/ui/harness.sh" "$ROOT/target/release/failbrauwser" "$t/steps.fbt" "$t" | grep -q "SELFTEST OK" \
@@ -85,4 +126,9 @@ shoot conflict "open $DEMO/Documents" "select notes.txt" "action win.copy" "open
 shoot trash "open $DEMO/Documents" "select Letter to landlord.odt | notes.txt" "action win.trash" "wait-missing $DEMO/Documents/notes.txt" \
     "open trash:///" "wait-row notes.txt" "select notes.txt" "sleep 800" "screenshot $OUT/trash.png"
 shoot drive-properties "action win.drives" "wait-drive File System" "drive-properties File System" "sleep 1000" "screenshot $OUT/drive-properties.png"
+shoot vcs-overlays "action app.vcs-integration" "action win.view-mode icons" "action win.zoom-in" "open $DEMO/Projects/game" "wait-git-overlay main.c = Conflicted" \
+    "wait-git-overlay util.c = Modified" "wait-git-overlay sound.c = Added" "wait-git-overlay ideas.txt = Unversioned" "wait-git-overlay README = Normal" \
+    "select README" "sleep 800" "screenshot $OUT/vcs-overlays.png"
+shoot link-overlays "action win.view-mode icons" "action win.zoom-in" "open $DEMO/Links" "expect-link-overlay report.txt = hard" \
+    "expect-link-overlay latest report = symbolic" "expect-link-overlay old draft = broken" "select notes.txt" "sleep 800" "screenshot $OUT/link-overlays.png"
 echo "screenshots written to $OUT"

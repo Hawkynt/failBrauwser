@@ -190,9 +190,139 @@ pub fn show(w: &Window) {
         d.connect_destroy(move |_| cancel.store(true, Ordering::Relaxed));
     }
     area.add(&header);
-    area.add(&grid);
+    // A link: its own tab beside the general one (README: Links, *Link properties*).
+    let link_page = match items.as_slice() {
+        [Item::Fs(e) | Item::Found(e, _)] if local(&e.path) => link_page(w, &d, e),
+        _ => None,
+    };
+    match link_page {
+        Some(page) => {
+            let book = gtk::Notebook::new();
+            book.set_margin_top(12);
+            grid.set_margin_top(12);
+            grid.set_margin_start(12);
+            grid.set_margin_end(12);
+            grid.set_margin_bottom(12);
+            book.append_page(&grid, Some(&gtk::Label::new(Some("General"))));
+            book.append_page(&page, Some(&gtk::Label::new(Some("Link"))));
+            area.add(&book);
+        }
+        None => area.add(&grid),
+    }
     d.connect_response(|d, _| d.close());
     d.show_all();
+}
+
+/// The *Link* tab of a symbolic link, junction or file with several hard links: what it points
+/// at (changeable, with *Open Target*) or its other names, searched for in the background.
+fn link_page(w: &Window, d: &gtk::Dialog, e: &failbrauwser::fs::FileEntry) -> Option<gtk::Widget> {
+    use failbrauwser::links;
+    let is_link = e.kind == failbrauwser::fs::Kind::Symlink;
+    let mounted = (e.kind == failbrauwser::fs::Kind::Dir).then(|| links::volume::shown_at(&e.path)).flatten();
+    let overlay = links::overlay(is_link, e.junction, e.broken, e.kind == failbrauwser::fs::Kind::File, e.nlink);
+    if overlay.is_none() && mounted.is_none() {
+        return None;
+    }
+    let grid = gtk::Grid::new();
+    grid.set_column_spacing(12);
+    grid.set_row_spacing(6);
+    for side in [gtk::PositionType::Top, gtk::PositionType::Bottom, gtk::PositionType::Left, gtk::PositionType::Right] {
+        match side {
+            gtk::PositionType::Top => grid.set_margin_top(12),
+            gtk::PositionType::Bottom => grid.set_margin_bottom(12),
+            gtk::PositionType::Left => grid.set_margin_start(12),
+            _ => grid.set_margin_end(12),
+        }
+    }
+    if let Some(m) = mounted {
+        // A Volume Mountpoint: the drive shown here, where else it is, and whether it stays.
+        row(&grid, 0, "Kind:", "Volume Mountpoint");
+        row(&grid, 1, "Volume:", &m.volume);
+        row(&grid, 2, "Kept:", if m.kept { "after restarts too" } else { "until the computer restarts" });
+        let places: Vec<String> = m.others.iter().map(|p| p.display().to_string()).collect();
+        if !places.is_empty() {
+            row(&grid, 3, "Also shown at:", &places.join("\n"));
+        }
+        return Some(grid.upcast());
+    }
+    let Some(overlay) = overlay else { return None };
+    let kind = match overlay {
+        links::Overlay::Hard => format!("Hard link ({} names)", e.nlink),
+        links::Overlay::Junction => "Junction".into(),
+        links::Overlay::Symbolic => "Symbolic link".into(),
+        links::Overlay::Broken if e.junction => "Junction (its target is gone)".into(),
+        links::Overlay::Broken => "Symbolic link (its target is gone)".into(),
+    };
+    row(&grid, 0, "Kind:", &kind);
+    if is_link {
+        let l = gtk::Label::new(Some("Points at:"));
+        l.set_xalign(1.0);
+        l.style_context().add_class("dim-label");
+        let entry = gtk::Entry::new();
+        entry.set_widget_name("link-target");
+        entry.set_text(&links::make::target_of(&e.path).map(|t| t.display().to_string()).unwrap_or_default());
+        entry.set_width_chars(40);
+        grid.attach(&l, 0, 1, 1, 1);
+        grid.attach(&entry, 1, 1, 1, 1);
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let open = gtk::Button::with_mnemonic("_Open Target");
+        let change = gtk::Button::with_mnemonic("C_hange Target");
+        buttons.pack_start(&open, false, false, 0);
+        buttons.pack_start(&change, false, false, 0);
+        grid.attach(&buttons, 1, 2, 1, 1);
+        let path = e.path.clone();
+        let weak = std::rc::Rc::downgrade(&w.me());
+        let (d2, p2) = (d.clone(), path.clone());
+        open.connect_clicked(move |_| {
+            let Some(w) = weak.upgrade() else { return };
+            let Ok(raw) = links::make::target_of(&p2) else { return };
+            let target = links::resolve(&p2, &raw);
+            let pane = w.current_pane();
+            if target.is_dir() {
+                pane.navigate(Location::Dir(target));
+            } else if let (Some(dir), Some(name)) = (target.parent(), target.file_name()) {
+                let names = vec![name.to_os_string()];
+                if pane.location() == Location::Dir(dir.to_path_buf()) {
+                    let keys = pane.keys_for_names(&names);
+                    pane.select_names(&keys);
+                } else {
+                    pane.navigate(Location::Dir(dir.to_path_buf()));
+                    pane.select_when_present(names);
+                }
+            }
+            d2.close();
+        });
+        let d3 = d.clone();
+        change.connect_clicked(move |_| {
+            let text = entry.text().to_string();
+            let typed = std::path::Path::new(&text);
+            let target = links::resolve(&path, typed);
+            match links::make::retarget(&path, &target, !typed.is_absolute()) {
+                Ok(()) => entry.set_text(&links::make::target_of(&path).map(|t| t.display().to_string()).unwrap_or_default()),
+                Err(err) => util::show_error(d3.upcast_ref::<gtk::Window>(), "Cannot change the target", &err.to_string()),
+            }
+        });
+    } else {
+        let others = row(&grid, 1, "Other names:", "Searching…");
+        let (tx, rx) = async_channel::bounded::<String>(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let (path, s2) = (e.path.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let text = match links::siblings::siblings(&path, &s2) {
+                Ok(v) if v.is_empty() => "none found".to_string(),
+                Ok(v) => v.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n"),
+                Err(e) => e.to_string(),
+            };
+            let _ = tx.send_blocking(text);
+        });
+        glib::spawn_future_local(async move {
+            if let Ok(t) = rx.recv().await {
+                others.set_text(&t);
+            }
+        });
+        d.connect_destroy(move |_| stop.store(true, Ordering::Relaxed));
+    }
+    Some(grid.upcast())
 }
 
 /// The applications that open `content_type`, the default one chosen. Choosing another one

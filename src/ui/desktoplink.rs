@@ -65,6 +65,14 @@ pub fn for_trash(name: &str) -> Link {
 }
 
 /// The first of `names` the icon theme has (the last one otherwise).
+/// The themed icon name a link to `path` shows (a `.desktop` link made by a right-drag).
+pub fn icon_name_for_path(path: &Path) -> String {
+    match failbrauwser::fs::FileEntry::stat(path) {
+        Ok(e) => icon_of(&util::icon_for_entry(&e)),
+        Err(_) => "text-x-generic".into(),
+    }
+}
+
 fn known_icon(names: &[&str]) -> String {
     let theme = gtk::IconTheme::default();
     let found = names.iter().find(|n| theme.as_ref().is_some_and(|t| t.has_icon(n)));

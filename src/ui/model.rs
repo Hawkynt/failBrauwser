@@ -34,6 +34,8 @@ pub const COL_THUMB: u32 = 16;
 pub const COL_FOLDER: u32 = 17;
 /// Git overlay of the row (see `git::icons::status_code`; 0: none).
 pub const COL_GIT: u32 = 18;
+/// Link overlay of the row (`links::Overlay::code`; 0: none).
+pub const COL_LINK: u32 = 19;
 
 pub fn new_store() -> gtk::ListStore {
     gtk::ListStore::new(&[
@@ -55,6 +57,7 @@ pub fn new_store() -> gtk::ListStore {
         glib::Type::BOOL,
         gtk::gdk_pixbuf::Pixbuf::static_type(),
         glib::Type::STRING,
+        glib::Type::U32,
         glib::Type::U32,
     ])
 }
@@ -145,6 +148,14 @@ impl Item {
             Item::Remote(n) => gio::content_type_guess(Some(std::path::Path::new(&n.name)), None).0.to_string(),
         }
     }
+    /// The link overlay the row shows (README: Links), as its code; 0 for none.
+    pub fn link_overlay(&self) -> u32 {
+        match self {
+            Item::Fs(e) | Item::Found(e, _) => failbrauwser::links::overlay(e.kind == Kind::Symlink, e.junction, e.broken, e.kind == Kind::File, e.nlink).map_or(0, |o| o.code()),
+            Item::Remote(n) if n.is_link => failbrauwser::links::Overlay::Symbolic.code(),
+            _ => 0,
+        }
+    }
     /// Identity for change detection: two readings with equal keys show the same row.
     pub fn same_as(&self, other: &Item) -> bool {
         match (self, other) {
@@ -222,6 +233,7 @@ pub fn fill_row(store: &gtk::ListStore, iter: &gtk::TreeIter, key: u64, item: &I
                 Item::Found(_, f) | Item::FoundInArchive(_, _, f) => f.clone(),
                 _ => String::new(),
             }),
+            (COL_LINK, &item.link_overlay()),
         ],
     );
 }
