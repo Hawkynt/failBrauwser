@@ -339,7 +339,7 @@ can hold:
 | *Hard Link* | files only, on the same filesystem as the source, one that keeps hard links (not FAT, exFAT) | `link` | `CreateHardLinkW` |
 | *Junction* | folders, local NTFS or ReFS | — | a mount-point reparse point |
 | *Shell Link* | always | a `.desktop` link (as *Create Link on Desktop* writes) | a `.lnk` file |
-| *Volume Mountpoint* | the source is the top folder of a local drive (not a network share) | a bind mount of the drive into a new folder | `SetVolumeMountPointW` on a new folder (NTFS) |
+| *Volume Mountpoint* | the source is the top folder of a local drive (not a network share) | a bind mount of the drive into a new folder, kept in `/etc/fstab` | `SetVolumeMountPointW` on a new folder (NTFS) |
 
 Symbolic links are relative when source and link are on the same filesystem, absolute otherwise
 (*Edit → Links → Relative Symbolic Links* turns relative ones off). A link made in the folder of
@@ -350,8 +350,14 @@ a drive (as the side panel opens it) with the right button, or pick it, and drop
 Mountpoint*. A new folder named like the drive is made and the drive is mounted there; making and
 removing one asks for the administrator password (polkit), as LSE asks for elevation. *Unmount
 Volume* in the right-click menu of such a folder takes the drive out of it again and leaves the
-empty folder. On Linux it lasts until it is unmounted or the computer restarts (Windows keeps
-it). The *Link* tab of its Properties names the drive mounted there.
+empty folder. It stays across restarts, as on Windows: on Linux failBrauwser adds a line to
+`/etc/fstab` that names the drive by its UUID and mounts it on the folder when the folder is
+first opened (`nofail`, so a missing drive never holds up the start, and
+`x-systemd.automount` with a short `x-systemd.device-timeout`, so opening the folder without
+the drive gives up after three seconds); the option `x-failbrauwser` marks the lines it wrote,
+and *Unmount Volume* removes its line again. A drive that had no line of its own before (a USB
+stick UDisks mounted below `/run/media`) is then mounted where that line says, also by UDisks.
+The *Link* tab of its Properties names the drive mounted there and whether it is kept.
 
 *Overlay icons* (*Edit → Links → Link Overlays*, on by default), at the bottom right of the icon
 so they never cover a version-control overlay:
@@ -949,8 +955,8 @@ such a script (see `src/ui/selftest.rs` for the commands).
   output only. Overlays of folders below the one shown follow changes
   made there by other programs when the folder or repository changes or the window is used
   again.
-- Links: a Volume Mountpoint made on Linux is gone after a restart (no `/etc/fstab` entry is
-  written). Backup Mode cannot copy fscrypt-encrypted files whose key is not loaded (Linux has no
+- Links: a Volume Mountpoint is restored after a restart only on systems that mount `/etc/fstab`
+  through systemd (`x-systemd.automount`). Backup Mode cannot copy fscrypt-encrypted files whose key is not loaded (Linux has no
   raw export of encrypted files as Windows' `ReadEncryptedFileRaw`), nor set creation times.
   Junctions, Volume Mountpoints, Backup Mode, `.lnk` links and the hard link names Windows lists
   are built from Microsoft's documentation and not yet measured on Windows. Finding the other names of a hard link on Linux searches its whole

@@ -136,13 +136,18 @@ fn a_drive_is_mounted_into_an_empty_folder_and_taken_out_again() {
         b="$1"; drive="$2"; folder="$3"; full="$4"; sub="$5"; empty="$6"
         "$b" --links mount "$drive" "$folder"; echo "mounted"
         ls -A "$folder" | head -c 4000 > "$folder.listing"
+        cp "$FAILBRAUWSER_FSTAB" "$FAILBRAUWSER_FSTAB.mounted"
         "$b" --links mount "$drive" "$full"; echo "onto-full"
         "$b" --links mount "$sub" "$empty"; echo "not-a-drive"
         "$b" --links unmount "$sub"; echo "unmount-plain"
         "$b" --links unmount "$folder"; echo "unmounted"
         ls -A "$folder" | wc -l
     "#;
-    let out = Command::new("unshare").args(["-rm", "sh", "-c", script, "sh", BIN]).arg(&drive).arg(&folder).arg(&full).arg(&sub).arg(&empty).output().unwrap();
+    let fstab = t.path().join("fstab");
+    std::fs::write(&fstab, "# the system's own lines stay\nUUID=aa / ext4 rw 0 1\n").unwrap();
+    let out = Command::new("unshare")
+        .env("FAILBRAUWSER_FSTAB", &fstab)
+        .args(["-rm", "sh", "-c", script, "sh", BIN]).arg(&drive).arg(&folder).arg(&full).arg(&sub).arg(&empty).output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     let segments: Vec<&str> = text.split('\n').collect();
     let report_before = |marker: &str| -> helper::Reply {
@@ -159,6 +164,25 @@ fn a_drive_is_mounted_into_an_empty_folder_and_taken_out_again() {
     assert!(report_before("unmount-plain").errors[0].1.contains("not a Volume Mountpoint"), "{text}");
     assert!(report_before("unmounted").errors.is_empty(), "{text}");
     assert_eq!(segments.iter().rev().find(|l| !l.is_empty()).map(|l| l.trim()), Some("0"), "the folder is empty again: {text}");
+
+    // Kept: the line names the drive by its UUID and the folder; removed again with the drive.
+    let mounted = std::fs::read_to_string(t.path().join("fstab.mounted")).unwrap();
+    let folder_real = std::fs::canonicalize(&folder).unwrap();
+    let ours = failbrauwser::links::volume::fstab::ours(&mounted);
+    assert_eq!(ours.len(), 1, "{mounted}");
+    assert_eq!(ours[0].1, folder_real);
+    assert!(ours[0].0.starts_with("UUID=") || ours[0].0.starts_with("/dev/"), "{mounted}");
+    assert!(mounted.starts_with("# the system's own lines stay\nUUID=aa / ext4 rw 0 1\n"), "{mounted}");
+    assert_eq!(std::fs::read_to_string(&fstab).unwrap(), "# the system's own lines stay\nUUID=aa / ext4 rw 0 1\n");
+
+    // After a restart without the drive: the folder is kept but nothing is mounted on it, and
+    // Unmount Volume still takes it out of fstab.
+    std::fs::write(&fstab, &mounted).unwrap();
+    let out = Command::new("unshare").env("FAILBRAUWSER_FSTAB", &fstab).args(["-rm", BIN, "--links", "unmount"]).arg(&folder).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("\"errors\":[]"), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(failbrauwser::links::volume::fstab::ours(&std::fs::read_to_string(&fstab).unwrap()).is_empty());
+    assert!(folder.is_dir(), "the folder stays");
 }
 
 #[test]

@@ -234,13 +234,14 @@ fn link_page(w: &Window, d: &gtk::Dialog, e: &failbrauwser::fs::FileEntry) -> Op
             _ => grid.set_margin_end(12),
         }
     }
-    if let Some((volume, places)) = mounted {
-        // A Volume Mountpoint: the drive shown here, and where else it is.
+    if let Some(m) = mounted {
+        // A Volume Mountpoint: the drive shown here, where else it is, and whether it stays.
         row(&grid, 0, "Kind:", "Volume Mountpoint");
-        row(&grid, 1, "Volume:", &volume);
-        let places: Vec<String> = places.iter().map(|p| p.display().to_string()).collect();
+        row(&grid, 1, "Volume:", &m.volume);
+        row(&grid, 2, "Kept:", if m.kept { "after restarts too" } else { "until the computer restarts" });
+        let places: Vec<String> = m.others.iter().map(|p| p.display().to_string()).collect();
         if !places.is_empty() {
-            row(&grid, 2, "Also shown at:", &places.join("\n"));
+            row(&grid, 3, "Also shown at:", &places.join("\n"));
         }
         return Some(grid.upcast());
     }
