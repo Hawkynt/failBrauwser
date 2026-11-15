@@ -21,7 +21,7 @@
 //! `expect-default-app <content type> = <desktop id>`, `fake-phone <name> = <folder>`,
 //! `wait-drive-text <title> : <text>`, `wait-no-drive-text <title> : <text>`,
 //! `drive-button <title> : <row text> : <button>`, `expect-tabs <a | b>`, `expect-title <text>`,
-//! `fake-share <folder>`, `fake-image <file> = <folder>`, `sleep-begin`, `sleep-end`, `expect-menu-item <label>`, `wait-compare-rows <rows>`, `wait-duplicates <n>`, `setenv NAME=value`, `wait-update-checked`, `expect-update-status <text>`, `update-choose <release|source>`, `update-start`, `wait-update-done`, `run <command>`, `wait-file-text <path> = <text>`, `wait-chooser`, `chooser-open <folder>`, `chooser-select <a | b>`, `expect-chooser-rows <a | b>`, `chooser-name <text>`, `chooser-filter <n>`, `chooser-accept`, `chooser-cancel`, `chooser-activate`, `expect-duplicate-group <*kept | …>`, `duplicate-keep <name>`, `duplicate-click <delete|skip|previous>`, `compare-show-identical <on|off>`, `compare-copy <left|right>`, `close-compare`, `expect-no-menu-item <label>`, `fake-job <seconds> <MB>`, `wait-progress-chart <points>`, `expect-progress-text <text>`, `progress-snapshot <png>`,
+//! `fake-share <folder>`, `fake-image <file> = <folder>`, `sleep-begin`, `sleep-end`, `expect-menu-item <label>`, `wait-compare-rows <rows>`, `wait-duplicates <n>`, `setenv NAME=value`, `wait-update-checked`, `expect-update-status <text>`, `wait-update-progress <text> @ <percent>`, `update-choose <release|source>`, `update-start`, `wait-update-done`, `run <command>`, `wait-file-text <path> = <text>`, `wait-chooser`, `chooser-open <folder>`, `chooser-select <a | b>`, `expect-chooser-rows <a | b>`, `chooser-name <text>`, `chooser-filter <n>`, `chooser-accept`, `chooser-cancel`, `chooser-activate`, `expect-duplicate-group <*kept | …>`, `duplicate-keep <name>`, `duplicate-click <delete|skip|previous>`, `compare-show-identical <on|off>`, `compare-copy <left|right>`, `close-compare`, `expect-no-menu-item <label>`, `fake-job <seconds> <MB>`, `wait-progress-chart <points>`, `expect-progress-text <text>`, `progress-snapshot <png>`,
 //! `expect-network-subtitle <row> = <text>`, `wait-side-drive <name> : <place>`, `wait-no-side-drive <name>`, `expect-no-side-drive-at <path>`,
 //! `side-drive-click <name> : <place>`, `side-drive-menu <name> : <place> : <item>`,
 //! the Git steps of `git/testing.rs`,
@@ -710,6 +710,15 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         "update-choose" => super::update::current().ok_or("no update window")?.choose(arg == "release"),
         "update-start" => super::update::current().ok_or("no update window")?.run(),
         "wait-update-done" => wait(r, |_| Ok(super::update::current().is_some_and(|u| !u.is_running()))),
+        "wait-update-progress" => {
+            // wait-update-progress <text> @ <percent>: the update's progress bar says so.
+            let (text, pct) = arg.rsplit_once(" @ ").ok_or("usage: wait-update-progress <text> @ <percent>")?;
+            let (text, pct) = (text.to_string(), pct.trim().parse::<f64>().map_err(|e| e.to_string())?);
+            wait(r, move |_| Ok(super::update::current().is_some_and(|u| {
+                let (t, f) = u.progress();
+                t == text && (f * 100.0 - pct).abs() < 0.5
+            })));
+        }
         "wait-duplicates" => {
             // wait-duplicates <groups>: the search in the duplicates window is done.
             let n: usize = arg.parse().map_err(|_| "bad number")?;

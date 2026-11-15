@@ -143,9 +143,112 @@ pub fn script(package: Option<&str>, prefix: &Path, options: &[String], cache: &
     )
 }
 
+/// How far an update is, read from what its script wrote so far (README, Updates).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Progress {
+    /// The step, in words: "Compiling 12 of 90 crates (glib)", "Downloading the source", …
+    pub step: String,
+    /// How much of the step is done, where that is known (compiling); otherwise the bar pulses.
+    pub fraction: Option<f64>,
+    /// The script said `UPDATE FINISHED`.
+    pub done: bool,
+}
+
+/// The progress an update's log `log` shows: the last step the script or `install.sh` named
+/// (`==> …` lines), and while the source compiles the crates done of the crates
+/// `install.sh` announced (`Building failBrauwser: <n> crates`), one `Compiling` line each.
+pub fn progress(log: &str) -> Progress {
+    let mut p = Progress { step: "Starting".into(), fraction: None, done: false };
+    let (mut total, mut compiled, mut fetched) = (None::<usize>, 0usize, 0usize);
+    // curl's meter rewrites its line with carriage returns.
+    for raw in log.split(['\n', '\r']) {
+        let line = strip_ansi(raw);
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line == "UPDATE FINISHED" {
+            p = Progress { step: "Done".into(), fraction: Some(1.0), done: true };
+            total = None;
+        } else if let Some(said) = line.strip_prefix("==> ") {
+            total = said.strip_prefix("Building failBrauwser: ").and_then(|r| r.strip_suffix(" crates")).and_then(|n| n.parse().ok());
+            compiled = 0;
+            fetched = 0;
+            p.step = said.to_string();
+            p.fraction = total.map(|_| 0.0);
+        } else if let Some(rest) = line.strip_prefix("Compiling ") {
+            let name = rest.split_whitespace().next().unwrap_or_default();
+            match total {
+                Some(n) => {
+                    compiled += 1;
+                    // The last crate has not finished when it starts.
+                    p.fraction = Some((compiled.saturating_sub(1) as f64 / n.max(1) as f64).min(0.99));
+                    p.step = format!("Compiling {} of {n} crates ({name})", compiled.min(n));
+                }
+                None => p.step = format!("Compiling {name}"),
+            }
+        } else if line.starts_with("Downloaded ") && total.is_some() {
+            fetched += 1;
+            p.step = format!("Downloading crates ({fetched})");
+        } else if line.starts_with("Downloading ") && !line.starts_with("Downloading crates") || line == "Installing" {
+            p.step = line.trim_end_matches('…').to_string();
+            p.fraction = None;
+        }
+    }
+    p
+}
+
+/// `s` without terminal colour codes (`install.sh` prints its `==>` in bold).
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for d in chars.by_ref() {
+                if d.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_source_update_counts_its_crates() {
+        let mut log = String::from("Downloading the source\n  % Total    % Received\r 40  1000\r100  2500\nInstalling\n\u{1b}[1m==>\u{1b}[0m Building failBrauwser: 4 crates\n");
+        assert_eq!(progress(&log), Progress { step: "Building failBrauwser: 4 crates".into(), fraction: Some(0.0), done: false });
+        log.push_str("    Updating crates.io index\n  Downloaded libc v0.2.1\n  Downloaded glib v0.19.0\n");
+        assert_eq!(progress(&log).step, "Downloading crates (2)");
+        assert_eq!(progress(&log).fraction, Some(0.0));
+        log.push_str("   Compiling libc v0.2.1\n   Compiling glib v0.19.0\n   Compiling gtk v0.19.0\n");
+        let p = progress(&log);
+        assert_eq!(p.step, "Compiling 3 of 4 crates (gtk)");
+        assert_eq!(p.fraction, Some(0.5), "two finished of four");
+        log.push_str("   Compiling failbrauwser v0.9.0 (/tmp/x)\n   Compiling extra v1.0.0\n");
+        assert_eq!(progress(&log).fraction, Some(0.99), "never full before the build ends");
+        log.push_str("    Finished `release` profile\n\u{1b}[1m==>\u{1b}[0m Waiting for the archive helper\n");
+        assert_eq!(progress(&log), Progress { step: "Waiting for the archive helper".into(), fraction: None, done: false });
+        log.push_str("\u{1b}[1m==>\u{1b}[0m Installing into /home/me/.local\nUPDATE FINISHED\nRemoved the downloaded files.\n");
+        assert!(progress(&log).done);
+        assert_eq!(progress(&log).fraction, Some(1.0));
+    }
+
+    #[test]
+    fn steps_without_a_known_length_pulse() {
+        assert_eq!(progress(""), Progress { step: "Starting".into(), fraction: None, done: false });
+        let p = progress("Downloading https://example.org/pkg.tar.gz\n");
+        assert_eq!((p.step.as_str(), p.fraction), ("Downloading https://example.org/pkg.tar.gz", None));
+        // An install.sh too old to count, or cargo unable to: compiling pulses, named.
+        let p = progress("==> Building failBrauwser\n   Compiling glib v0.19.0\n");
+        assert_eq!((p.step.as_str(), p.fraction), ("Compiling glib", None));
+    }
 
     #[test]
     fn releases_and_versions() {

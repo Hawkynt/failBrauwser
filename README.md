@@ -132,7 +132,11 @@ installed with `install.sh --prebuilt`; on Windows `failbrauwser-<version>-x86_6
 whose files replace the install folder while the program runs) — or builds the current
 **source** (needs what a build needs, below; Linux only, since it runs `install.sh`). Both install into the same place with the options of the last install (kept in
 `~/.config/failbrauwser/install-options`); the download, source included, is deleted when it is
-done, and failBrauwser restarts as the new version. The window shows the installer's output. A
+done, and failBrauwser restarts as the new version. The window shows the installer's output
+and a progress bar above it: while the source compiles it counts the crates done against the
+crates the build needs (`install.sh` counts them with `cargo tree` and says
+`Building failBrauwser: <n> crates`), "Compiling 123 of 310 crates"; steps of no known length
+(downloading, setting up Rust, the archive helper, installing) pulse under their name. A
 copy installed for everyone (`--system`) is updated from a terminal. `scripts/package.sh` and
 `winpack\package.ps1` make the release packages.
 

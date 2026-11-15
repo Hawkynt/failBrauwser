@@ -330,7 +330,10 @@ else
         echo "warning: $CWB_ROOT has no CompressionWorkbench — installing without archive support" >&2
     fi
 
-    say "Building failBrauwser"
+    # The crates the build compiles, one "Compiling" line each: the update window's progress
+    # bar counts them (README, Updates). Unknown when cargo cannot answer.
+    UNITS=$(cd "$HERE" && cargo tree -e normal,build --prefix none --locked 2>/dev/null | sed 's/ (\*)$//; s/ (proc-macro)//' | sort -u | wc -l)
+    if [ "${UNITS:-0}" -gt 0 ]; then say "Building failBrauwser: $UNITS crates"; else say "Building failBrauwser"; fi
     (cd "$HERE" && cargo build --release --locked)
 
     MODULE=""

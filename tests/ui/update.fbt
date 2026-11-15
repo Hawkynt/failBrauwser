@@ -15,7 +15,10 @@ expect-update-status Updated.
 !unix wait-file-text $T/installed-args = --prebuilt --prefix $T/prefix --default --reopen
 !unix update-choose source
 !unix update-start
+!unix wait-update-progress Compiling 3 of 4 crates (gamma) @ 50
+!unix run touch $T/go
 !unix wait-update-done
+!unix wait-update-progress Done @ 100
 !unix expect-update-status Updated.
 !unix wait-file-text $T/built-args = --prefix $T/prefix --default --reopen
 !win wait-file-text $T/prefix/bin/failbrauwser.exe = NEW-EXE
