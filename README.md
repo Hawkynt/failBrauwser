@@ -368,6 +368,8 @@ so they never cover a version-control overlay:
 | a chain of three links | a junction |
 | a light green arrow | a symbolic link; greyed with a red stroke when its target is gone |
 
+![Links: Music and latest report are symbolic links, report.txt and report (hardlink).txt are one file with two names, old draft points at a file that is gone](docs/screenshots/link-overlays.png)
+
 *Pick and drop without dragging.* *Pick Link Source* in the right-click menu of files and folders
 remembers them; the right-click menu of a folder or of empty space then offers *Drop As* ▸ with
 the same items as the drag menu (and *Replace Symbolic Link* / *Replace Junction* on a link:
@@ -655,7 +657,11 @@ question mark for files the tool does not know and a grey bar for ignored ones. 
 is most important inside it, and a folder that is a working copy of its own shows from outside
 whether it has uncommitted changes. The icons follow edits, commits and checkouts as they happen
 (the folder and the tool's own data folder are watched) and are read again when the window comes
-back into use; *Settings → Icon Overlays* turns them off. Where the states come from:
+back into use; *Settings → Icon Overlays* turns them off.
+
+![A CVS working copy: README and docs unchanged, util.c changed, sound.c added, main.c in conflict, ideas.txt unknown, main.o ignored, and latest.c, a symbolic link nobody added, with both overlays](docs/screenshots/vcs-overlays.png)
+
+Where the states come from:
 
 | | Git | Mercurial | Subversion | CVS | Visual Source Safe |
 |---|---|---|---|---|---|
