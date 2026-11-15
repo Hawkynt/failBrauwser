@@ -102,19 +102,21 @@ fn the_helper_refuses_to_run_as_the_user() {
     assert!(e.to_string().contains("administrator"), "{e}");
 }
 
-/// The top folder of the drive holding the sources, when it is one a user namespace may bind
-/// (not `/`, whose mounts below it are locked there).
+/// The top folder of the drive holding the sources, when it is one a user namespace may bind:
+/// not `/`, and no drive with mounts below it (`/home` with `~/Downloads` mounted on it), since
+/// mounts below are locked in a user namespace and a bind of the drive alone answers EINVAL there.
 fn drive_of_sources() -> Option<PathBuf> {
     let here = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR")).ok()?;
     let mounts = failbrauwser::links::volume::mounts();
     let m = mounts.iter().filter(|m| here.starts_with(&m.at)).max_by_key(|m| m.at.as_os_str().len())?;
-    (m.is_volume() && m.at != Path::new("/") && failbrauwser::links::volume::mount_at(&mounts, &m.at) == Some(m)).then(|| m.at.clone())
+    let below = mounts.iter().any(|o| o.at != m.at && o.at.starts_with(&m.at));
+    (m.is_volume() && m.at != Path::new("/") && !below && failbrauwser::links::volume::mount_at(&mounts, &m.at) == Some(m)).then(|| m.at.clone())
 }
 
 #[test]
 fn a_drive_is_mounted_into_an_empty_folder_and_taken_out_again() {
     let Some(drive) = drive_of_sources() else {
-        eprintln!("skipped: the sources are not below a drive of their own");
+        eprintln!("skipped: the sources are not below a drive of their own that a user namespace may bind");
         return;
     };
     if !namespaces() {
@@ -193,6 +195,15 @@ fn backup_mode_keeps_other_users_as_owners_of_files_and_links() {
         return;
     }
     let t = scratch();
+    // The files handed to other users can only be removed by the namespace that maps them; the
+    // guard runs before `t` is dropped, also when an assertion fails.
+    struct Remove(PathBuf);
+    impl Drop for Remove {
+        fn drop(&mut self) {
+            let _ = Command::new("unshare").args(["-r", "--map-auto", "rm", "-rf"]).arg(&self.0).status();
+        }
+    }
+    let _remove = Remove(t.path().to_path_buf());
     let src = t.path().join("src");
     std::fs::create_dir_all(src.join("theirs")).unwrap();
     std::fs::write(src.join("theirs/f"), "x").unwrap();
