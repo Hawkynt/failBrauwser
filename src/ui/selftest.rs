@@ -21,7 +21,7 @@
 //! `expect-default-app <content type> = <desktop id>`, `fake-phone <name> = <folder>`,
 //! `wait-drive-text <title> : <text>`, `wait-no-drive-text <title> : <text>`,
 //! `drive-button <title> : <row text> : <button>`, `expect-tabs <a | b>`, `expect-title <text>`,
-//! `fake-share <folder>`, `fake-image <file> = <folder>`, `sleep-begin`, `sleep-end`, `expect-menu-item <label>`, `wait-compare-rows <rows>`, `wait-duplicates <n>`, `setenv NAME=value`, `wait-update-checked`, `expect-update-status <text>`, `wait-update-progress <text> @ <percent>`, `update-choose <release|source>`, `update-start`, `wait-update-done`, `run <command>`, `wait-file-text <path> = <text>`, `wait-chooser`, `chooser-open <folder>`, `chooser-select <a | b>`, `expect-chooser-rows <a | b>`, `chooser-name <text>`, `chooser-filter <n>`, `chooser-accept`, `chooser-cancel`, `chooser-activate`, `expect-duplicate-group <*kept | …>`, `duplicate-keep <name>`, `duplicate-click <delete|skip|previous>`, `compare-show-identical <on|off>`, `compare-copy <left|right>`, `close-compare`, `expect-no-menu-item <label>`, `fake-job <seconds> <MB>`, `wait-progress-chart <points>`, `expect-progress-text <text>`, `progress-snapshot <png>`,
+//! `fake-share <folder>`, `fake-image <file> = <folder>`, `sleep-begin`, `sleep-end`, `expect-menu-item <label>`, `wait-compare-rows <rows>`, `wait-duplicates <n>`, `setenv NAME=value`, `wait-update-checked`, `expect-update-status <text>`, `wait-update-progress <text> @ <percent>`, `update-choose <release|source>`, `update-start`, `wait-update-done`, `run <command>`, `wait-file-text <path> = <text>`, `wait-chooser`, `chooser-open <folder>`, `chooser-select <a | b>`, `expect-chooser-rows <a | b>`, `chooser-name <text>`, `chooser-filter <n>`, `chooser-accept`, `chooser-cancel`, `chooser-activate`, `expect-duplicate-group <*kept | …>`, `duplicate-keep <name>`, `duplicate-click <delete|skip|previous>`, `compare-show-identical <on|off>`, `compare-copy <left|right>`, `close-compare`, `expect-no-menu-item <label>`, `expect-file-mode <path> = <octal>`, `fake-job <seconds> <MB>`, `wait-progress-chart <points>`, `expect-progress-text <text>`, `progress-snapshot <png>`,
 //! `expect-network-subtitle <row> = <text>`, `wait-side-drive <name> : <place>`, `wait-no-side-drive <name>`, `expect-no-side-drive-at <path>`,
 //! `side-drive-click <name> : <place>`, `side-drive-menu <name> : <place> : <item>`,
 //! the Git steps of `git/testing.rs`,
@@ -923,6 +923,15 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         }
         "text" => TEXT.with(|t| t.borrow_mut().push_back(arg.to_string())),
         "wait-idle" => wait(r, |r| Ok(idle(r))),
+        "expect-file-mode" => {
+            // expect-file-mode <path> = <octal permission bits>
+            let (p, want) = arg.split_once(" = ").ok_or("usage: expect-file-mode <path> = <octal>")?;
+            let want = u32::from_str_radix(want.trim(), 8).map_err(|e| e.to_string())?;
+            let got = failbrauwser::osprim::mode_of(&std::fs::symlink_metadata(p).map_err(|e| format!("{p}: {e}"))?) & 0o7777;
+            if got != want {
+                return Err(format!("{p} has mode {got:o}, not {want:o}"));
+            }
+        }
         "wait-exists" => {
             let p = arg.to_string();
             wait(r, move |r| Ok(Path::new(&p).exists() && idle(r)));
@@ -1024,6 +1033,40 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             wait(r, move |r| Ok(r.window.current_pane().send_button(&name, press, state, super::pane::Spot::Middle).is_ok()));
         }
         "drag-began" => w.current_pane().drag_began(),
+        "expect-link-overlay" => {
+            // expect-link-overlay <name> = hard|junction|symbolic|broken|none: the row's link overlay.
+            let (name, want) = arg.split_once(" = ").ok_or("usage: expect-link-overlay <name> = <overlay>")?;
+            let (name, want) = (name.trim().to_string(), want.trim().to_string());
+            wait(r, move |r| {
+                let code = r.window.current_pane().link_overlay(&name).unwrap_or(0);
+                let got = match failbrauwser::links::Overlay::from_code(code) {
+                    Some(failbrauwser::links::Overlay::Hard) => "hard",
+                    Some(failbrauwser::links::Overlay::Junction) => "junction",
+                    Some(failbrauwser::links::Overlay::Symbolic) => "symbolic",
+                    Some(failbrauwser::links::Overlay::Broken) => "broken",
+                    None => "none",
+                };
+                Ok(got == want)
+            });
+        }
+        "right-drop" => {
+            // right-drop <name> | <name> -> <folder>: items of the folder shown dragged with the
+            // right button and dropped on <folder>; the drop menu opens.
+            let (names, dest) = arg.split_once(" -> ").ok_or("usage: right-drop <names> -> <folder>")?;
+            let p = w.current_pane();
+            let here = p.location().local_path().ok_or("not a folder on disk")?.to_path_buf();
+            let sources: Vec<super::clipboard::ClipSource> = names.split(" | ").map(|n| super::clipboard::ClipSource::Local(here.join(n.trim()))).collect();
+            let view = p.view_widget();
+            super::links::show_drop_menu(&w, &view, 10, 10, sources, Location::Dir(PathBuf::from(dest.trim())));
+        }
+        "expect-drop-menu-item" | "expect-no-drop-menu-item" => {
+            // The drop menu open last has (or has not) the item "Parent/Child".
+            let all = super::links::open_drop_menu_labels();
+            if all.iter().any(|l| l == arg) != (cmd == "expect-drop-menu-item") {
+                return Err(format!("drop menu: {all:?}"));
+            }
+        }
+        "drop-menu" => super::links::click_open_drop_menu(arg)?,
         "right-click" => {
             // right-click <name>: the right mouse button pressed and released on an item.
             let name = arg.to_string();

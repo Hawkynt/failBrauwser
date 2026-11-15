@@ -21,6 +21,8 @@ pub mod fileops;
 pub mod vcs;
 pub mod icons;
 pub mod jobs;
+pub mod linkicons;
+pub mod links;
 pub mod menuicons;
 pub mod model;
 pub mod network;

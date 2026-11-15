@@ -23,6 +23,11 @@ const INTERNAL: &str = "application/x-failbrauwser-items";
 thread_local! {
     /// What the drag started here carries, for choosing the default action and for archive entries.
     static DRAGGING: RefCell<Vec<ClipSource>> = const { RefCell::new(Vec::new()) };
+    /// The drag started here was made with the right mouse button: its drop asks what to do.
+    static RIGHT_DRAG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while this program starts a right-button drag itself (GTK's views drag with the
+    /// left button only).
+    static STARTING_RIGHT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The size of each item's image in the drag image of several items.
@@ -80,12 +85,13 @@ fn targets() -> Vec<gtk::TargetEntry> {
 }
 
 pub fn setup(w: &Window, pane: &Rc<Pane>) {
-    let actions = gdk::DragAction::COPY | gdk::DragAction::MOVE | gdk::DragAction::LINK;
+    let actions = gdk::DragAction::COPY | gdk::DragAction::MOVE | gdk::DragAction::LINK | gdk::DragAction::ASK;
     enable_model_drag_source(pane.tree.upcast_ref(), actions);
     enable_model_drag_source(pane.icons.upcast_ref(), actions);
     for view in [pane.tree.upcast_ref::<gtk::Widget>(), pane.icons.upcast_ref()] {
         view.drag_dest_set(gtk::DestDefaults::empty(), &targets(), actions);
         connect_source(view, pane);
+        connect_right_drag(view, pane);
         connect_dest(view, w, pane);
     }
 }
@@ -102,6 +108,8 @@ fn enable_model_drag_source(view: &gtk::Widget, actions: gdk::DragAction) {
         .iter()
         .map(|(name, flags, info)| gtk::ffi::GtkTargetEntry { target: name.as_ptr() as *mut _, flags: *flags, info: *info })
         .collect();
+    // The left button drags here; GTK's tree and icon views start drags with the primary button
+    // only, so right-button drags are started by `connect_right_drag`.
     let mask = gdk::ModifierType::BUTTON1_MASK.into_glib();
     unsafe {
         if let Some(tree) = view.downcast_ref::<gtk::TreeView>() {
@@ -114,11 +122,13 @@ fn enable_model_drag_source(view: &gtk::Widget, actions: gdk::DragAction) {
 
 fn connect_source(view: &gtk::Widget, pane: &Rc<Pane>) {
     let p = Rc::downgrade(pane);
-    view.connect_drag_begin(move |_, _| {
+    view.connect_drag_begin(move |view, ctx| {
         if let Some(p) = p.upgrade() {
             let sources = fileops::selection_sources(&p);
             DRAGGING.with(|d| *d.borrow_mut() = sources);
         }
+        let _ = (view, ctx);
+        RIGHT_DRAG.with(|r| r.set(STARTING_RIGHT.with(|s| s.get())));
     });
     // Several items: their icons stacked with how many there are, instead of GTK's image of
     // the one row pressed (set by the view's own handler, so this one runs after it).
@@ -140,7 +150,10 @@ fn connect_source(view: &gtk::Widget, pane: &Rc<Pane>) {
             }
         }),
     );
-    view.connect_drag_end(|_, _| DRAGGING.with(|d| d.borrow_mut().clear()));
+    view.connect_drag_end(|_, _| {
+        DRAGGING.with(|d| d.borrow_mut().clear());
+        RIGHT_DRAG.with(|r| r.set(false));
+    });
     view.connect_drag_data_get(|_, _, sel, info, _| {
         let sources = DRAGGING.with(|d| d.borrow().clone());
         if info == 1 {
@@ -158,6 +171,47 @@ fn connect_source(view: &gtk::Widget, pane: &Rc<Pane>) {
         let refs: Vec<&str> = uris.iter().map(String::as_str).collect();
         sel.set_uris(&refs);
     });
+}
+
+/// Starts a drag of the selection when the pointer leaves a right press on an item farther than
+/// the drag threshold with the right button held: GTK's views would never start one (their drag
+/// gestures listen to the primary button only, gtktreeview.c and gtkiconview.c of GTK 3.24).
+fn connect_right_drag(view: &gtk::Widget, pane: &Rc<Pane>) {
+    view.add_events(gdk::EventMask::BUTTON3_MOTION_MASK);
+    let p = Rc::downgrade(pane);
+    view.connect_motion_notify_event(move |view, ev| {
+        let Some(p) = p.upgrade() else { return glib::Propagation::Proceed };
+        if !ev.state().contains(gdk::ModifierType::BUTTON3_MASK) {
+            return glib::Propagation::Proceed;
+        }
+        let Some((sx, sy)) = p.right_press_at() else { return glib::Propagation::Proceed };
+        let (x, y) = ev.position();
+        if !view.drag_check_threshold(sx as i32, sy as i32, x as i32, y as i32) {
+            return glib::Propagation::Proceed;
+        }
+        start_right_drag(view, &p, ev);
+        glib::Propagation::Stop
+    });
+}
+
+/// Begins a right-button drag of the selection of `pane` from `view`, for the motion `ev`.
+pub fn start_right_drag(view: &gtk::Widget, pane: &Rc<Pane>, ev: &gdk::EventMotion) {
+    let targets = gtk::TargetList::new(&targets());
+    let actions = gdk::DragAction::COPY | gdk::DragAction::MOVE | gdk::DragAction::LINK | gdk::DragAction::ASK;
+    STARTING_RIGHT.with(|s| s.set(true));
+    let event: &gdk::Event = ev;
+    let ctx = view.drag_begin_with_coordinates(&targets, actions, 3, Some(event), -1, -1);
+    STARTING_RIGHT.with(|s| s.set(false));
+    pane.drag_began();
+    // One item: its own image (several get the stack the drag-begin handler draws).
+    if let Some(ctx) = ctx {
+        let (images, count) = pane.selected_images(DRAG_ICON_PX, 1);
+        if count == 1 {
+            if let Some(img) = images.first() {
+                ctx.drag_set_icon_pixbuf(img, img.width() / 2, img.height() / 2);
+            }
+        }
+    }
 }
 
 /// The folder a drop at (x, y) goes into: the folder row under the pointer, else the tab's location.
@@ -211,7 +265,9 @@ fn choose_action(view: &gtk::Widget, ctx: &gdk::DragContext, dest: &Location) ->
         .unwrap_or_else(gdk::ModifierType::empty);
     let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
     let shift = mods.contains(gdk::ModifierType::SHIFT_MASK);
-    let want = if ctrl && shift {
+    let want = if RIGHT_DRAG.with(|r| r.get()) && allowed.contains(gdk::DragAction::ASK) {
+        gdk::DragAction::ASK
+    } else if ctrl && shift {
         gdk::DragAction::LINK
     } else if shift {
         gdk::DragAction::MOVE
@@ -232,9 +288,21 @@ fn choose_action(view: &gtk::Widget, ctx: &gdk::DragContext, dest: &Location) ->
 
 fn connect_dest(view: &gtk::Widget, w: &Window, pane: &Rc<Pane>) {
     let p: Weak<Pane> = Rc::downgrade(pane);
+    connect_drops(view, w, move |view, x, y| p.upgrade().map(|p| drop_target(view, &p, x, y)));
+}
+
+/// Makes `view` take drops: `target` names the folder under (x, y) and the row to highlight
+/// (`None`: nothing can be dropped there). A left drop moves or copies as the keys say; a
+/// right-button drag, or another program's drag that asks, opens the drop menu.
+pub fn connect_drops(view: &gtk::Widget, w: &Window, target: impl Fn(&gtk::Widget, i32, i32) -> Option<(Location, Option<gtk::TreePath>)> + 'static) {
+    let target = Rc::new(target);
+    let t = target.clone();
     view.connect_drag_motion(move |view, ctx, x, y, time| {
-        let Some(p) = p.upgrade() else { return false };
-        let (dest, path) = drop_target(view, &p, x, y);
+        let Some((dest, path)) = t(view, x, y) else {
+            highlight(view, None);
+            ctx.drag_status(gdk::DragAction::empty(), time);
+            return true;
+        };
         // Dropping a folder onto itself does nothing.
         let onto_self = DRAGGING.with(|d| d.borrow().iter().any(|s| matches!((s, &dest), (ClipSource::Local(a), Location::Dir(b)) if a == b)));
         if onto_self || !super::extensions::location_writable(&dest) {
@@ -253,15 +321,13 @@ fn connect_dest(view: &gtk::Widget, w: &Window, pane: &Rc<Pane>) {
         view.drag_get_data(ctx, &target, time);
         true
     });
-    let p: Weak<Pane> = Rc::downgrade(pane);
     let win = Rc::downgrade(&w.me());
     view.connect_drag_data_received(move |view, ctx, x, y, sel, info, time| {
         highlight(view, None);
-        let (Some(p), Some(w)) = (p.upgrade(), win.upgrade()) else {
+        let (Some(w), Some((dest, _))) = (win.upgrade(), target(view, x, y)) else {
             ctx.drag_finish(false, false, time);
             return;
         };
-        let (dest, _) = drop_target(view, &p, x, y);
         let sources: Vec<ClipSource> = if info == 1 {
             DRAGGING.with(|d| d.borrow().clone())
         } else {
@@ -273,6 +339,11 @@ fn connect_dest(view: &gtk::Widget, w: &Window, pane: &Rc<Pane>) {
         }
         let action = ctx.selected_action();
         ctx.drag_finish(true, false, time);
+        // A right-button drag (ours, or another program's that asks): the menu decides.
+        if action == gdk::DragAction::ASK || (info == 1 && RIGHT_DRAG.with(|r| r.get())) {
+            super::links::show_drop_menu(&w, view, x, y, sources, dest);
+            return;
+        }
         if action == gdk::DragAction::LINK {
             make_links(&w, &sources, &dest);
             return;
@@ -282,22 +353,13 @@ fn connect_dest(view: &gtk::Widget, w: &Window, pane: &Rc<Pane>) {
     });
 }
 
+/// What another view of this program needs to take drops like the file list.
+pub fn drop_targets() -> Vec<gtk::TargetEntry> {
+    targets()
+}
+
 fn make_links(w: &Window, sources: &[ClipSource], dest: &Location) {
-    let Some(dir) = dest.local_path() else { return };
-    let mut made = Vec::new();
-    for s in sources {
-        let ClipSource::Local(p) = s else { continue };
-        let Some(name) = p.file_name() else { continue };
-        let mut link = dir.join(name);
-        if std::fs::symlink_metadata(&link).is_ok() {
-            link = dir.join(failbrauwser::ops::names::free_name(dir, name, Some("link")));
-        }
-        match failbrauwser::osprim::make_symlink(p, &link, p.is_dir()) {
-            Ok(()) => made.push(link),
-            Err(e) => super::util::show_error(&w.win, "Cannot create link", &e.to_string()),
-        }
-    }
-    fileops::select_created(w, dest, &made);
+    super::links::perform(&w.me(), "link-symbolic", sources, dest);
 }
 
 
