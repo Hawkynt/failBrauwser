@@ -1,6 +1,6 @@
 [package]
 name = "failbrauwser"
-version = "0.9.0"
+version = "1.0.0"
 edition = "2024"
 # What the GTK bindings need; install.sh sets up a newer Rust where the system's is older.
 rust-version = "1.92"
