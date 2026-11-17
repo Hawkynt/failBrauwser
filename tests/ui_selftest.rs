@@ -53,26 +53,34 @@ fn drive(script: &str, dir: &Path, env: &[(&str, &str)], setup: impl FnOnce(&Pat
     }
     setup(dir);
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // The win32 twin of that harness: same arguments, same contract, same "SELFTEST OK".
     #[cfg(unix)]
-    let out = Command::new(root.join("tests/ui/harness.sh"))
-        .envs(env.iter().copied())
-        .arg(env!("CARGO_BIN_EXE_failbrauwser"))
-        .arg(root.join("tests/ui").join(script))
-        .arg(dir)
-        .output()
-        .unwrap();
+    let mut run = Command::new(root.join("tests/ui/harness.sh"));
     #[cfg(windows)]
-    let out = Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(root.join("tests/ui/harness.ps1"))
+    let mut run = {
+        let mut c = Command::new("powershell");
+        c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]).arg(root.join("tests/ui/harness.ps1"));
+        c
+    };
+    // The harness answers into a file rather than a pipe, so that a tool still running when the run
+    // ends cannot leave this waiting for an end of file that never comes (see tests\ui_git.rs).
+    let log = dir.join("harness.log");
+    let file = std::fs::File::create(&log).unwrap();
+    let status = run
         .envs(env.iter().copied())
         .arg(env!("CARGO_BIN_EXE_failbrauwser"))
         .arg(root.join("tests/ui").join(script))
         .arg(dir)
-        .output()
+        .stdout(file.try_clone().unwrap())
+        .stderr(file)
+        .status()
         .unwrap();
-    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    assert!(out.status.success() && log.contains("SELFTEST OK"), "{script} failed:\n{log}");
+    // The log is read as the bytes it is: a Windows tool answers its errors in the machine's own
+    // codepage, and `custom_actions.fbt` reached this with such a message in it (measured
+    // 2026-11-17, where a strict UTF-8 read said only `stream did not contain valid UTF-8`).
+    let log = std::fs::read(&log).unwrap_or_else(|e| panic!("{script}: no harness log: {e}"));
+    let log = String::from_utf8_lossy(&log).into_owned();
+    assert!(status.success() && log.contains("SELFTEST OK"), "{script} failed:\n{log}");
     check(dir);
 }
 

@@ -109,7 +109,10 @@ fn run(script: &str, tool: &str, needs: &[&str]) {
     let log = t.join("harness.log");
     let file = std::fs::File::create(&log).unwrap();
     let status = run.envs(env(t)).arg(bin).arg(&script_path).arg(t).stdout(file.try_clone().unwrap()).stderr(file).status().unwrap();
-    let log = std::fs::read_to_string(&log).unwrap_or_else(|e| panic!("{script}: no harness log: {e}"));
+    // Read as bytes and decoded leniently: a client answers in the machine's own codepage, and a
+    // strict UTF-8 read would lose the very message the scenario is there to show.
+    let log = std::fs::read(&log).unwrap_or_else(|e| panic!("{script}: no harness log: {e}"));
+    let log = String::from_utf8_lossy(&log).into_owned();
     assert!(status.success() && log.contains("SELFTEST OK"), "{script} failed:\n{log}");
 }
 
