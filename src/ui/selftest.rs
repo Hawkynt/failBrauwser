@@ -670,9 +670,22 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             }
         }
         "run" => {
-            // run <shell command>: started, not waited for.
-            let mut c = std::process::Command::new("sh");
-            c.arg("-c").arg(arg);
+            // run <command line>: started, not waited for. The line goes to the platform's own shell,
+            // as a custom action does (src/ui/customactions.rs): the scenario's paths are the harness's
+            // paths, and a POSIX shell would eat the backslashes of a Windows one.
+            #[cfg(windows)]
+            let (shell, flag) = ("cmd", "/C");
+            #[cfg(not(windows))]
+            let (shell, flag) = ("sh", "-c");
+            let mut c = std::process::Command::new(shell);
+            c.arg(flag).arg(arg);
+            // In the folder the window is looking at, which is what a `cd` in the line starts from:
+            // the harness launches this program from its own folder, and there a Windows `cd` of an
+            // absolute path cannot leave its drive (without /D), so the command would run somewhere
+            // else entirely — git_overlays.fbt's commit landed in the repository that happened to be
+            // the launch folder instead of the fixture's.
+            let cwd: std::path::PathBuf = w.current_location().nearest_dir().unwrap_or_else(glib::home_dir);
+            c.current_dir(cwd);
             #[cfg(windows)]
             failbrauwser::win::console::no_window(&mut c);
             c.spawn().map_err(|e| e.to_string())?;
@@ -1436,6 +1449,13 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             wait(r, move |r| Ok(r.window.current_location() == want && idle(r)));
         }
         "screenshot" => {
+            // The whole-screen picture a menu inventory keeps: `grim` is the Wayland capture tool, and
+            // where it is not installed there is nothing to run. The step says so out loud instead of
+            // failing, because what the scenario asserts are the `expect-*` steps around it.
+            if gtk::glib::find_program_in_path("grim").is_none() {
+                println!("screenshot skipped: no grim to capture the screen with");
+                return Ok(());
+            }
             let file = arg.to_string();
             // Let GTK paint first.
             let mut c = std::process::Command::new("grim");
