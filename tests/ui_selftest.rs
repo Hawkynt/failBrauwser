@@ -11,6 +11,11 @@ fn have(tool: &str) -> bool {
     Command::new("sh").arg("-c").arg(format!("command -v {tool}")).output().is_ok_and(|o| o.status.success())
 }
 
+#[cfg(windows)]
+fn have(tool: &str) -> bool {
+    Command::new("where").arg(tool).output().is_ok_and(|o| o.status.success())
+}
+
 /// The plain-Python twin's name differs by platform.
 fn python() -> &'static str {
     if cfg!(windows) { "python" } else { "python3" }
@@ -392,6 +397,10 @@ fn other_applications_show_files_in_their_folder() {
 
 #[test]
 fn gtk3_applications_get_failbrauwsers_dialogs() {
+    if cfg!(windows) {
+        eprintln!("the module is built with cc and pkg-config and served through xdg-desktop-portal — no Windows twin, skipping");
+        return;
+    }
     if !Path::new("/usr/lib/xdg-desktop-portal").exists() && !Path::new("/usr/libexec/xdg-desktop-portal").exists() {
         eprintln!("xdg-desktop-portal not installed, skipping");
         return;
