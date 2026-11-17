@@ -6,7 +6,9 @@
 //! `FindNextFileNameW` (unmeasured here: no Windows machine runs the tests).
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(not(windows))]
+use std::sync::atomic::Ordering;
 
 /// The other names of `path`; empty for a file with one name. `stop` ends a search early.
 pub fn siblings(path: &Path, stop: &AtomicBool) -> std::io::Result<Vec<PathBuf>> {
