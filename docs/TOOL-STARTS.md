@@ -102,13 +102,17 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
   the windows the askpass names in `progress::prepare`.
 - **When it ends.** A *reading* tool does not outlive the instance that started it. The archive
   helper is told which process started it (`--parent`) and watches that process
-  (`tests\helper_lifetime.rs`); the five clients are read by a call that waits for them
-  (`run::ask`, `run::output`, `run::with_input`), and a read still in flight when this instance ends
-  has its client ended there — `vcs::run::end_our_clients` (`src\main.rs`) walks the clients this
-  instance registered and terminates each by id. That covers only the reads: an *act* the user asked
-  for is left to finish (a commit, a push, a merge runs under its progress window, and the installer
-  script of an update is deliberately detached, `src\ui\update.rs:255`), and so is anything the user
-  opened a window for — a terminal, a chosen handler, a custom action's own program.
+  (`tests\helper_lifetime.rs`); the five clients are read by calls that wait for them —
+  `run::ask`, `run::output`, `run::read_of` (for a caller that built its own `Command`) and the CVS
+  and patch reads that go through it — and a read still in flight when this instance ends has its
+  client ended there: `vcs::run::end_our_clients` (`src\main.rs`) walks the clients this instance
+  registered and terminates each by id, and from that moment a client that starts is ended as soon
+  as it is registered, so a read beginning during the shutdown cannot be left behind either. That
+  covers the reads only, on purpose. An *act* the user
+  asked for is left to finish — a commit (`run::with_input` feeds its message over a pipe, and its
+  client is deliberately not registered), a push, a merge under its progress window, the installer
+  script of an update detached on purpose (`src\ui\update.rs:255`) — and so is anything the user
+  opened a window for: a terminal, a chosen handler, a custom action's own program.
   Measured here on 2026-11-17, before that rule existed: five tools were still running with their
   parent process gone when UI scenarios had ended — `git log -z --format=…`, two
   `git status --porcelain=v2 … -- .` and two `svn log --xml --verbose --revision 4 -- .`. They were
