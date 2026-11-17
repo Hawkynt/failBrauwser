@@ -205,7 +205,8 @@ Scenarios that need Linux-only services skip with a printed reason:
 `desktop_links.fbt` (roaming-profile Desktop, see above), `summary.fbt` (symlink fixture),
 and the portal/default-app parts elsewhere. Timing budgets for the big-listing paints are
 widened for win32 GTK plus Defender (`big_listings.fbt`) — measured here, not guessed.
-That makes 45 scripts across 46 scenario tests; run serially (`RUST_TEST_THREADS=1
+That made 45 scripts across 46 scenario tests — the tree carries 61 scripts and 52
+scenario tests in `tests\ui_selftest.rs` today, the numbers further down being today's; run serially (`RUST_TEST_THREADS=1
 cargo test --release --test ui_selftest`), 43 of them answered green on this host on
 2026-11-13 in 376.95 s, the suite's slowest run here, with `big_listings.fbt` inside both of
 its budgets that time. On 2026-11-12 the same command read 42 green of 45 in the morning
@@ -280,3 +281,51 @@ prevents.
 These failures surfaced when the app's Windows build compiled again
 after the `--lvm` helper stopped importing Linux; no Windows build had run these Linux-era
 update and drives paths before.
+
+The line came back on 2026-11-17 as a fresh clone of the online repository, and it did not build here.
+`cargo check --release --all-targets` answered E0308 at `src\links\backup.rs:279`, where windows 0.62 wants
+`Option<PSID>` for the owner and group of `SetNamedSecurityInfoW` — 0.62.0 and 0.62.2 declare it the same way, so
+that Windows-only path had never compiled anywhere — while `tests\install_script.rs` (`std::os::unix` ungated) and
+`tests\ui_selftest.rs` (the `#[cfg(unix)]` `have()` called from ungated code) did not compile on Windows at all, and
+`src\links\siblings.rs` imported an `Ordering` only its not(windows) arm uses. A test target that fails to compile
+ends `cargo test` before a single scenario runs, so none of the numbers below were reachable until those were
+repaired (`1b6b141`, `71196d9`, `1845eb7`, `4da114a`) and the sysroot pin followed the mirror (`8e20fe9`: its
+database no longer carries pkgconf 1~3.0.10-1, and only the two roots are pinned — of the 63 files
+`bootstrap-lock.txt` recorded on 2026-11-10, eight have moved to a newer version in the meantime (openssl 3.6.5 →
+4.1.0, gcc runtime 16.2.0-6 → -7) and one, libb2, is not pulled any more, so that sysroot is no longer
+reproducible from the tree). The vendored registry generator went back to the Roslyn this SDK loads, CS9057
+otherwise (`e491362`), and `src\win\storage.rs:207` stopped denying clippy's `absurd_extreme_comparisons`
+(`bb3848a`: `header.Size` is a u32, so `<= 0` never guarded and no other lint of the crate was reported at all).
+
+Measured on that base, `cargo test --release --no-fail-fast` read 446 passed, 19 failed and 2 ignored with the tree
+as it arrived, and 455, 14 and 2 after the Blame work below — the same scenarios plus the four new ones, none lost.
+Three of the 19 are lib scenarios asserting Linux facts to a Windows host:
+`actions::tests::terminals_debian_and_others` wants `Some("x-terminal-emulator")`,
+`lvm::tests::admin_tools_are_found_in_sbin` splits a Windows `PATH` into its sbin list, and
+`links::tests::the_folder_s_filesystem_is_read_by_statfs` expects an unreadable `FsCaps` where NTFS answers every
+capability. Run serially the UI target reads 49 of 52 green in 286.87 s: `custom_actions` and
+`encrypted_drive_with_lvm_inside`, named in this section for as long as it has existed, plus `archives_as_folders`
+of the clipboard group; in the parallel shape the same target read 36 of 52 before and 41 after. That group moves
+with the machine rather than with the tree: `undo_operations` failed four runs in a row run by itself —
+`wait-exists …\dest\a.txt` with `jobs busy false`, the paste never starting — while answering green in every suite
+run and in the serial one.
+
+Nine scripts run only through `tests\ui_git.rs` and `tests\ui_vcs.rs`, and neither target can run on Windows: their
+guard wants `sway` or `tilewin` *and* `grim` plus `dbus-run-session`, and they call `tests/ui/harness.sh` where
+`tests\ui_selftest.rs` has a `#[cfg(windows)]` branch reaching `tests/ui/harness.ps1`. So `git_branches`,
+`git_commit`, `git_log`, `git_remote`, `git_tools`, `vcs_cvs`, `vcs_hg`, `vcs_overlays` and `vcs_svn` never run
+here: the *Repository* menu is covered, `repo_menu.fbt` going through `ui_selftest`, while the log, diff and Blame
+windows are not. `tests\vcs_backends.rs` drops a tool as soon as its client is missing, and only `git` is installed
+on this machine. That is how the Blame defect survived review: `src\ui\vcs\blame.rs` built its commit column as
+`l.hash[..8]`, so a Subversion `3`, a CVS `1.2` or svn's empty uncommitted hash read "end byte index 8 is out of
+bounds for string of length 1/0/3" and the window never filled, while git's forty characters hid it. The rule lives
+in `BlameLine::short` now, with four lib scenarios and the mutation checks that kill it — index back and three of
+the four panic, cut at seven and the long one fails (`21fdba7` for the README sentence, `4cc5cf2` for the code). No
+hg, svn or cvs client exists here, so the short names those tools produce stay pinned by fixtures.
+
+The helper's own suite answers 506 passed, 0 failed in 3 m 39 s on 2026-11-17, `Remove_IsCaseSensitive` printed as
+skipped while that run's summary counts none; eleven scenarios fewer than the 517 recorded on 2026-11-12, that
+being what the online tree carries. Two dead-code warnings still stand in the Windows build, both in code untouched here: `user_media_base`
+(`src\lvm.rs`) and `needs_passphrase` (`src\ui\extensions.rs`) are called by nothing that this target compiles.
+Since `winpack\build.ps1` treats what cargo writes to stderr as fatal, they are worth clearing before a packaging
+run; they were left alone here because reaching them means deciding whether each is a Linux-only path or dead.
