@@ -223,6 +223,22 @@ fn servers_on_the_network_page() {
     });
 }
 
+#[test]
+fn location_bar_completes_paths() {
+    run_checked(
+        "location_complete.fbt",
+        &[],
+        |t| {
+            for d in ["w/Projects", "w/projects-old", "w/Pictures/2024", "w/.hidden"] {
+                std::fs::create_dir_all(t.join(d)).unwrap();
+            }
+            std::fs::write(t.join("w/notes.txt"), "").unwrap();
+            std::fs::write(t.join("w/music.zip"), "").unwrap();
+        },
+        |_| {},
+    );
+}
+
 /// A Host of the SSH configuration, picked in Add Server and opened, against an SSH server of the
 /// test's own: `sshd` as this user on a free port of 127.0.0.1, with keys made for the test. GVfs
 /// runs `ssh` from the PATH, so an `ssh` in front of the real one carries the port, the key and

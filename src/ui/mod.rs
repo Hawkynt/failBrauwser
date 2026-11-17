@@ -26,6 +26,7 @@ pub mod links;
 pub mod menuicons;
 pub mod model;
 pub mod network;
+pub mod pathcomplete;
 pub mod pane;
 pub mod pathbar;
 pub mod phones;

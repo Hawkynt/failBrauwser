@@ -169,6 +169,16 @@ fn on_typed(text: &str) {
 
 /// Adds the suggestions to a location entry.
 pub fn attach(entry: &gtk::Entry) {
+    // Tab completes a typed path. Connected before the suggestion list is, which otherwise
+    // takes Tab to move the focus on while it is shown.
+    entry.connect_key_press_event(|e, ev| {
+        let tab = [gtk::gdk::keys::constants::Tab, gtk::gdk::keys::constants::KP_Tab].contains(&ev.keyval());
+        let plain = !ev.state().intersects(gtk::gdk::ModifierType::SHIFT_MASK | gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::MOD1_MASK);
+        if tab && plain && super::pathcomplete::tab(e) {
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
     let completion = gtk::EntryCompletion::new();
     completion.set_model(Some(&model()));
     completion.set_text_column(COL_URI as i32);
@@ -177,6 +187,9 @@ pub fn attach(entry: &gtk::Entry) {
         let uri: String = model.value(iter, COL_URI as i32).get().unwrap_or_default();
         // GTK hands over a normalized, lower-case key; take what is really typed.
         let typed = c.entry().map(|e| e.text().to_string()).unwrap_or_else(|| typed.to_string());
+        if failbrauwser::pathcomplete::is_path(&typed) {
+            return failbrauwser::pathcomplete::matches(&uri, &typed);
+        }
         remote::suggestion_matches(&uri, &typed)
     });
     let note = gtk::CellRendererText::new();
@@ -196,7 +209,19 @@ pub fn attach(entry: &gtk::Entry) {
     });
     entry.set_completion(Some(&completion));
     STATE.with(|s| s.borrow_mut().entries.push(entry.downgrade()));
-    entry.connect_changed(|e| on_typed(&e.text()));
+    entry.connect_changed(|e| {
+        let text = e.text();
+        // A path gets the names of its folder; anything else the network suggestions.
+        if super::pathcomplete::typed(e, &text) {
+            return;
+        }
+        if let Some(c) = e.completion()
+            && c.model().as_ref() != Some(model().upcast_ref::<gtk::TreeModel>())
+        {
+            c.set_model(Some(&model()));
+        }
+        on_typed(&text);
+    });
     rebuild();
 }
 

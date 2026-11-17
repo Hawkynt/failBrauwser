@@ -17,6 +17,7 @@ pub mod lvm;
 pub mod network;
 pub mod ops;
 pub mod osprim;
+pub mod pathcomplete;
 #[cfg(windows)]
 pub mod remote_fs;
 pub mod remote;
