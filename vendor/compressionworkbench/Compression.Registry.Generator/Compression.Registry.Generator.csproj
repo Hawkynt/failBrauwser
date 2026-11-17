@@ -14,8 +14,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="5.3.0-2.25625.1" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" PrivateAssets="all" />
+    <!-- Kept below the upstream pin: 5.3.0 needs a compiler newer than the SDK that builds
+         this repository, and the build then stops with CS9057. Same pin as upstream's
+         CompressionWorkbench commit 9bb1a1b6; do not raise it back when vendor-syncing. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.*" PrivateAssets="all" />
   </ItemGroup>
 
 </Project>
