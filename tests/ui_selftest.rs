@@ -26,6 +26,17 @@ fn pysafe(p: &Path) -> String {
     p.display().to_string().replace('\\', "\\\\")
 }
 
+/// The archive helper a scenario reads inside an archive through: what the machine names, or this
+/// checkout's own built helper. cargo never builds the C# side, so a built one can be absent.
+fn archive_helper() -> Option<std::path::PathBuf> {
+    let name = if cfg!(windows) { "fb-archive.exe" } else { "fb-archive" };
+    if let Some(p) = std::env::var_os("FB_ARCHIVE_HELPER") && Path::new(&p).is_file() {
+        return Some(std::path::PathBuf::from(p));
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    [format!("helper/FbArchive/bin/Release/net10.0/{name}"), format!("helper/FbArchive/bin/Debug/net10.0/{name}"), format!("target/helper/{name}")].iter().map(|p| root.join(p)).find(|p| p.is_file())
+}
+
 fn run(script: &str, setup: impl FnOnce(&Path)) {
     run_checked(script, &[], setup, |_| {});
 }
@@ -62,12 +73,22 @@ fn drive(script: &str, dir: &Path, env: &[(&str, &str)], setup: impl FnOnce(&Pat
         c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]).arg(root.join("tests/ui/harness.ps1"));
         c
     };
+    // A step that reads inside an archive asks the C# helper, and `archive::locate_helper` answers
+    // the bare name `fb-archive` when it finds no file: the step then finds nothing of its own,
+    // quietly. `search.fbt` read 0 rows for its archive hit here three times on 2026-11-17 until the
+    // built helper was named, which is why the scenario names it rather than trusting the machine.
+    let helper = archive_helper();
+    let mut env: Vec<(String, String)> = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    match &helper {
+        Some(p) => env.push(("FB_ARCHIVE_HELPER".into(), p.display().to_string())),
+        None => eprintln!("{script}: no built archive helper — a step reading inside an archive finds nothing (dotnet build helper/FbArchive -c Release)"),
+    }
     // The harness answers into a file rather than a pipe, so that a tool still running when the run
     // ends cannot leave this waiting for an end of file that never comes (see tests\ui_git.rs).
     let log = dir.join("harness.log");
     let file = std::fs::File::create(&log).unwrap();
     let status = run
-        .envs(env.iter().copied())
+        .envs(env)
         .arg(env!("CARGO_BIN_EXE_failbrauwser"))
         .arg(root.join("tests/ui").join(script))
         .arg(dir)
