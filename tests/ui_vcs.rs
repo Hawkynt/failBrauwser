@@ -1,13 +1,20 @@
 //! The Repository menu and TortoiseGit's windows on working copies of the other tools, made by
 //! their own clients: overlays, a commit of what is ticked (an unversioned file added on the way)
-//! and the log afterwards. Run like the other UI tests inside a headless compositor; a tool whose
-//! client is not installed is skipped with the reason printed.
+//! and the log afterwards. Inside a headless compositor on Linux, on the win32 GDK surface on
+//! Windows. A tool whose client does not answer on PATH is skipped with the reason printed: on a
+//! normal development machine the client is installed, so the scenario runs there.
 
 use std::path::Path;
 use std::process::Command;
 
+#[cfg(unix)]
 fn have(tool: &str) -> bool {
     Command::new("sh").arg("-c").arg(format!("command -v {tool}")).output().is_ok_and(|o| o.status.success())
+}
+
+#[cfg(windows)]
+fn have(tool: &str) -> bool {
+    Command::new("where").arg(tool).output().is_ok_and(|o| o.status.success())
 }
 
 /// The clients' settings for a test: no user configuration, a fixed identity.
@@ -15,12 +22,14 @@ fn env(t: &Path) -> Vec<(String, String)> {
     vec![
         ("HGRCPATH".into(), t.join("hgrc").display().to_string()),
         ("HGUSER".into(), "Ann Tester <ann@example.org>".into()),
-        ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
+        ("GIT_CONFIG_GLOBAL".into(), if cfg!(windows) { "NUL".into() } else { "/dev/null".into() }),
         ("LC_ALL".into(), "C".into()),
     ]
 }
 
-fn sh(t: &Path, dir: &Path, program: &str, args: &[&str]) {
+/// One client command, by name and arguments: the tool is looked up on PATH, which is where its
+/// installer puts it. Never a shell string, so the scenario means the same thing on either platform.
+fn client(t: &Path, dir: &Path, program: &str, args: &[&str]) {
     let out = Command::new(program).current_dir(dir).args(args).envs(env(t)).output().unwrap();
     assert!(out.status.success(), "{program} {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
@@ -31,31 +40,34 @@ fn working_copy(t: &Path, tool: &str) {
     std::fs::write(t.join("hgrc"), "[ui]\nusername = Ann Tester <ann@example.org>\n").unwrap();
     let wc = t.join("wc");
     match tool {
-        "hg" => sh(t, t, "hg", &["init", "wc"]),
+        "hg" => client(t, t, "hg", &["init", "wc"]),
         "svn" => {
-            sh(t, t, "svnadmin", &["create", "repo"]);
-            let url = format!("file://{}/repo", t.display());
-            sh(t, t, "svn", &["mkdir", "-q", "-m", "layout", &format!("{url}/trunk")]);
-            sh(t, t, "svn", &["checkout", "-q", &format!("{url}/trunk"), "wc"]);
+            client(t, t, "svnadmin", &["create", "repo"]);
+            // Forward slashes either way; a Windows path is a drive letter, so it also needs the
+            // third slash, which `file://C:/…` would otherwise spend on a host name.
+            let path = t.display().to_string().replace('\\', "/");
+            let url = if cfg!(windows) { format!("file:///{path}/repo") } else { format!("file://{path}/repo") };
+            client(t, t, "svn", &["mkdir", "-q", "-m", "layout", &format!("{url}/trunk")]);
+            client(t, t, "svn", &["checkout", "-q", &format!("{url}/trunk"), "wc"]);
         }
         "cvs" => {
             let root = t.join("cvsroot");
-            sh(t, t, "cvs", &["-d", root.to_str().unwrap(), "init"]);
+            client(t, t, "cvs", &["-d", root.to_str().unwrap(), "init"]);
             std::fs::create_dir_all(t.join("import")).unwrap();
-            sh(t, &t.join("import"), "cvs", &["-d", root.to_str().unwrap(), "import", "-m", "start", "mod", "vendor", "start"]);
-            sh(t, t, "cvs", &["-d", root.to_str().unwrap(), "checkout", "-d", "wc", "mod"]);
+            client(t, &t.join("import"), "cvs", &["-d", root.to_str().unwrap(), "import", "-m", "start", "mod", "vendor", "start"]);
+            client(t, t, "cvs", &["-d", root.to_str().unwrap(), "checkout", "-d", "wc", "mod"]);
         }
         _ => unreachable!(),
     }
     std::fs::write(wc.join("same.txt"), "same\n").unwrap();
     std::fs::write(wc.join("one.txt"), "alpha\nbeta\n").unwrap();
-    sh(t, &wc, tool, &["add", "same.txt", "one.txt"]);
-    sh(t, &wc, tool, &["commit", "-m", "first"]);
+    client(t, &wc, tool, &["add", "same.txt", "one.txt"]);
+    client(t, &wc, tool, &["commit", "-m", "first"]);
     std::thread::sleep(std::time::Duration::from_millis(1100));
     std::fs::write(wc.join("one.txt"), "alpha\nbeta changed\n").unwrap();
-    sh(t, &wc, tool, &["commit", "-m", "second"]);
+    client(t, &wc, tool, &["commit", "-m", "second"]);
     if tool == "svn" {
-        sh(t, &wc, "svn", &["update", "-q"]);
+        client(t, &wc, "svn", &["update", "-q"]);
     }
     std::thread::sleep(std::time::Duration::from_millis(1100));
     std::fs::write(wc.join("one.txt"), "alpha\nbeta changed\ngamma\n").unwrap();
@@ -63,6 +75,7 @@ fn working_copy(t: &Path, tool: &str) {
 }
 
 fn run(script: &str, tool: &str, needs: &[&str]) {
+    #[cfg(unix)]
     if !(have("sway") || have("tilewin")) || !["grim", "dbus-run-session"].iter().all(|t| have(t)) {
         eprintln!("headless UI tools missing, skipping {script}");
         return;
@@ -77,9 +90,24 @@ fn run(script: &str, tool: &str, needs: &[&str]) {
     std::fs::write(t.join("config/failbrauwser/settings.ini"), "[General]\nvcs_integration=true\n").unwrap();
     working_copy(t, tool);
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let out = Command::new(root.join("tests/ui/harness.sh")).envs(env(t)).arg(env!("CARGO_BIN_EXE_failbrauwser")).arg(root.join("tests/ui").join(script)).arg(t).output().unwrap();
-    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    assert!(out.status.success() && log.contains("SELFTEST OK"), "{script} failed:\n{log}");
+    let script_path = root.join("tests/ui").join(script);
+    let bin = env!("CARGO_BIN_EXE_failbrauwser");
+    // The win32 twin of that harness: same arguments, same contract, same "SELFTEST OK".
+    #[cfg(unix)]
+    let mut run = Command::new(root.join("tests/ui/harness.sh"));
+    #[cfg(windows)]
+    let mut run = {
+        let mut c = Command::new("powershell");
+        c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]).arg(root.join("tests/ui/harness.ps1"));
+        c
+    };
+    // The harness answers into a file rather than a pipe, so that a tool still running when the run
+    // ends cannot leave this waiting for an end of file that never comes (see tests\ui_git.rs).
+    let log = t.join("harness.log");
+    let file = std::fs::File::create(&log).unwrap();
+    let status = run.envs(env(t)).arg(bin).arg(&script_path).arg(t).stdout(file.try_clone().unwrap()).stderr(file).status().unwrap();
+    let log = std::fs::read_to_string(&log).unwrap_or_else(|e| panic!("{script}: no harness log: {e}"));
+    assert!(status.success() && log.contains("SELFTEST OK"), "{script} failed:\n{log}");
 }
 
 #[test]

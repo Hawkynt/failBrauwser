@@ -1,23 +1,44 @@
-//! The Git integration in the real window (TortoiseGit's overlays, menus and dialogs), run
-//! like the other UI tests inside a headless sway session. Git is configured for each test
-//! alone (GIT_CONFIG_GLOBAL), never from the user's own configuration.
+//! The Git integration in the real window (TortoiseGit's overlays, menus and dialogs), run inside a
+//! headless sway session (Linux) or on the win32 GDK surface (Windows). Git is configured for each
+//! test alone (GIT_CONFIG_GLOBAL), never from the user's own configuration, and the fixture is built
+//! by git's own commands: a run needs git on PATH and nothing else beyond the platform's UI tools.
 
 use std::path::Path;
 use std::process::Command;
 
+#[cfg(unix)]
 fn have(tool: &str) -> bool {
     Command::new("sh").arg("-c").arg(format!("command -v {tool}")).output().is_ok_and(|o| o.status.success())
 }
 
-/// Runs a shell command in `dir` with the test's git configuration.
-fn sh(t: &Path, dir: &Path, cmd: &str) -> String {
-    let out = Command::new("sh").arg("-c").arg(cmd).current_dir(dir).envs(git_env(t)).output().unwrap();
-    assert!(out.status.success(), "{cmd}: {}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8_lossy(&out.stdout).into_owned()
+#[cfg(windows)]
+fn have(tool: &str) -> bool {
+    Command::new("where").arg(tool).output().is_ok_and(|o| o.status.success())
 }
 
 fn git_env(t: &Path) -> Vec<(String, String)> {
     vec![("GIT_CONFIG_GLOBAL".into(), t.join("gitconfig").display().to_string()), ("GIT_CONFIG_NOSYSTEM".into(), "1".into())]
+}
+
+/// One client command, given as arguments rather than a shell string: the fixture has to mean the
+/// same thing wherever it runs, and a shell string means whatever that shell's `echo` and `printf`
+/// happen to do with a backslash (dash and bash disagree — `echo 'a\nb'` is one line or two).
+fn cli(t: &Path, dir: &Path, program: &str, args: &[&str]) -> String {
+    let out = Command::new(program).current_dir(dir).args(args).envs(git_env(t)).output().unwrap();
+    assert!(out.status.success(), "{program} {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// git with the test's own configuration, in `dir`.
+fn git(t: &Path, dir: &Path, args: &[&str]) -> String {
+    cli(t, dir, "git", args)
+}
+
+/// Appends to a file the way `echo x >> file` does.
+fn append(path: &Path, text: &str) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    f.write_all(text.as_bytes()).unwrap();
 }
 
 fn run(script: &str, setup: impl FnOnce(&Path), check: impl FnOnce(&Path)) {
@@ -26,8 +47,13 @@ fn run(script: &str, setup: impl FnOnce(&Path), check: impl FnOnce(&Path)) {
 
 /// `enabled`: the Git integration is switched on (Edit → Version Control Integration) from the start.
 fn run_with(script: &str, enabled: bool, setup: impl FnOnce(&Path), check: impl FnOnce(&Path)) {
-    if !(have("sway") || have("tilewin")) || !["grim", "dbus-run-session", "git"].iter().all(|t| have(t)) {
-        eprintln!("headless UI tools or git missing, skipping {script}");
+    #[cfg(unix)]
+    if !(have("sway") || have("tilewin")) || !["grim", "dbus-run-session"].iter().all(|tool| have(tool)) {
+        eprintln!("headless UI tools missing, skipping {script}");
+        return;
+    }
+    if !have("git") {
+        eprintln!("git is not on PATH, skipping {script}");
         return;
     }
     // Outside of this project's own working tree.
@@ -40,37 +66,53 @@ fn run_with(script: &str, enabled: bool, setup: impl FnOnce(&Path), check: impl 
     }
     setup(t);
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let out = Command::new(root.join("tests/ui/harness.sh"))
-        .envs(git_env(t))
-        .arg(env!("CARGO_BIN_EXE_failbrauwser"))
-        .arg(root.join("tests/ui").join(script))
-        .arg(t)
-        .output()
-        .unwrap();
-    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    assert!(out.status.success() && log.contains("SELFTEST OK"), "{script} failed:\n{log}");
+    let script_path = root.join("tests/ui").join(script);
+    let bin = env!("CARGO_BIN_EXE_failbrauwser");
+    // The win32 twin of that harness: same arguments, same contract, same "SELFTEST OK".
+    #[cfg(unix)]
+    let mut run = Command::new(root.join("tests/ui/harness.sh"));
+    #[cfg(windows)]
+    let mut run = {
+        let mut c = Command::new("powershell");
+        c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]).arg(root.join("tests/ui/harness.ps1"));
+        c
+    };
+    // What the harness prints goes into a file, not a pipe: a pipe stays open while any tool the run
+    // started is alive, whoever reads it then waits for an end that never comes, and the test says
+    // nothing at all (measured here on 2026-11-17 — the scenario had answered `SELFTEST OK`, the
+    // check afterwards never ran, and the run sat for five minutes before it was ended by hand).
+    let log = t.join("harness.log");
+    let file = std::fs::File::create(&log).unwrap();
+    let status = run.envs(git_env(t)).arg(bin).arg(&script_path).arg(t).stdout(file.try_clone().unwrap()).stderr(file).status().unwrap();
+    let log = std::fs::read_to_string(&log).unwrap_or_else(|e| panic!("{script}: no harness log: {e}"));
+    assert!(status.success() && log.contains("SELFTEST OK"), "{script} failed:\n{log}");
     check(t);
 }
 
 /// A working tree with two commits and changes of each kind.
 fn repo(t: &Path) {
     let r = t.join("repo");
-    std::fs::create_dir_all(&r).unwrap();
-    sh(
-        t,
-        &r,
-        "git init -q && mkdir -p src docs && echo a > clean.txt && printf 'one\\ntwo\\nthree\\n' > changed.txt && echo s > src/lib.rs && echo d > docs/readme.md \
-         && echo '*.log' > .gitignore && git add -A && git commit -qm 'First commit' && echo four >> changed.txt && git commit -qam 'Second commit' && git tag v1",
-    );
-    sh(t, &r, "echo 'one\nTWO\nthree\nfour' > changed.txt && echo n > added.txt && git add added.txt && echo u > new.txt && echo l > build.log && echo x >> src/lib.rs");
-}
-
-#[test]
-fn overlays_and_menus() {
-    run_with("vcs_overlays.fbt", false, |t| {
-        repo(t);
-        std::fs::create_dir_all(t.join("plain")).unwrap();
-    }, keep_snapshots);
+    std::fs::create_dir_all(r.join("src")).unwrap();
+    std::fs::create_dir_all(r.join("docs")).unwrap();
+    std::fs::write(r.join("clean.txt"), "a\n").unwrap();
+    std::fs::write(r.join("changed.txt"), "one\ntwo\nthree\n").unwrap();
+    std::fs::write(r.join("src/lib.rs"), "s\n").unwrap();
+    std::fs::write(r.join("docs/readme.md"), "d\n").unwrap();
+    std::fs::write(r.join(".gitignore"), "*.log\n").unwrap();
+    git(t, &r, &["init", "-q"]);
+    git(t, &r, &["add", "-A"]);
+    git(t, &r, &["commit", "-qm", "First commit"]);
+    append(&r.join("changed.txt"), "four\n");
+    git(t, &r, &["commit", "-qam", "Second commit"]);
+    git(t, &r, &["tag", "v1"]);
+    // One of every state the overlays and the Commit window have to tell apart: changed, staged,
+    // unversioned, ignored, and a change inside a folder.
+    std::fs::write(r.join("changed.txt"), "one\nTWO\nthree\nfour\n").unwrap();
+    std::fs::write(r.join("added.txt"), "n\n").unwrap();
+    git(t, &r, &["add", "added.txt"]);
+    std::fs::write(r.join("new.txt"), "u\n").unwrap();
+    std::fs::write(r.join("build.log"), "l\n").unwrap();
+    append(&r.join("src/lib.rs"), "x\n");
 }
 
 /// Keeps the windows a test drew, for looking at them (target/git-ui/).
@@ -90,9 +132,9 @@ fn keep_snapshots(t: &Path) {
 fn commit_what_is_ticked() {
     run("git_commit.fbt", repo, |t| {
         let r = t.join("repo");
-        assert_eq!(sh(t, &r, "git log -1 --format=%s").trim(), "Change two files");
-        assert_eq!(sh(t, &r, "git show --name-only --format= HEAD").trim(), "changed.txt\nnew.txt");
-        assert_eq!(sh(t, &r, "git status --porcelain").trim(), "M src/lib.rs\n?? added.txt");
+        assert_eq!(git(t, &r, &["log", "-1", "--format=%s"]).trim(), "Change two files");
+        assert_eq!(git(t, &r, &["show", "--name-only", "--format=", "HEAD"]).trim(), "changed.txt\nnew.txt");
+        assert_eq!(git(t, &r, &["status", "--porcelain"]).trim(), "M src/lib.rs\n?? added.txt");
         keep_snapshots(t);
     });
 }
@@ -101,7 +143,7 @@ fn commit_what_is_ticked() {
 fn log_diff_and_blame() {
     run("git_log.fbt", repo, |t| {
         let r = t.join("repo");
-        assert_eq!(sh(t, &r, "git rev-parse v0").trim(), sh(t, &r, "git rev-parse HEAD~1").trim());
+        assert_eq!(git(t, &r, &["rev-parse", "v0"]).trim(), git(t, &r, &["rev-parse", "HEAD~1"]).trim());
         keep_snapshots(t);
     });
 }
@@ -109,21 +151,31 @@ fn log_diff_and_blame() {
 /// A bare remote with two commits; `repo` cloned from it with a commit of its own, and a
 /// commit pushed to the remote from elsewhere meanwhile.
 fn remote(t: &Path) {
-    sh(
-        t,
-        t,
-        "git init -q --bare remote.git && git clone -q remote.git repo 2>/dev/null && cd repo && echo a > clean.txt && git add -A && git commit -qm 'First commit' \
-         && git push -q -u origin main && cd .. && git clone -q remote.git other && cd other && echo o > other.txt && git add other.txt \
-         && git commit -qm 'From elsewhere' && git push -q && cd ../repo && echo l > local.txt && git add local.txt && git commit -qm 'Local commit'",
-    );
+    git(t, t, &["init", "-q", "--bare", "remote.git"]);
+    // Cloning a bare repository with nothing in it warns on stderr: the clone still answers zero.
+    git(t, t, &["clone", "-q", "remote.git", "repo"]);
+    let r = t.join("repo");
+    std::fs::write(r.join("clean.txt"), "a\n").unwrap();
+    git(t, &r, &["add", "-A"]);
+    git(t, &r, &["commit", "-qm", "First commit"]);
+    git(t, &r, &["push", "-q", "-u", "origin", "main"]);
+    git(t, t, &["clone", "-q", "remote.git", "other"]);
+    let o = t.join("other");
+    std::fs::write(o.join("other.txt"), "o\n").unwrap();
+    git(t, &o, &["add", "other.txt"]);
+    git(t, &o, &["commit", "-qm", "From elsewhere"]);
+    git(t, &o, &["push", "-q"]);
+    std::fs::write(r.join("local.txt"), "l\n").unwrap();
+    git(t, &r, &["add", "local.txt"]);
+    git(t, &r, &["commit", "-qm", "Local commit"]);
 }
 
 #[test]
 fn sync_pull_push_fetch_and_clone() {
     run("git_remote.fbt", remote, |t| {
         let r = t.join("repo");
-        assert_eq!(sh(t, &r, "git rev-parse HEAD").trim(), sh(t, &t.join("remote.git"), "git rev-parse main").trim());
-        assert_eq!(sh(t, &r, "git log -1 --format=%p HEAD").split_whitespace().count(), 2, "the pull merged");
+        assert_eq!(git(t, &r, &["rev-parse", "HEAD"]).trim(), git(t, &t.join("remote.git"), &["rev-parse", "main"]).trim());
+        assert_eq!(git(t, &r, &["log", "-1", "--format=%p", "HEAD"]).split_whitespace().count(), 2, "the pull merged");
         assert!(t.join("cloned/other.txt").is_file() && t.join("cloned/local.txt").is_file());
         keep_snapshots(t);
     });
@@ -137,14 +189,14 @@ fn tools_for_files() {
     }, |t| {
         let r = t.join("repo");
         assert!(std::fs::read_to_string(r.join(".gitignore")).unwrap().lines().any(|l| l == "*.tmp"));
-        let staged = sh(t, &r, "git diff --cached --name-status -M HEAD");
+        let staged = git(t, &r, &["diff", "--cached", "--name-status", "-M", "HEAD"]);
         assert!(staged.contains("R100\tclean.txt\ttidy.txt") && staged.contains("A\tnew.txt") && staged.contains("D\tdocs/readme.md"), "{staged}");
         assert!(r.join("docs/readme.md").is_file(), "kept on disk");
         assert!(!r.join("build.log").exists() && !r.join("scratch.tmp").exists());
-        assert_eq!(sh(t, &r, "git stash list").trim(), "");
+        assert_eq!(git(t, &r, &["stash", "list"]).trim(), "");
         assert!(t.join("export.zip").metadata().unwrap().len() > 100);
         assert_eq!(std::fs::read_dir(t.join("patches")).unwrap().count(), 1);
-        assert_eq!(sh(t, &r, "git config --local user.name").trim(), "Local Name");
+        assert_eq!(git(t, &r, &["config", "--local", "user.name"]).trim(), "Local Name");
         assert!(t.join("plain/.git/HEAD").is_file());
         keep_snapshots(t);
     });
@@ -153,17 +205,29 @@ fn tools_for_files() {
 /// `repo` with everything committed.
 fn committed(t: &Path) {
     repo(t);
-    sh(t, &t.join("repo"), "git add -A && git commit -qm 'Third commit' && git reset -q --hard HEAD~1 && git clean -qfdx");
+    let r = t.join("repo");
+    git(t, &r, &["add", "-A"]);
+    git(t, &r, &["commit", "-qm", "Third commit"]);
+    git(t, &r, &["reset", "-q", "--hard", "HEAD~1"]);
+    git(t, &r, &["clean", "-qfdx"]);
 }
 
 #[test]
 fn branches_merge_and_reset() {
     run("git_branches.fbt", committed, |t| {
         let r = t.join("repo");
-        assert_eq!(sh(t, &r, "git log -1 --format=%s").trim(), "On main");
-        assert_eq!(sh(t, &r, "git cat-file -t v2").trim(), "tag");
-        assert_eq!(sh(t, &r, "git log -1 --format=%s v2").trim(), "Merge feature");
-        assert_eq!(sh(t, &r, "git log -1 --format=%s feature").trim(), "On feature");
+        assert_eq!(git(t, &r, &["log", "-1", "--format=%s"]).trim(), "On main");
+        assert_eq!(git(t, &r, &["cat-file", "-t", "v2"]).trim(), "tag");
+        assert_eq!(git(t, &r, &["log", "-1", "--format=%s", "v2"]).trim(), "Merge feature");
+        assert_eq!(git(t, &r, &["log", "-1", "--format=%s", "feature"]).trim(), "On feature");
         keep_snapshots(t);
     });
+}
+
+#[test]
+fn overlays_and_menus() {
+    run_with("git_overlays.fbt", false, |t| {
+        repo(t);
+        std::fs::create_dir_all(t.join("plain")).unwrap();
+    }, keep_snapshots);
 }
