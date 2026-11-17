@@ -312,22 +312,57 @@ with the machine rather than with the tree: `undo_operations` failed four runs i
 `wait-exists …\dest\a.txt` with `jobs busy false`, the paste never starting — while answering green in every suite
 run and in the serial one.
 
-Nine scripts run only through `tests\ui_git.rs` and `tests\ui_vcs.rs`, and neither target can run on Windows: their
-guard wants `sway` or `tilewin` *and* `grim` plus `dbus-run-session`, and they call `tests/ui/harness.sh` where
-`tests\ui_selftest.rs` has a `#[cfg(windows)]` branch reaching `tests/ui/harness.ps1`. So `git_branches`,
-`git_commit`, `git_log`, `git_remote`, `git_tools`, `vcs_cvs`, `vcs_hg`, `vcs_overlays` and `vcs_svn` never run
-here: the *Repository* menu is covered, `repo_menu.fbt` going through `ui_selftest`, while the log, diff and Blame
-windows are not. `tests\vcs_backends.rs` drops a tool as soon as its client is missing, and only `git` is installed
-on this machine. That is how the Blame defect survived review: `src\ui\vcs\blame.rs` built its commit column as
+Re-measured serially on 2026-11-17, with the repairs further down this section in place: **48 of 52 green in
+315.04 s**. Four fail: `custom_actions` and `encrypted_drive_with_lvm_inside`, which this section has named for as
+long as it has existed; `big_listings_do_not_freeze_the_window` at 14 499 ms against its 12 000 ms win budget, inside
+the spread this section already records for that scenario; and `queued_paused_and_verified_copies` of the clipboard
+group. That group moved exactly as recorded: nine failures of one serial run re-ran together on the same day and
+answered 5 green in 177.69 s — `file_ops`, `undo`, `queue`, `share_refresh` and `checksums` back — while the three
+kinds above stayed. One more left that list for a reason of its own, below.
+
+A step that reads *inside* an archive asks this program's C# helper, and `archive::locate_helper`
+(`src\archive\client.rs:304`) answers the bare name `fb-archive` when it finds no file of its own — the start then
+fails, the step finds nothing, and nothing is said about it. `search.fbt` met exactly that here on 2026-11-17: three
+runs failed its `wait-row inside-report.txt` with `0 rows` (once alone, in 26.82 s), and the same scenario answered
+green as soon as a built helper was named — 38.37 s beside `archives_as_folders`, which answered green in both shapes,
+with no helper reachable and with one, so the scenarios that open an archive as a folder do not hang on it while the
+archive leg of a search does. The target names
+that helper itself now (`archive_helper` in `tests\ui_selftest.rs`: `FB_ARCHIVE_HELPER` if it points at a file, else
+this checkout's own `helper\FbArchive\bin\…\fb-archive.exe` or `target\helper\`), and prints that there is none to
+name rather than letting the step go quiet. The other half of that finding is still open: with *search inside
+archives* ticked and no helper reachable, the window shows an empty result list and no word about why.
+
+Nine scripts run through `tests\ui_git.rs` and `tests\ui_vcs.rs`, and since `da74ef6` both targets run on Windows
+too: their guard used to ask for `sway` or `tilewin` *and* `grim` plus `dbus-run-session` and to call
+`tests/ui/harness.sh` wherever it stood, while `tests\ui_selftest.rs` had the `#[cfg(windows)]` branch reaching
+`tests/ui/harness.ps1`. `have()` answers for the platform now, the fixtures build their working copies from
+arguments rather than shell text, and each platform calls its own harness. Measured here on 2026-11-17: the six Git
+scenarios green — `git_branches`, `git_commit`, `git_log`, `git_overlays`, `git_remote` and `git_tools`, the target
+in 141.09 s — and `tests\vcs_backends.rs` 16 of 16 in 18.14 s, its Subversion legs running here for the first time
+with TortoiseSVN's `svn` and `svnadmin` on `PATH`; `vcs_svn.fbt` green through `ui_vcs`, with `vcs_hg` and `vcs_cvs`
+skipped and the missing client named. Two of those scripts could never have passed as written: the target asked for
+`vcs_overlays.fbt`, a file this tree has never held (the scenario is `git_overlays.fbt`), and `git_remote.fbt`
+compared the harness's own path spelling with what git shows for a remote URL, so a path expectation now reads the
+same with either separator (`b0deba8`, `da74ef6`). Two fixture shapes needed the same kind of repair: a Subversion
+`file://` URL of a Windows folder takes forward slashes *and* the third slash, or svn answers E170000 "Illegal
+repository URL" (`e84f4aa`), and git refuses the null device as `GIT_CONFIG_GLOBAL` — `unable to access 'NUL':
+Invalid argument`, measured for the bare name and for a rooted one alike — so a scenario keeps git away from the
+user's configuration with an empty file of its own. What the harness answers reaches the test through a file under
+the fixture rather than through a pipe, because a tool still running when the run ends holds that pipe open and the
+test then waits for an end that never comes (`da74ef6`, `f14bffb`), and the whole-script budget is 180 s, a fourth
+argument of the harness (`aba4d13`). The Blame defect survived all of that because it survived review: `src\ui\vcs\blame.rs` built its commit column as
 `l.hash[..8]`, so a Subversion `3`, a CVS `1.2` or svn's empty uncommitted hash read "end byte index 8 is out of
 bounds for string of length 1/0/3" and the window never filled, while git's forty characters hid it. The rule lives
 in `BlameLine::short` now, with four lib scenarios and the mutation checks that kill it — index back and three of
-the four panic, cut at seven and the long one fails (`21fdba7` for the README sentence, `4cc5cf2` for the code). No
-hg, svn or cvs client exists here, so the short names those tools produce stay pinned by fixtures.
+the four panic, cut at seven and the long one fails (`21fdba7` for the README sentence, `4cc5cf2` for the code). A
+Mercurial and a CVS client are still absent here, so those two tools keep their readings pinned by fixtures;
+Subversion is measured now, in `tests\vcs_backends.rs` and through its own window scenario.
 
 The helper's own suite answers 506 passed, 0 failed in 3 m 39 s on 2026-11-17, `Remove_IsCaseSensitive` printed as
 skipped while that run's summary counts none; eleven scenarios fewer than the 517 recorded on 2026-11-12, that
-being what the online tree carries. Two dead-code warnings still stand in the Windows build, both in code untouched here: `user_media_base`
-(`src\lvm.rs`) and `needs_passphrase` (`src\ui\extensions.rs`) are called by nothing that this target compiles.
-Since `winpack\build.ps1` treats what cargo writes to stderr as fatal, they are worth clearing before a packaging
-run; they were left alone here because reaching them means deciding whether each is a Linux-only path or dead.
+being what the online tree carries. Neither dead-code warning of that base stands any more (`224816b`):
+`user_media_base` (`src\lvm.rs`) reaches the LVM mount paths it was written for, and the passphrase question of
+*Open as* asks through `kind_needs_passphrase` (`src\ui\extensions.rs:310`), which is where it is decided whether to
+ask at all. Measured on 2026-11-17: the release builds of the `vcs_backends`, `ui_git`, `ui_vcs` and `ui_selftest`
+targets carried no `warning:` line at all — which is what `winpack\build.ps1` needs, since it treats anything cargo
+writes to stderr as fatal.
