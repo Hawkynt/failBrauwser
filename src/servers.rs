@@ -100,7 +100,13 @@ pub fn describe(uri: &str) -> String {
     let who = if p.user.is_empty() { p.host.clone() } else { format!("{}@{}", p.user, p.host) };
     let port = if p.port == 0 { String::new() } else { format!(":{}", p.port) };
     let folder = if p.folder.is_empty() { String::new() } else { format!("/{}", p.folder) };
-    format!("{kind} — {who}{port}{folder}")
+    // A Host of ~/.ssh/config: where OpenSSH really goes.
+    let via = if p.scheme == "sftp" {
+        crate::sshconfig::resolve(&p.host).map(|r| format!(" ({}{})", r.user.as_deref().or((!p.user.is_empty()).then_some(p.user.as_str())).map(|u| format!("{u}@")).unwrap_or_default(), r.host_name)).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    format!("{kind} — {who}{port}{folder}{via}")
 }
 
 #[cfg(test)]

@@ -304,8 +304,27 @@ pub fn mount_remote(parent: &impl IsA<gtk::Window>, uri: &str, done: impl FnOnce
             )),
             Err(e) => Err(e.to_string()),
         };
-        done(res.and_then(|()| f.path().ok_or_else(|| "The share was mounted but has no local folder (is gvfsd-fuse running?).".to_string())));
+        let path = res.and_then(|()| f.path().ok_or_else(|| "The share was mounted but has no local folder (is gvfsd-fuse running?).".to_string()));
+        // An address without a folder opens where the server puts its user (the home folder
+        // over SSH), as GVfs reports it, rather than at the top of the server.
+        let path = path.map(|p| if no_folder(&f) { home_of(&f).unwrap_or(p) } else { p });
+        done(path);
     });
+}
+
+/// Whether an address names no folder on its server (`sftp://pi/`, `sftp://pi`).
+#[cfg(unix)]
+fn no_folder(f: &gio::File) -> bool {
+    let uri = f.uri();
+    uri.split_once("://").map(|(_, rest)| rest.split_once('/').map_or("", |(_, folder)| folder)).is_some_and(|folder| folder.trim_matches('/').is_empty())
+}
+
+/// The local folder of the place a mount opens at: the home folder the server gives an SSH
+/// user; `None` where it is the top of the mount anyway or has no local folder.
+#[cfg(unix)]
+fn home_of(f: &gio::File) -> Option<PathBuf> {
+    let mount = f.find_enclosing_mount(gio::Cancellable::NONE).ok()?;
+    mount.default_location().path().filter(|p| Some(p) != mount.root().path().as_ref())
 }
 
 /// Asks for a line of text (new folder name, rename, …). `select_stem` pre-selects the name
