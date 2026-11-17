@@ -12,6 +12,12 @@
 //! `git-log-select <title> : <subject>`, `git-log-menu <title> : <item>`,
 //! `wait-git-diff <title> = <= a | ~ b|B>`, `wait-git-blame <title> = <Ann: a | …>`,
 //! `git-snapshot <title> = <png>`, `git-open-submenu <item>` (of the open right-click menu), `wait-git-idle`, `wait-git-sync <title>`.
+//!
+//! A path written into a step is the harness's own spelling (`$T` is a native path: `C:\…` on
+//! Windows, `/…` on Linux), while a window shows what the client stores — git keeps a local remote's
+//! URL with `/` on Windows too. The text and field steps therefore compare with the two separator
+//! spellings treated alike; a different folder still fails, and every other text must be there as
+//! written.
 
 use super::super::window::Window;
 use super::{dialog, filelist, icons};
@@ -94,7 +100,7 @@ pub fn step(w: &Rc<Window>, cmd: &str, arg: &str) -> Option<Result<Option<Check>
                 (None, Some(e)) => e.text().to_string(),
                 _ => return Err(format!("{name} is no field")),
             };
-            if got == want { Ok(None) } else { Err(format!("{name} holds {got:?}")) }
+            if field_says(&got, want) { Ok(None) } else { Err(format!("{name} holds {got:?}")) }
         })(),
         "expect-git-disabled" => (|| {
             let (title, label) = split(arg, " : ")?;
@@ -147,7 +153,7 @@ pub fn step(w: &Rc<Window>, cmd: &str, arg: &str) -> Option<Result<Option<Check>
             let (title, want) = split(arg, " : ")?;
             let win = dialog::find_window(title).ok_or("no such window")?;
             let texts = texts(win.upcast_ref());
-            if texts.iter().any(|t| t.contains(want)) { Ok(None) } else { Err(format!("texts: {texts:?}")) }
+            if texts.iter().any(|t| says(t, want)) { Ok(None) } else { Err(format!("texts: {texts:?}")) }
         })(),
         "wait-git-text" => split(arg, " : ").map(|(title, want)| {
             let (t, want) = (title.to_string(), want.to_string());
@@ -155,7 +161,7 @@ pub fn step(w: &Rc<Window>, cmd: &str, arg: &str) -> Option<Result<Option<Check>
                 let Some(w) = dialog::find_window(&t) else { return Ok(false) };
                 let all = texts(w.upcast_ref());
                 seen(&all.iter().filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join(" ¦ "));
-                Ok(all.iter().any(|x| x.contains(&want)))
+                Ok(all.iter().any(|x| says(x, &want)))
             }) as Check)
         }),
         "git-close" => {
@@ -209,6 +215,38 @@ pub fn step(w: &Rc<Window>, cmd: &str, arg: &str) -> Option<Result<Option<Check>
         _ => return None,
     };
     Some(r)
+}
+
+/// Whether shown text says what the script expects. A path in the script is spelled the way the
+/// harness writes one (`$T` is a native path: `C:\…` on Windows, `/…` on Linux), while the window
+/// shows what the client itself stores — git keeps a local remote's URL with `/` even on Windows.
+/// So a path expectation matches once the separators agree to differ; every other text still has to
+/// be there as written.
+fn says(text: &str, want: &str) -> bool {
+    text.contains(want) || text.replace('\\', "/").contains(&want.replace('\\', "/"))
+}
+
+/// Whether a field holds what the script expects, separators aside.
+fn field_says(got: &str, want: &str) -> bool {
+    let (got, want) = (got.trim(), want.trim());
+    got == want || got.replace('\\', "/") == want.replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{field_says, says};
+
+    /// A scenario's expectation of a path is the harness's own spelling; what the window shows comes
+    /// from git, which keeps its remote URLs with `/` on Windows as well.
+    #[test]
+    fn a_path_expectation_reads_the_same_with_either_separator() {
+        assert!(says("Remote URL:", "URL"));
+        assert!(says("C:/Users/ann/wc/remote.git", "C:\\Users\\ann\\wc/remote.git"));
+        assert!(says("C:\\Users\\ann\\wc/remote.git", "C:/Users/ann/wc/remote.git"));
+        assert!(!says("C:/Users/ann/other/remote.git", "C:\\Users\\ann\\wc/remote.git"), "a different folder still fails");
+        assert!(field_says("C:/Users/ann/wc/cloned", "C:\\Users\\ann\\wc\\cloned"));
+        assert!(!field_says("C:/Users/ann/wc/remote", "C:\\Users\\ann\\wc\\cloned"));
+    }
 }
 
 /// Tells what a waiting step sees, each time it changes (the failure message names the step).
