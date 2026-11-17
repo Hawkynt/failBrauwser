@@ -122,7 +122,8 @@ pub fn script(package: Option<&str>, prefix: &Path, _options: &[String], cache: 
 
 /// The shell script that installs a downloaded release package, or builds the source
 /// (`package: None`), into `prefix` with `options`; the download goes into a folder of its own
-/// below `cache` that is removed at the end, whatever happened.
+/// below `cache`, the source into `cache/failbrauwser/source`, both removed at the end,
+/// whatever happened.
 #[cfg(not(windows))]
 pub fn script(package: Option<&str>, prefix: &Path, options: &[String], cache: &Path) -> String {
     let opts: String = options.iter().map(|o| format!(" {}", quote(o))).collect();
@@ -132,13 +133,20 @@ pub fn script(package: Option<&str>, prefix: &Path, options: &[String], cache: &
             format!("echo \"Downloading {url}\"\n{}\ntar xzf package.tar.gz\ncd failbrauwser-*/", fetch(url, "package.tar.gz")),
             format!("./install.sh --prebuilt --prefix {}{opts} --reopen", quote(&prefix.display().to_string())),
         ),
+        // The source is unpacked at the same place every time: Rust names what it builds of a
+        // folder after the folder, and install.sh keeps the build in the cache (README:
+        // Updates), so the same place lets the next update reuse it instead of adding to it.
         None => (
-            format!("echo \"Downloading the source\"\n{}\nmkdir source\ntar xzf source.tar.gz -C source --strip-components=1\ncd source", fetch(&source_url(), "source.tar.gz")),
+            format!(
+                "echo \"Downloading the source\"\n{}\nsrc={}\nrm -rf \"$src\"\nmkdir -p \"$src\"\ntar xzf source.tar.gz -C \"$src\" --strip-components=1\ncd \"$src\"",
+                fetch(&source_url(), "source.tar.gz"),
+                quote(&cache.join("failbrauwser").join("source").display().to_string())
+            ),
             format!("./install.sh --prefix {}{opts} --reopen", quote(&prefix.display().to_string())),
         ),
     };
     format!(
-        "#!/bin/sh\n# failBrauwser update (Help > Check for Updates)\nset -e\nmkdir -p {cache}\nwork=$(mktemp -d {cache}/failbrauwser-update.XXXXXX)\ntrap 'cd /; rm -rf \"$work\"; echo \"Removed the downloaded files.\"' EXIT\ncd \"$work\"\n{get}\necho \"Installing\"\n{run}\necho \"UPDATE FINISHED\"\n",
+        "#!/bin/sh\n# failBrauwser update (Help > Check for Updates)\nset -e\nmkdir -p {cache}\nsrc=\nwork=$(mktemp -d {cache}/failbrauwser-update.XXXXXX)\ntrap 'cd /; rm -rf \"$work\" ${{src:+\"$src\"}}; echo \"Removed the downloaded files.\"' EXIT\ncd \"$work\"\n{get}\necho \"Installing\"\n{run}\necho \"UPDATE FINISHED\"\n",
         cache = quote(&cache.display().to_string())
     )
 }
@@ -285,7 +293,8 @@ mod tests {
         assert!(s.contains("./install.sh --prebuilt --prefix '/home/me/.local' '--default' --reopen"), "{s}");
         assert!(s.contains("trap 'cd /; rm -rf \"$work\"") && s.contains("mktemp -d '/home/me/.cache'/failbrauwser-update.XXXXXX"));
         let s = script(None, Path::new("/opt/fb"), &[], Path::new("/c"));
-        assert!(s.contains("tar xzf source.tar.gz -C source --strip-components=1") && s.contains("./install.sh --prefix '/opt/fb' --reopen"));
+        assert!(s.contains("src='/c/failbrauwser/source'\nrm -rf \"$src\"") && s.contains("tar xzf source.tar.gz -C \"$src\" --strip-components=1"), "{s}");
+        assert!(s.contains("./install.sh --prefix '/opt/fb' --reopen") && s.contains("rm -rf \"$work\" ${src:+\"$src\"}"), "{s}");
     }
 
     #[test]

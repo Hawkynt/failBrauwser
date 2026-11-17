@@ -142,7 +142,18 @@ and a progress bar above it: while the source compiles it counts the crates done
 crates the build needs (`install.sh` counts them with `cargo tree` and says
 `Building failBrauwser: <n> crates`), "Compiling 123 of 310 crates"; steps of no known length
 (downloading, setting up Rust, the archive helper, installing) pulse under their name. A
-copy installed for everyone (`--system`) is updated from a terminal. `scripts/package.sh` and
+build that goes on from an earlier one is not counted; its bar pulses.
+
+What a build makes is kept for the next one, in `~/.cache/failbrauwser`, which may be deleted
+at any time. The **archive helper** is kept with a hash of its sources (the helper's, the
+vendored library's and the Makefile): while they are unchanged, `install.sh` takes it as it is
+and needs no .NET SDK, saving the minute or more its native compile takes. A source **outside
+a git checkout** (a download, as updates build it) keeps its Rust build folder there too
+(`build`, about 450 MB), so the next build compiles only what changed. Updates unpack the
+source at the same place each time, so that build is reused instead of added to. A clean
+build takes about 1½ minutes on 28 cores, an update of the program's own code about 20
+seconds, and one that changed nothing a second. A git checkout builds into its own `target`
+as before. A copy installed for everyone (`--system`) is updated from a terminal. `scripts/package.sh` and
 `winpack\package.ps1` make the release packages.
 
 ### Requirements
