@@ -12,7 +12,7 @@
 //! `wait-row <name>`, `wait-no-row <name>`, `activate` (open the selection),
 //! `wait-opened`, `edit-opened <new content>`, `expect-disabled <win.action>`,
 //! `crumb-click <label>`, `expect-crumbs <a > b > c>`, `path-edit`, `expect-path-mode <buttons|text>`,
-//! `type-location <text>`, `write-file <path> = <content>`, `sidebar-drives`, `expect-sidebar-drives <selected|unselected>`,
+//! `type-location <text>`, `location-edit <text>`, `location-key <key>`, `wait-location-suggestions <a | b>`, `expect-location-text <text>`, `write-file <path> = <content>`, `sidebar-drives`, `expect-sidebar-drives <selected|unselected>`,
 //! `expect-shortcuts <a | b | c>`, `expect-shortcut-marked <a>`, `shortcut-click <entry>`,
 //! `shortcut-menu <entry> : <item>` (`Show Hidden Entry/<name>` for the submenu),
 //! `shortcut-drag <entry> > <before entry>`, `shortcut-drop <folder> > <before entry>`,
@@ -192,6 +192,30 @@ fn set_field(w: &gtk::Widget, value: &str) -> Result<(), String> {
         c.set_active_id(Some(value));
     } else {
         return Err("cannot set that field".into());
+    }
+    Ok(())
+}
+
+/// A key pressed and let go in `widget`'s window, as the keyboard sends it: the focused widget
+/// gets it, with every handler GTK runs for a real key.
+fn send_key(widget: &impl IsA<gtk::Widget>, keyval: gtk::gdk::keys::Key) -> Result<(), String> {
+    use gtk::glib::translate::{IntoGlib, ToGlibPtr};
+    let window = widget.as_ref().toplevel().and_then(|t| t.window()).ok_or("no window")?;
+    let keyboard = window.display().default_seat().and_then(|s| s.keyboard()).ok_or("no keyboard")?;
+    for press in [true, false] {
+        // SAFETY: a fresh event filled in field by field; it owns the window reference it is
+        // given and is freed after GTK handled it.
+        unsafe {
+            let ev = gtk::gdk::ffi::gdk_event_new(if press { gtk::gdk::ffi::GDK_KEY_PRESS } else { gtk::gdk::ffi::GDK_KEY_RELEASE });
+            let k = ev as *mut gtk::gdk::ffi::GdkEventKey;
+            (*k).window = window.to_glib_full();
+            (*k).time = (glib::monotonic_time() / 1000) as u32;
+            (*k).keyval = keyval.into_glib();
+            gtk::gdk::ffi::gdk_event_set_device(ev, keyboard.to_glib_none().0);
+            gtk::gdk::ffi::gdk_event_set_source_device(ev, keyboard.to_glib_none().0);
+            gtk::ffi::gtk_main_do_event(ev);
+            gtk::gdk::ffi::gdk_event_free(ev);
+        }
     }
     Ok(())
 }
@@ -895,6 +919,36 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             let editing = w.pathbar.is_editing();
             if editing != (arg == "text") {
                 return Err(format!("path bar is in {} mode", if editing { "text" } else { "button" }));
+            }
+        }
+        "location-edit" => {
+            // location-edit <text>: typed into the location bar, without Enter.
+            w.pathbar.edit();
+            w.pathbar.entry.set_text(arg);
+            w.pathbar.entry.set_position(-1);
+        }
+        "location-key" => {
+            // location-key <key name>: a key pressed in the location bar (Tab, …; keys GTK passes through
+            // the input method first, like Return, do not arrive this way).
+            let keyval = gtk::gdk::keys::Key::from_name(arg);
+            if *keyval == 0 || *keyval == 0xffffff {
+                return Err(format!("no key named {arg}"));
+            }
+            send_key(&w.pathbar.entry, keyval)?;
+            wait(r, |r| Ok(idle(r)));
+        }
+        "wait-location-suggestions" => {
+            // wait-location-suggestions <a | b | …>: the path suggestions for the text typed.
+            let want = arg.to_string();
+            wait(r, move |r| {
+                let e = &r.window.pathbar.entry;
+                Ok(super::pathcomplete::listed(e) && super::pathcomplete::shown(e).join(" | ") == want)
+            });
+        }
+        "expect-location-text" => {
+            let got = w.pathbar.entry.text();
+            if got != arg {
+                return Err(format!("location bar says {got:?}"));
             }
         }
         "type-location" => {

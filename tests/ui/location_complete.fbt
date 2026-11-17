@@ -1,0 +1,19 @@
+# The location bar completes a typed path: the folders of the folder being typed in, and the
+# archives that open as folders; dot names only for a typed dot; Tab goes as far as they agree.
+open $T
+wait-location $T
+location-edit $T/w/
+wait-location-suggestions $T/w/Pictures/ | $T/w/Projects/ | $T/w/projects-old/ | $T/w/music.zip
+location-edit $T/w/.
+wait-location-suggestions $T/w/.hidden/
+location-edit $T/w/pro
+wait-location-suggestions $T/w/Projects/ | $T/w/projects-old/
+location-key Tab
+expect-location-text $T/w/Projects
+location-edit $T/w/pi
+location-key Tab
+expect-location-text $T/w/Pictures/
+# Taken with its slash, the folder's own names follow.
+wait-location-suggestions $T/w/Pictures/2024/
+location-key Tab
+expect-location-text $T/w/Pictures/2024/

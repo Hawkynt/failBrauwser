@@ -201,7 +201,11 @@ the buttons. A network address (`smb://host/share`, `\\host\share`, `sftp://host
 mounted through GVfs, asking for a password if needed, and opens as its local GVfs folder.
 While you type one, the bar suggests addresses opened before, SMB servers found on the
 local network (searched in the background, about two seconds) and, once a server is typed
-with its slash, that server's shares. Home and Drives are in the side panel.
+with its slash, that server's shares. A path (`/…` or `~/…`) is completed as you type: the bar
+lists the folders of the folder being typed in, and the archives that open as folders, matching
+in any case; names starting with a dot show once you type the dot. Taking a folder goes on into
+it, and **Tab** completes as far as the names agree, the whole name when only one fits. A
+network share that does not answer is not waited for. Home and Drives are in the side panel.
 **Servers by name:** *Add Server…* on the Network page keeps an SFTP, WebDAV (HTTPS or HTTP),
 FTP or Windows server under a name of your choice (server, port, user and folder; the address
 is shown as you type). They are listed below the computers; a double click mounts and opens
