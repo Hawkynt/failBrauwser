@@ -129,6 +129,7 @@ pub enum Target {
 }
 
 /// A command without arguments (the degenerate case, kept out of the arms).
+#[cfg(windows)]
 const NO_ARGS: &[String] = &[];
 
 /// Places one link on the desktop, named `name`, showing `icon` (a themed icon name,

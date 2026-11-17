@@ -315,7 +315,9 @@ impl OpenAs {
     /// Must the passphrase arrive before the file is opened (M14)? Every volume kind the menu
     /// offers is an encrypted one, and its reader is worth running only with the answer in hand:
     /// a search started without it can only answer with the shell of a locked volume. *Archive*
-    /// keeps the ask where the library puts it — on the reader that needs one.
+    /// keeps the ask where the library puts it — on the reader that needs one. (The menu asks
+    /// `kind_needs_passphrase` with the kind it has; this is the same rule per entry.)
+    #[cfg(test)]
     pub fn needs_passphrase(&self) -> bool {
         match self { OpenAs::Volume(id, _) => kind_needs_passphrase(id), OpenAs::Archive => false }
     }

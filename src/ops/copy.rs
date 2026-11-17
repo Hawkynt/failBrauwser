@@ -811,6 +811,8 @@ pub fn display_name(p: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    // Every scenario here is a Windows one; the Unix ones live in tests/copy_engine.rs.
+    #[cfg(windows)]
     use super::*;
 
     #[test]
