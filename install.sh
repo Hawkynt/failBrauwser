@@ -125,7 +125,8 @@ gtk3_modules() {
 session_gtk3_modules() {
     command -v systemctl >/dev/null || return 0
     local now new
-    now=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^GTK3_MODULES=//p')
+    # No user manager to ask (an install over ssh, in a container): nothing to change there.
+    now=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^GTK3_MODULES=//p') || return 0
     new=$(gtk3_modules "${1:-}" "$now")
     [ "$new" = "$now" ] && return 0
     if [ -n "$new" ]; then
