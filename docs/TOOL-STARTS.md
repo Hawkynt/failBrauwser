@@ -100,6 +100,21 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
   to, not inside the launcher.
 - **What it may answer by itself.** The `NON_INTERACTIVE` table plus the caller's locale, and for
   the windows the askpass names in `progress::prepare`.
+- **When it ends.** A *reading* tool does not outlive the instance that started it. The archive
+  helper is told which process started it (`--parent`) and watches that process
+  (`tests\helper_lifetime.rs`); the five clients are read by a call that waits for them
+  (`run::ask`, `run::output`, `run::with_input`), and a read still in flight when this instance ends
+  has its client ended there — `vcs::run::end_our_clients` (`src\main.rs`) walks the clients this
+  instance registered and terminates each by id. That covers only the reads: an *act* the user asked
+  for is left to finish (a commit, a push, a merge runs under its progress window, and the installer
+  script of an update is deliberately detached, `src\ui\update.rs:255`), and so is anything the user
+  opened a window for — a terminal, a chosen handler, a custom action's own program.
+  Measured here on 2026-11-17, before that rule existed: five tools were still running with their
+  parent process gone when UI scenarios had ended — `git log -z --format=…`, two
+  `git status --porcelain=v2 … -- .` and two `svn log --xml --verbose --revision 4 -- .`. They were
+  invisible (`CREATE_NO_WINDOW`) and harmless-looking, at no CPU; what they cost is handles and
+  pipes, and one of them is why a harness reading the harness's own pipes waited minutes for an end
+  of file that never arrives (the test side reads a file now, `tests\ui_git.rs`).
 
 ## Kept by
 
@@ -110,6 +125,7 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
 | `tests\source_rules.rs::no_tree_iterators_changed_in_place` | unrelated: the row-stepping rule |
 | `src\vcs\run.rs` unit test `the_client_environment_leaves_nothing_to_answer_on_its_own` | the table names each way the five clients prompt or page, and names no key twice |
 | `src\win\console.rs` unit test `the_standard_handles_stay_this_programs_own` | the three standard streams of this program end up marked not inheritable |
+| `src\vcs\run.rs` unit test `a_client_still_reading_when_the_instance_ends_is_ended_there` | a client of a read still in flight is gone when `end_our_clients` has run, and the call comes back refusing rather than hanging |
 
 ## Measured, and what is not
 
