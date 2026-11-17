@@ -85,7 +85,11 @@ fn main() -> gtk::glib::ExitCode {
     }
     #[cfg(unix)]
     raise_open_file_limit();
-    ui::app::run()
+    let code = ui::app::run();
+    // A client of a read that was still in flight when this run ended must not keep running behind
+    // it: an invisible tool at no CPU, holding a pipe nobody reads (docs\TOOL-STARTS.md).
+    failbrauwser::vcs::run::end_our_clients();
+    code
 }
 
 /// Lifts the soft limit on open files (often 1024) to the hard limit: GLib aborts the whole

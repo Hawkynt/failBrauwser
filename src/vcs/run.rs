@@ -5,7 +5,7 @@
 //! the tool's own complaint, which is the sentence a user can act on.
 
 use super::Tool;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -54,6 +54,129 @@ pub fn non_interactive(c: &mut Command) {
     c.envs(NON_INTERACTIVE);
 }
 
+/// The clients this instance started and is still reading, by id. A read runs on a worker an ending
+/// instance does not wait for, and the client it started then keeps running behind it — invisible,
+/// at no CPU, holding a pipe nobody reads (see docs\TOOL-STARTS.md).
+static CLIENTS: std::sync::LazyLock<std::sync::Mutex<Vec<u32>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+/// Keeps a client registered for exactly as long as its answer is being read, so that a read which
+/// never comes back — because the instance ended under it — is the one that is left in the list.
+struct Reading(u32);
+
+impl Reading {
+    /// Puts the client this call is about to read on the list, before its first byte is read: the
+    /// whole time it is not off the list is the time an ending instance has a tool to end. A client
+    /// that starts while the instance is ending is ended here instead, since nobody will read it.
+    fn started(child: &std::process::Child) -> Self {
+        let pid = child.id();
+        let mut clients = CLIENTS.lock().unwrap();
+        if ENDING.load(std::sync::atomic::Ordering::SeqCst) {
+            drop(clients);
+            end_process(pid);
+        } else {
+            clients.push(pid);
+        }
+        Self(pid)
+    }
+}
+
+impl Drop for Reading {
+    fn drop(&mut self) {
+        CLIENTS.lock().unwrap().retain(|pid| *pid != self.0);
+    }
+}
+
+/// Set once the instance has stopped its clients: after that a client of a read is ended as soon as
+/// it is started, so nothing of ours is left behind by an instance on its way out.
+static ENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The ids of the clients of this instance that are still being read.
+#[cfg(test)]
+fn our_clients() -> Vec<u32> {
+    CLIENTS.lock().unwrap().clone()
+}
+
+/// Ends the clients this instance started and was still reading when it ended, and keeps any later
+/// one from surviving its own start.
+pub fn end_our_clients() {
+    ENDING.store(true, std::sync::atomic::Ordering::SeqCst);
+    for pid in std::mem::take(&mut *CLIENTS.lock().unwrap()) {
+        end_process(pid);
+    }
+}
+
+#[cfg(windows)]
+fn end_process(pid: u32) {
+    use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    let Ok(handle) = (unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) }) else { return };
+    unsafe {
+        let _ = TerminateProcess(handle, 1);
+        let _ = windows::Win32::Foundation::CloseHandle(handle);
+    }
+}
+
+#[cfg(not(windows))]
+fn end_process(pid: u32) {
+    unsafe {
+        let _ = libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    }
+}
+
+/// What `GetExitCodeProcess` answers for a process that has not stopped yet (winbase's
+/// `STILL_ACTIVE`; the `windows` crate 0.62 has no such constant to name it).
+#[cfg(all(test, windows))]
+const RUNS: u32 = 259;
+
+/// Whether an id still names a running process — what the test below checks the ending against.
+#[cfg(all(test, windows))]
+fn process_runs(pid: u32) -> bool {
+    use windows::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    let Ok(handle) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else { return false };
+    let mut code = 0u32;
+    let answered = unsafe { GetExitCodeProcess(handle, &mut code) }.is_ok();
+    unsafe {
+        let _ = windows::Win32::Foundation::CloseHandle(handle);
+    }
+    answered && code == RUNS
+}
+
+#[cfg(all(test, not(windows)))]
+fn process_runs(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+/// Reads a started client to the end of both streams and waits for it, which is what `output()` does
+/// — spelled out here because the call has to name the client's id while the answer is read, so that
+/// `end_our_clients` reaches a read an ending instance left behind.
+fn read_answer(mut child: std::process::Child) -> std::io::Result<std::process::Output> {
+    let _reading = Reading::started(&child);
+    let complaint = child.stderr.take().map(|mut stream| std::thread::spawn(move || { let mut bytes = Vec::new(); stream.read_to_end(&mut bytes).map(|_| bytes) }));
+    let mut answer = Vec::new();
+    if let Some(mut stream) = child.stdout.take() {
+        stream.read_to_end(&mut answer)?;
+    }
+    let status = child.wait()?;
+    let stderr = match complaint.map(|reader| reader.join()) {
+        Some(Ok(bytes)) => bytes?,
+        Some(Err(_)) => return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the reader of the client's complaint stopped before the client did")),
+        None => Vec::new(),
+    };
+    Ok(std::process::Output { status, stdout: answer, stderr })
+}
+
+/// Starts the command and reads its answer — `Command::output` under another name, so that the error
+/// of a program that is simply not there still reaches the caller's words about it, and so that a
+/// caller which built its own `Command` still has the client it started registered: only a client in
+/// the registry can be ended by `end_our_clients`.
+pub fn read_of(command: &mut Command) -> std::io::Result<std::process::Output> {
+    // The streams are named here rather than left to the caller: `Command::output` does the same, and
+    // a client whose output is not a pipe answers into whoever started it — into this program's own
+    // streams, for a windowed program. The six Git scenarios measured exactly that on 2026-11-17,
+    // every window reading an empty answer.
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    read_answer(command.spawn()?)
+}
+
 /// The same, for a program named directly: the shape of the answer does not depend on which tool
 /// a scenario is out to talk to.
 pub fn ask(program: &str, dir: &Path, argv: &[impl AsRef<std::ffi::OsStr>]) -> Answer {
@@ -65,7 +188,7 @@ pub fn ask(program: &str, dir: &Path, argv: &[impl AsRef<std::ffi::OsStr>]) -> A
     // a black window, since this program has no console for them to share.
     #[cfg(windows)]
     crate::win::console::no_window(&mut command);
-    match command.output() {
+    match read_of(&mut command) {
         Ok(out) => {
             let text = joined(&out.stdout, &out.stderr);
             let code = out.status.code();
@@ -111,7 +234,7 @@ pub fn output(program: &str, dir: &Path, argv: &[impl AsRef<std::ffi::OsStr>]) -
     command.env("LC_ALL", "C").env("LANG", "C").env("PAGER", "").env("GIT_PAGER", "").env("HGPLAIN", "1").env("GIT_TERMINAL_PROMPT", "0").env("GIT_OPTIONAL_LOCKS", "0").env("SVN_INTERACTIVE", "false");
     #[cfg(windows)]
     crate::win::console::no_window(&mut command);
-    match command.output() {
+    match read_of(&mut command) {
         Ok(out) if out.status.success() => Ok(out.stdout),
         Ok(out) => {
             let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -208,6 +331,38 @@ mod tests {
         };
         run(&["init", "-q"]);
         Some((d, dir))
+    }
+
+    /// A read that is still in flight when the instance ends must not leave its client running
+    /// behind it: invisible, at no CPU, holding handles and a pipe nobody reads (docs\TOOL-STARTS.md).
+    /// The registry is what lets the ending reach a tool the reader has no handle for.
+    #[test]
+    fn a_client_still_reading_when_the_instance_ends_is_ended_there() {
+        // A program that answers for far longer than the scenario waits for it: `ping` to the loopback
+        // address on Windows, `sleep` where there is no `ping` with those arguments.
+        let (program, argv): (&str, Vec<String>) = if cfg!(windows) { ("ping", vec!["-n".into(), "40".into(), "127.0.0.1".into()]) } else { ("sleep", vec!["40".into()]) };
+        let named = format!("{program} {argv:?}");
+        let before = our_clients();
+        let reading = std::thread::spawn(move || ask(program, Path::new("."), &argv));
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let pid = loop {
+            // Another scenario's client can be registered here too, so this one is the id that was
+            // not in the list before this call started.
+            if let Some(pid) = our_clients().into_iter().find(|p| !before.contains(p)) {
+                break pid;
+            }
+            assert!(std::time::Instant::now() < until, "the call never registered the client it started, so nothing would end it");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        end_process(pid);
+        let answer = reading.join().expect("the read did not come back when its client was ended");
+        assert!(!answer.ok, "a client that was ended refuses the read it was answering: {:?}", answer.text);
+        assert!(!our_clients().contains(&pid), "the client stayed registered after its read came back");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while process_runs(pid) && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!process_runs(pid), "{named} of pid {pid} is still running, which is what an ending instance used to leave behind");
     }
 
     #[test]

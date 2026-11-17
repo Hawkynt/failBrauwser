@@ -34,7 +34,12 @@ pub fn command(dir: &Path) -> Command {
 
 /// Runs git in `dir` and returns what it printed, or its error message.
 pub fn run(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = command(dir).env("GIT_OPTIONAL_LOCKS", "0").args(args).output().map_err(|e| format!("git cannot be started: {e}"))?;
+    let mut c = command(dir);
+    c.env("GIT_OPTIONAL_LOCKS", "0").args(args);
+    // Read through `run::read_of` rather than `output()`, so that this — the one funnel every status,
+    // log, blame and file list of the windows goes through — has its git ended with the instance
+    // rather than left running behind it (docs\TOOL-STARTS.md).
+    let out = super::run::read_of(&mut c).map_err(|e| format!("git cannot be started: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -46,12 +51,20 @@ pub fn run(dir: &Path, args: &[&str]) -> Result<String, String> {
 /// Whether the git command is there at all (asked once).
 pub fn available() -> bool {
     static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FOUND.get_or_init(|| command(Path::new(".")).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success()))
+    *FOUND.get_or_init(|| {
+        // No null streams here: `read_of` names pipes and reads both to the end, so this probe's
+        // answer is read and dropped rather than left in a handle nobody drains.
+        let mut c = command(Path::new("."));
+        c.arg("--version");
+        super::run::read_of(&mut c).is_ok_and(|out| out.status.success())
+    })
 }
 
 /// The version git reports ("2.56.1").
 pub fn version() -> Option<String> {
-    let out = command(Path::new(".")).arg("--version").output().ok()?;
+    let mut c = command(Path::new("."));
+    c.arg("--version");
+    let out = super::run::read_of(&mut c).ok()?;
     let s = String::from_utf8_lossy(&out.stdout);
     s.trim().strip_prefix("git version ").map(str::to_string)
 }
@@ -291,8 +304,9 @@ impl Repo {
 
     /// The text of `path` at `rev` ("" when it did not exist there).
     pub fn show_file(&self, rev: &str, path: &str) -> Vec<u8> {
-        let out = command(&self.root).args(["show", &format!("{rev}:{path}")]).output();
-        out.ok().filter(|o| o.status.success()).map(|o| o.stdout).unwrap_or_default()
+        let mut c = command(&self.root);
+        c.args(["show", &format!("{rev}:{path}")]);
+        super::run::read_of(&mut c).ok().filter(|o| o.status.success()).map(|o| o.stdout).unwrap_or_default()
     }
 
     /// The two commits that last changed `path`: (the latest, the one before it).

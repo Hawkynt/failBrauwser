@@ -271,7 +271,7 @@ impl Cvs {
         super::run::non_interactive(&mut c);
         #[cfg(windows)]
         crate::win::console::no_window(&mut c);
-        let out = c.output().map_err(|e| format!("cvs could not be started: {e}"))?;
+        let out = super::run::read_of(&mut c).map_err(|e| format!("cvs could not be started: {e}"))?;
         match out.status.code() {
             Some(0) | Some(1) => Ok(out.stdout),
             _ => Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),

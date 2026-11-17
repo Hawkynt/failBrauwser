@@ -349,7 +349,7 @@ pub fn patch_create(w: &Window, t: Target, wc: Wc) {
         failbrauwser::vcs::run::non_interactive(&mut c);
         #[cfg(windows)]
         failbrauwser::win::console::no_window(&mut c);
-        let out = c.output();
+        let out = failbrauwser::vcs::run::read_of(&mut c);
         match out {
             Ok(o) if o.status.code().is_some_and(|c| c <= 1) => {
                 if let Err(e) = std::fs::write(&dest, &o.stdout) {
