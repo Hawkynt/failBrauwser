@@ -2,6 +2,7 @@
 //! record what is installed, the system's Rust 1.85 (older than the bindings need), and
 //! `curl` handing out a stand-in for rustup's installer. Nothing is downloaded or installed
 //! for real.
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
