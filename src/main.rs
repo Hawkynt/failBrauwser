@@ -20,6 +20,10 @@ Options:
 ";
 
 fn main() -> gtk::glib::ExitCode {
+    // Before anything is started: the streams this program was given stay its own, so no tool it
+    // runs holds a second copy of them (win\console.rs).
+    #[cfg(windows)]
+    failbrauwser::win::console::keep_our_handles_from_children();
     // Windows keeps autostart in the per-user Run key (Linux ships an XDG autostart file);
     // managed from here so no installer magic is needed, and answered without opening GTK.
     #[cfg(windows)]
