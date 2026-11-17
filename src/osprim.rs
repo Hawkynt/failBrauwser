@@ -20,7 +20,8 @@ pub struct Identity {
 // the trailing fallback is only reachable on targets that are neither Unix nor Windows
 #[cfg_attr(any(unix, windows), allow(unreachable_code))]
 pub fn identity(path: &Path, meta: &std::fs::Metadata) -> Identity {
-    let _ = meta;
+    // Unix reads the metadata, Windows asks the path.
+    let _ = (path, meta);
     #[cfg(unix)]
     return unix_identity(meta);
     #[cfg(windows)]
@@ -135,6 +136,9 @@ pub fn set_times(path: &Path, atime: (i64, i64), mtime: (i64, i64), follow: bool
 
 /// Recreate a symbolic link (the copy engine replans link targets verbatim).
 pub fn make_symlink(target: &Path, link: &Path, target_is_dir: bool) -> io::Result<()> {
+    // Only Windows makes folder links differently from file links.
+    #[cfg(unix)]
+    let _ = target_is_dir;
     #[cfg(unix)]
     return std::os::unix::fs::symlink(target, link);
     #[cfg(windows)]
@@ -447,6 +451,7 @@ fn win_device_of(path: &Path) -> Option<u64> {
 }
 
 /// The volume root of `path` as a plain string: `C:\` or `\\server\share\`.
+#[cfg(windows)]
 fn win_volume_root(path: &Path) -> Option<String> {
     let text = path.to_string_lossy().replace('/', "\\");
     if text.starts_with("\\\\?\\") {

@@ -74,7 +74,9 @@ pub enum Item {
     /// A search result inside an archive: the archive folder holding it, the entry, and
     /// where that is (for the Folder column).
     FoundInArchive(failbrauwser::location::ArchiveLoc, ArchiveNode, String),
-    /// A folder entry on a remote server (SFTP/FTP; the pane's location is its folder).
+    /// A folder entry on a remote server (SFTP/FTP; the pane's location is its folder). Only
+    /// Windows browses servers itself; elsewhere GVfs mounts them as folders.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Remote(failbrauwser::location::RemoteEntry),
 }
 

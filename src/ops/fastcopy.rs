@@ -55,6 +55,7 @@ pub fn wait_sharing_retry(e: &io::Error, attempt: &mut u32) -> bool {
     }
 }
 
+#[cfg(windows)]
 const SHARING_TRIES: u32 = 4;
 
 #[cfg(unix)]
