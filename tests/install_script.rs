@@ -279,3 +279,69 @@ fn systemd_reads_the_environment_file_as_meant() {
     assert_eq!(read(None), module.display().to_string());
     assert_eq!(read(Some("/x/other.so")), format!("{}:/x/other.so", module.display()));
 }
+
+/// A source folder as a download has it (no .git), with stand-ins that build: `cargo` writes
+/// the program into the build folder it is given and logs which, `make helper` writes the archive
+/// helper and logs that it ran, `dotnet` is an SDK 10.
+fn buildable_source(deb: &Debian) {
+    let src = deb.path("src");
+    let t = deb.dir.path().display().to_string();
+    let copy = Command::new("cp").arg("-r").arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("data")).arg(&src).status().unwrap();
+    assert!(copy.success());
+    std::fs::write(src.join("Makefile"), "helper:\n").unwrap();
+    std::fs::create_dir_all(src.join("helper/FbArchive")).unwrap();
+    std::fs::write(src.join("helper/FbArchive/Program.cs"), "// one\n").unwrap();
+    std::fs::create_dir_all(src.join("vendor/compressionworkbench/Compression.Lib")).unwrap();
+    std::fs::write(src.join("vendor/compressionworkbench/Compression.Lib/Compression.Lib.csproj"), "<Project/>\n").unwrap();
+    write_exe(
+        &deb.path("bin/cargo"),
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'cargo 1.92.0' ;;\n  tree) echo 'gtk v0.19'; echo 'glib v0.19' ;;\n  build) echo \"build ${{CARGO_TARGET_DIR:-target}}\" >> {t}/cargo.log\n    out=\"${{CARGO_TARGET_DIR:-target}}/release\"; mkdir -p \"$out\"\n    printf '#!/bin/sh\\nexit 0\\n' > \"$out/failbrauwser\"; chmod +x \"$out/failbrauwser\" ;;\nesac\n"
+        ),
+    );
+    write_exe(
+        &deb.path("bin/make"),
+        &format!("#!/bin/sh\necho \"$1\" >> {t}/make.log\n[ \"$1\" = helper ] || exit 0\nmkdir -p target/helper\nprintf '#!/bin/sh\\necho helper\\n' > target/helper/fb-archive\nchmod +x target/helper/fb-archive\n"),
+    );
+    write_exe(&deb.path("bin/dotnet"), "#!/bin/sh\n[ \"$1\" = --list-sdks ] && echo '10.0.100 [/sdk]'\nexit 0\n");
+}
+
+#[test]
+fn a_downloaded_source_builds_again_only_what_changed() {
+    let deb = Debian::new("1.92.0", &["build-essential", "pkg-config", "libgtk-3-dev", "zlib1g-dev"]);
+    buildable_source(&deb);
+    let prefix = deb.path("prefix");
+    let args = ["--prefix", &prefix.to_string_lossy(), "--no-autostart", "--no-network", "--no-file-chooser"];
+    let build_dir = deb.path("home/.cache/failbrauwser/build");
+
+    // The first build: every crate counted, the helper built and kept.
+    let o = deb.install(&args);
+    let out = text(&o);
+    assert!(o.status.success(), "{out}");
+    assert!(out.contains("Building failBrauwser: 2 crates"), "{out}");
+    assert_eq!(deb.read("cargo.log"), format!("build {}\n", build_dir.display()), "a download builds into the kept folder");
+    assert_eq!(deb.read("make.log"), "helper\n");
+    assert!(prefix.join("lib/failbrauwser/fb-archive").exists() && prefix.join("bin/failbrauwser").exists());
+
+    // Again from the same sources: the helper is taken as it is, the build folder goes on.
+    let o = deb.install(&args);
+    let out = text(&o);
+    assert!(o.status.success(), "{out}");
+    assert!(out.contains("archive helper is unchanged"), "{out}");
+    assert!(out.contains(" Building failBrauwser\n"), "a build that goes on is not counted: {out}");
+    assert_eq!(deb.read("make.log"), "helper\n", "the helper was not built again");
+    assert!(prefix.join("lib/failbrauwser/fb-archive").exists());
+
+    // A changed helper source builds it again, and only the newest one is kept.
+    std::fs::write(deb.path("src/helper/FbArchive/Program.cs"), "// two\n").unwrap();
+    let o = deb.install(&args);
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(deb.read("make.log"), "helper\nhelper\n");
+    assert_eq!(std::fs::read_dir(deb.path("home/.cache/failbrauwser/helper")).unwrap().count(), 1);
+
+    // A git checkout keeps its own target folder.
+    std::fs::create_dir(deb.path("src/.git")).unwrap();
+    let o = deb.install(&args);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(deb.read("cargo.log").ends_with("build target\n"), "{}", deb.read("cargo.log"));
+}

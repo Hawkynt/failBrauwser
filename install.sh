@@ -46,6 +46,9 @@ DEPS_ONLY=0
 # The options to remember for updates (Help > Check for Updates installs the same way).
 KEPT=()
 CWB_ROOT=${CWB_ROOT:-"$HERE/vendor/compressionworkbench"}
+# What building keeps for the next build: the Rust build folder of a downloaded source, and the
+# archive helper last built.
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/failbrauwser"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -250,7 +253,14 @@ if [ "$UNINSTALL" = 1 ]; then
     exit 0
 fi
 
-APP_BIN="$HERE/target/release/failbrauwser"
+# Outside a git checkout (a downloaded source, as Help > Check for Updates builds it) the Rust
+# build folder is kept in the cache, so the next build compiles only what changed and not
+# every crate again.
+if [ ! -e "$HERE/.git" ] && [ -z "${CARGO_TARGET_DIR:-}" ]; then
+    export CARGO_TARGET_DIR="$CACHE_DIR/build"
+fi
+case "${CARGO_TARGET_DIR:-}" in ""|/*) ;; *) export CARGO_TARGET_DIR="$HERE/$CARGO_TARGET_DIR" ;; esac
+APP_BIN="${CARGO_TARGET_DIR:-$HERE/target}/release/failbrauwser"
 if [ "$PREBUILT" = 1 ]; then
     # A release package: the program and the archive helper are built already.
     APP_BIN="$HERE/bin/failbrauwser"
@@ -305,7 +315,28 @@ else
         exit 0
     fi
 
+    # The archive helper's sources, hashed: a helper built from the same ones before is taken
+    # as it is (no .NET SDK needed then), since its native compile takes a minute or more.
+    HELPER_CACHE="$CACHE_DIR/helper"
+    helper_key() {
+        command -v sha256sum >/dev/null || return 1
+        {
+            (cd "$HERE" && sha256sum Makefile)
+            for d in "$HERE/helper" "$CWB_ROOT"; do
+                (cd "$d" && find . -type f ! -path '*/bin/*' ! -path '*/obj/*' ! -path './.git/*' -print0 | sort -z | xargs -0 sha256sum)
+            done
+            uname -m
+        } | sha256sum | cut -c1-32
+    }
+    HELPER_KEY=""
+
     if [ "$ARCHIVES" = 1 ] && [ -f "$CWB_ROOT/Compression.Lib/Compression.Lib.csproj" ]; then
+        HELPER_KEY=$(helper_key 2>/dev/null) || HELPER_KEY=""
+    fi
+    if [ -n "$HELPER_KEY" ] && [ -x "$HELPER_CACHE/$HELPER_KEY/fb-archive" ]; then
+        say "The archive helper is unchanged since it was last built: taken from $HELPER_CACHE"
+        HELPER="$HELPER_CACHE/$HELPER_KEY/fb-archive"
+    elif [ "$ARCHIVES" = 1 ] && [ -f "$CWB_ROOT/Compression.Lib/Compression.Lib.csproj" ]; then
         if DOTNET=$(find_dotnet); then
             # The helper is compiled to native code, which needs a C toolchain to link.
             AOT_LINKER=()
@@ -333,7 +364,12 @@ else
 
     # The crates the build compiles, one "Compiling" line each: the update window's progress
     # bar counts them (README, Updates). Unknown when cargo cannot answer.
-    UNITS=$(cd "$HERE" && cargo tree -e normal,build --prefix none --locked 2>/dev/null | sed 's/ (\*)$//; s/ (proc-macro)//' | sort -u | wc -l)
+    # A build folder that holds a build already compiles only what changed: no count then, the
+    # bar pulses.
+    UNITS=0
+    if [ ! -e "${CARGO_TARGET_DIR:-$HERE/target}/release/failbrauwser" ]; then
+        UNITS=$(cd "$HERE" && cargo tree -e normal,build --prefix none --locked 2>/dev/null | sed 's/ (\*)$//; s/ (proc-macro)//' | sort -u | wc -l)
+    fi
     if [ "${UNITS:-0}" -gt 0 ]; then say "Building failBrauwser: $UNITS crates"; else say "Building failBrauwser"; fi
     (cd "$HERE" && cargo build --release --locked)
 
@@ -350,6 +386,13 @@ else
         say "Waiting for the archive helper"
         if wait "$HELPER_PID"; then
             HELPER="$HERE/target/helper/fb-archive"
+            # Kept for the next build from the same sources (only the newest one).
+            if [ -n "$HELPER_KEY" ]; then
+                rm -rf "$HELPER_CACHE"
+                mkdir -p "$HELPER_CACHE/$HELPER_KEY" &&
+                    cp "$HELPER" "$HELPER_CACHE/$HELPER_KEY/fb-archive.part" &&
+                    mv "$HELPER_CACHE/$HELPER_KEY/fb-archive.part" "$HELPER_CACHE/$HELPER_KEY/fb-archive" || true
+            fi
         else
             grep -v 'warning CS' "$HELPER_LOG" | tail -20 >&2
             echo "warning: the archive helper did not build (log: $HELPER_LOG) — installing without archive support" >&2
