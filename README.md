@@ -120,7 +120,11 @@ Starting failBrauwser on Windows never opens a console window: the program file 
 a windowed program, so a double-click, the Start Menu entry and the single-file launcher each
 show only failBrauwser's own window. Started from a terminal it still answers `--help`,
 `--version` and `--quit` in that terminal, and the archive helper it starts runs without a
-window of its own and ends together with the instance that started it.
+window of its own and ends together with the instance that started it. The same holds for every
+program it starts in the background — a version-control client, `curl`, the update's swap script —
+and where a window is the point (a terminal asked for, the administrator's password) it does
+appear: [docs/TOOL-STARTS.md](docs/TOOL-STARTS.md) lists every start, on both systems, and what
+bounds it.
 
 `winpack\bootstrap.ps1` fetches the pinned GTK stack (list in `winpack\packages.txt`) into
 `winpack\sysroot` from the MSYS2 repository named in `winpack\mirror.txt` — here the company

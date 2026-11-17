@@ -90,7 +90,9 @@ same program built without any handle guard also survived a start through the sh
 `NUL`-redirecting startup code is therefore part of the release. `fb-archive.exe` is
 started with `CREATE_NO_WINDOW` and watches the process id the program hands it as `--parent`:
 it quits within a second once that instance is gone, request running or not, and while the
-instance lives it stops 45 s after its last request.
+instance lives it stops 45 s after its last request. [TOOL-STARTS.md](TOOL-STARTS.md) audits every
+other program the release starts — the version-control clients, `curl`, the update's swap script,
+the elevation helper — and what bounds each of them on both systems.
 
 The mouse's back and forward keys are read by the program itself, not by GTK. Measured here on
 2026-11-13 by posting messages to a realized GTK toplevel: `WM_XBUTTONDOWN` (`0x020B`, `winuser.h`)

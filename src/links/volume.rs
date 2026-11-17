@@ -349,7 +349,11 @@ fn edit_fstab(change: impl FnOnce(&str) -> String) -> io::Result<()> {
     }
     r?;
     if path == Path::new("/etc/fstab") {
-        let _ = std::process::Command::new("systemctl").arg("daemon-reload").status();
+        let mut c = std::process::Command::new("systemctl");
+        c.arg("daemon-reload").stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        crate::win::console::no_window(&mut c); // the rule in tests\source_rules.rs: no start raises a window
+        let _ = c.status();
     }
     Ok(())
 }

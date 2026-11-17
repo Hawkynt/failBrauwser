@@ -112,13 +112,20 @@ impl Elevation {
     pub fn run(&self, args: Vec<OsString>, progress: &mut dyn FnMut(&str) -> bool) -> io::Result<Reply> {
         use std::process::{Command, Stdio};
         let (program, first) = self.argv.split_first().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no helper"))?;
-        let mut child = Command::new(program)
+        let mut command = Command::new(program);
+        command
             .args(first)
             .arg(ARG)
             .args(&args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        // tests\source_rules.rs asks this of every start: no window of its own. The elevation run is the
+        // Unix path (a Windows build keeps its backup privileges in-process, ui\links.rs), but a Windows
+        // build can still reach it through FAILBRAUWSER_ELEVATE. pkexec's own auth dialog is the point.
+        #[cfg(windows)]
+        crate::win::console::no_window(&mut command);
+        let mut child = command
             .spawn()
             .map_err(|e| if e.kind() == io::ErrorKind::NotFound { io::Error::new(e.kind(), format!("cannot start {}: {e}", program.to_string_lossy())) } else { e })?;
         let mut stdin = child.stdin.take();

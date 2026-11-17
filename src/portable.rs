@@ -43,7 +43,18 @@ fn main() {
         }
         refresh_loader_cache(&prefix.join("bin"));
     }
-    let status = match Command::new(&exe).args(std::env::args_os().skip(1)).status() {
+    let mut app = Command::new(&exe);
+    app.args(std::env::args_os().skip(1));
+    // The same flag as win::console::CREATE_NO_WINDOW, spelled out because the launcher crate
+    // (winpack\onefile) builds this file with no win module of its own. The hand-over changes no
+    // window — the target is this program's own windowed file — and the rule in tests\source_rules.rs
+    // is kept exception-free, so a forgotten guard is a failing test rather than a desktop surprise.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        app.creation_flags(0x0800_0000);
+    }
+    let status = match app.status() {
         Ok(s) => s,
         Err(e) => {
             report(&format!("{} could not start: {e}", exe.display()));

@@ -804,7 +804,13 @@ async fn list_shares(parent: &gtk::Window, host: &str) -> Result<Vec<Share>, Str
     // Without GVfs's SMB browsing: ask as a guest.
     let host = host.to_string();
     let guest = gio::spawn_blocking(move || {
-        let out = std::process::Command::new("smbclient").args(["-g", "-N", "-L", &format!("//{host}")]).output().ok()?;
+        let mut c = std::process::Command::new("smbclient");
+        // -N: never ask for a password, which on Linux is a prompt on the terminal and on a Samba
+        // build for Windows a window of its own.
+        c.args(["-g", "-N", "-L", &format!("//{host}")]);
+        #[cfg(windows)]
+        failbrauwser::win::console::no_window(&mut c); // the rule in tests\source_rules.rs: no start raises a window
+        let out = c.output().ok()?;
         Some(network::parse_smbclient(&String::from_utf8_lossy(&out.stdout)))
     })
     .await

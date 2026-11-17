@@ -1418,7 +1418,11 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         "screenshot" => {
             let file = arg.to_string();
             // Let GTK paint first.
-            let status = std::process::Command::new("grim").arg(&file).status().map_err(|e| e.to_string())?;
+            let mut c = std::process::Command::new("grim");
+            c.arg(&file).stdin(std::process::Stdio::null());
+            #[cfg(windows)]
+            failbrauwser::win::console::no_window(&mut c); // the rule in tests\source_rules.rs: no start raises a window
+            let status = c.status().map_err(|e| e.to_string())?;
             if !status.success() {
                 return Err("grim failed".into());
             }

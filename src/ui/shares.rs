@@ -470,7 +470,11 @@ fn offer_restart(w: &Rc<Window>, root: &Path) {
         let root = root.clone();
         glib::spawn_future_local(async move {
             let ok = gio::spawn_blocking(|| {
-                std::process::Command::new("systemctl").args(["--user", "restart", "gvfs-daemon"]).status().is_ok_and(|s| s.success())
+                let mut c = std::process::Command::new("systemctl");
+                c.args(["--user", "restart", "gvfs-daemon"]).stdin(std::process::Stdio::null());
+                #[cfg(windows)]
+                failbrauwser::win::console::no_window(&mut c); // the rule in tests\source_rules.rs: no start raises a window
+                c.status().is_ok_and(|s| s.success())
             })
             .await
             .unwrap_or(false);
