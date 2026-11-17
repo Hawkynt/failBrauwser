@@ -80,11 +80,18 @@ pub fn script_path() -> Option<String> {
     std::env::var("FB_SELFTEST").ok().filter(|s| !s.is_empty())
 }
 
+/// A pending `wait` step: when it started and the check that must answer true before the budget runs
+/// out. A check that gets to explain what it saw writes into `Runner::note`.
+type Wait = (Instant, Box<dyn Fn(&Runner) -> Result<bool, String>>);
+
 struct Runner {
     steps: VecDeque<(usize, String)>,
     window: Rc<Window>,
     app: Rc<AppCtx>,
-    waiting: Option<(Instant, Box<dyn Fn(&Runner) -> Result<bool, String>>)>,
+    waiting: Option<Wait>,
+    /// What the current wait last saw, when that is worth more than "timed out": a file's text, a
+    /// row list. The timeout message appends it; `wait` starts each wait with an empty one.
+    note: RefCell<Option<String>>,
     /// The step being run or waited for, for failure messages.
     current: (usize, String),
 }
@@ -122,7 +129,7 @@ pub fn start(app: &Rc<AppCtx>, window: &Rc<Window>) {
         })
         .filter(|(_, l)| !l.is_empty() && !l.starts_with('#'))
         .collect();
-    let runner = Rc::new(RefCell::new(Runner { steps, window: window.clone(), app: app.clone(), waiting: None, current: (0, String::new()) }));
+    let runner = Rc::new(RefCell::new(Runner { steps, window: window.clone(), app: app.clone(), waiting: None, note: Default::default(), current: (0, String::new()) }));
     glib::timeout_add_local(Duration::from_millis(50), move || {
         let mut r = runner.borrow_mut();
         if let Some((since, check)) = r.waiting.take() {
@@ -142,10 +149,11 @@ pub fn start(app: &Rc<AppCtx>, window: &Rc<Window>) {
                         _ => Vec::new(),
                     };
                     let selected: Vec<String> = p.selected_items().iter().map(|i| i.display_name()).collect();
+                    let note = r.note.borrow().clone().map(|n| format!(", {n}")).unwrap_or_default();
                     fail(
                         r.current.0,
                         &format!(
-                            "{}: timed out (location {}, {} rows, selected {:?}, archive root {:?}, error {:?}, loading {}, jobs busy {})",
+                            "{}: timed out (location {}, {} rows, selected {:?}, archive root {:?}, error {:?}, loading {}, jobs busy {}{note})",
                             r.current.1,
                             p.location().display(),
                             p.item_count(),
@@ -678,10 +686,22 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         }
         "use-newest-window" => r.window = r.app.windows().last().cloned().ok_or("no window")?,
         "wait-file-text" => {
-            // wait-file-text <path> = <text it contains>
+            // wait-file-text <path> = <text it contains>. A timeout also names what the file did
+            // hold: "timed out" alone cannot tell a checkout that landed on another commit from a
+            // file that never arrived, and the two want different fixes.
             let (path, want) = arg.split_once(" = ").ok_or("usage: wait-file-text <path> = <text>")?;
             let (path, want) = (path.to_string(), want.to_string());
-            wait(r, move |_| Ok(std::fs::read_to_string(&path).is_ok_and(|t| t.contains(&want))));
+            wait(r, move |r| {
+                let got = std::fs::read_to_string(&path);
+                let hit = got.as_ref().is_ok_and(|t| t.contains(&want));
+                if !hit {
+                    *r.note.borrow_mut() = Some(match got {
+                        Ok(t) => format!("{path} holds {:?}", t.chars().take(120).collect::<String>()),
+                        Err(e) => format!("{path} is unreadable: {e}"),
+                    });
+                }
+                Ok(hit)
+            });
         }
         "wait-chooser" => wait(r, |_| Ok(super::chooser::current().is_some_and(|(_, w)| !w.current_pane().is_loading()))),
         "chooser-open" => {
@@ -1452,5 +1472,6 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
 }
 
 fn wait(r: &mut Runner, check: impl Fn(&Runner) -> Result<bool, String> + 'static) {
+    *r.note.borrow_mut() = None;
     r.waiting = Some((Instant::now(), Box::new(check)));
 }
