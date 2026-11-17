@@ -24,6 +24,10 @@ fn sh(dir: &Path, program: &str, args: &[&str]) -> String {
         .env("HGPLAIN", "1")
         .env("HGRCPATH", "")
         .env("HGUSER", "fixture <fixture@example>")
+        // Nothing of the user's own git configuration: on Unix that is the null device, and on
+        // Windows this resolves to a path under the current drive that is not there, which git
+        // ignores. It cannot be NUL: git answers `unable to access 'NUL': Invalid argument` for the
+        // device name and for a rooted one alike (measured here 2026-11-17).
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("CVS_RSH", "false")
@@ -71,7 +75,11 @@ impl Fixture {
             }
             Tool::Subversion => {
                 sh(&base, "svnadmin", &["create", "repo"]);
-                let url = format!("file://{}/repo", base.display());
+                // Forward slashes either way; a Windows path is a drive letter, so it also needs the
+                // third slash, which `file://C:/…` would otherwise spend on a host name (svn answers
+                // E170000 "Illegal repository URL" for that, and for the backslashes as well).
+                let path = base.display().to_string().replace('\\', "/");
+                let url = if cfg!(windows) { format!("file:///{path}/repo") } else { format!("file://{path}/repo") };
                 sh(&base, "svn", &["mkdir", "-q", "-m", "layout", &format!("{url}/trunk"), &format!("{url}/branches"), &format!("{url}/tags")]);
                 sh(&base, "svn", &["checkout", "-q", &format!("{url}/trunk"), "wc"]);
             }

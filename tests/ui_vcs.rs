@@ -22,7 +22,9 @@ fn env(t: &Path) -> Vec<(String, String)> {
     vec![
         ("HGRCPATH".into(), t.join("hgrc").display().to_string()),
         ("HGUSER".into(), "Ann Tester <ann@example.org>".into()),
-        ("GIT_CONFIG_GLOBAL".into(), if cfg!(windows) { "NUL".into() } else { "/dev/null".into() }),
+        // git's configuration is this test's own file, empty: git refuses the null device on Windows
+        // (`unable to access 'NUL': Invalid argument`, measured 2026-11-17).
+        ("GIT_CONFIG_GLOBAL".into(), t.join("gitconfig").display().to_string()),
         ("LC_ALL".into(), "C".into()),
     ]
 }
@@ -88,6 +90,7 @@ fn run(script: &str, tool: &str, needs: &[&str]) {
     let t = dir.path();
     std::fs::create_dir_all(t.join("config/failbrauwser")).unwrap();
     std::fs::write(t.join("config/failbrauwser/settings.ini"), "[General]\nvcs_integration=true\n").unwrap();
+    std::fs::write(t.join("gitconfig"), "").unwrap();
     working_copy(t, tool);
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let script_path = root.join("tests/ui").join(script);
