@@ -61,6 +61,8 @@ fi
 # Before the private bus starts: services it activates (Tumbler, …) use the test folders too.
 export XDG_CONFIG_HOME="$T/config" XDG_DATA_HOME="$T/data" XDG_CACHE_HOME="$T/cache" GTK_A11Y=none NO_AT_BRIDGE=1
 export XDG_RUNTIME_DIR=$RUNDIR
+# The user's own ~/.ssh/config stays out of the scenarios (Add Server lists its hosts).
+export FAILBRAUWSER_SSH_CONFIG="${FAILBRAUWSER_SSH_CONFIG:-$T/ssh_config}"
 exec dbus-run-session -- bash -c '
   unset DISPLAY
   before=$(ls "$XDG_RUNTIME_DIR" | grep -E "^wayland-[0-9]+$" | sort)

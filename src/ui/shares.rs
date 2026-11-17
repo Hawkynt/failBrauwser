@@ -244,18 +244,32 @@ fn share_uri(root: &Path) -> Option<String> {
     failbrauwser::win::wnet::smb_for_unc(root)
 }
 
-/// The address a share was mounted from: GIO knows it while the mount exists; an SMB share's
-/// folder name also spells it out.
+/// The address a share was mounted from: GIO knows it while the mount exists; the folder name
+/// of an SMB share or an SSH server also spells it out.
 #[cfg(unix)]
 fn share_uri(root: &Path) -> Option<String> {
     let uri = gio::File::for_path(root).uri().to_string();
     if !uri.starts_with("file:") {
         return Some(uri);
     }
-    let dir = root.file_name()?.to_string_lossy().into_owned();
-    let rest = dir.strip_prefix("smb-share:")?;
+    uri_of_folder_name(&root.file_name()?.to_string_lossy())
+}
+
+/// `smb://server/share` for `smb-share:server=…,share=…`, `sftp://user@host:port/` for
+/// `sftp:host=…,user=…,port=…`.
+#[cfg(unix)]
+fn uri_of_folder_name(dir: &str) -> Option<String> {
+    let (kind, rest) = dir.split_once(':')?;
     let field = |key: &str| rest.split(',').find_map(|kv| kv.strip_prefix(key).map(str::to_string));
-    Some(format!("smb://{}/{}", field("server=")?, field("share=")?))
+    match kind {
+        "smb-share" => Some(format!("smb://{}/{}", field("server=")?, field("share=")?)),
+        "sftp" => {
+            let user = field("user=").map(|u| format!("{u}@")).unwrap_or_default();
+            let port = field("port=").map(|p| format!(":{p}")).unwrap_or_default();
+            Some(format!("sftp://{user}{}{port}/", field("host=")?))
+        }
+        _ => None,
+    }
 }
 
 /// Tells that a share does not answer and offers to mount it again.
@@ -442,7 +456,9 @@ mod tests {
     fn smb_share_addresses_from_folder_names() {
         let root = gvfs::fuse_root().join("smb-share:server=192.168.1.198,share=gamingcrypt-drive");
         assert_eq!(share_uri(&root).as_deref(), Some("smb://192.168.1.198/gamingcrypt-drive"));
-        assert_eq!(share_uri(&gvfs::fuse_root().join("sftp:host=x")), None);
+        assert_eq!(share_uri(&gvfs::fuse_root().join("sftp:host=neon_whisper")).as_deref(), Some("sftp://neon_whisper/"));
+        assert_eq!(share_uri(&gvfs::fuse_root().join("sftp:host=pi.local,port=2222,user=me")).as_deref(), Some("sftp://me@pi.local:2222/"));
+        assert_eq!(share_uri(&gvfs::fuse_root().join("mtp:host=Pixel")), None);
     }
 
     #[test]

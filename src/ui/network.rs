@@ -546,10 +546,26 @@ impl NetworkPage {
         address.set_xalign(0.0);
         address.set_selectable(true);
         address.style_context().add_class("dim-label");
+        // The hosts of ~/.ssh/config, for SFTP: picking one fills the form (README: Network).
+        let ssh_hosts = failbrauwser::sshconfig::hosts();
+        let ssh = gtk::ComboBoxText::new();
+        ssh.set_widget_name("server-ssh-host");
+        ssh.append(Some(""), "None: enter the details below");
+        for h in &ssh_hosts {
+            ssh.append(Some(h), h);
+        }
+        ssh.set_active_id(Some(ssh_hosts.iter().find(|h| h.eq_ignore_ascii_case(&parts.host)).map_or("", |h| h.as_str())));
+        ssh.set_tooltip_text(Some("A Host of ~/.ssh/config: OpenSSH connects to it with everything the file says about it (user, port, key, jump host)"));
+        let ssh_info = gtk::Label::new(None);
+        ssh_info.set_widget_name("server-ssh-info");
+        ssh_info.set_xalign(0.0);
+        ssh_info.set_line_wrap(true);
+        ssh_info.style_context().add_class("dim-label");
+        let ssh_label = gtk::Label::with_mnemonic("_SSH host:");
         let rows: [(&str, gtk::Widget); 7] = [
             ("_Name:", name.clone().upcast()),
             ("_Type:", kind.clone().upcast()),
-            ("_Server:", host.clone().upcast()),
+            ("Se_rver:", host.clone().upcast()),
             ("_Port:", port.clone().upcast()),
             ("_User:", user.clone().upcast()),
             ("_Folder:", folder.clone().upcast()),
@@ -559,9 +575,16 @@ impl NetworkPage {
             let l = gtk::Label::with_mnemonic(text);
             l.set_xalign(1.0);
             l.set_mnemonic_widget(Some(&widget));
-            grid.attach(&l, 0, y as i32, 1, 1);
-            grid.attach(&widget, 1, y as i32, 1, 1);
+            // The SSH host rows go below the type.
+            let y = if y >= 2 { y + 2 } else { y } as i32;
+            grid.attach(&l, 0, y, 1, 1);
+            grid.attach(&widget, 1, y, 1, 1);
         }
+        ssh_label.set_xalign(1.0);
+        ssh_label.set_mnemonic_widget(Some(&ssh));
+        grid.attach(&ssh_label, 0, 2, 1, 1);
+        grid.attach(&ssh, 1, 2, 1, 1);
+        grid.attach(&ssh_info, 1, 3, 1, 1);
         if let Ok(area) = d.message_area().downcast::<gtk::Box>() {
             area.pack_start(&grid, false, false, 0);
         }
@@ -588,8 +611,62 @@ impl NetworkPage {
             let u = update.clone();
             e.connect_changed(move |_| u());
         }
+        // The SSH host rows: shown for SFTP while the configuration names hosts.
+        let show_ssh = {
+            let (kind, ssh, ssh_label, ssh_info) = (kind.clone(), ssh.clone(), ssh_label.clone(), ssh_info.clone());
+            let any = !ssh_hosts.is_empty();
+            move || {
+                let on = any && kind.active_id().as_deref() == Some("sftp");
+                for w in [ssh.upcast_ref::<gtk::Widget>(), ssh_label.upcast_ref(), ssh_info.upcast_ref()] {
+                    w.set_visible(on);
+                    w.set_no_show_all(!on);
+                }
+                ssh_info.set_visible(on && !ssh_info.text().is_empty());
+            }
+        };
+        {
+            let (host, port, user, name, ssh_info, show_ssh) = (host.clone(), port.clone(), user.clone(), name.clone(), ssh_info.clone(), show_ssh.clone());
+            // The name the last pick put in, replaced by the next pick unless the user changed it.
+            let filled = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+            ssh.connect_changed(move |ssh| {
+                let id = ssh.active_id().map(|s| s.to_string()).unwrap_or_default();
+                let Some(r) = failbrauwser::sshconfig::resolve(&id) else {
+                    ssh_info.set_text("");
+                    show_ssh();
+                    return;
+                };
+                ssh_info.set_text(&r.summary(&glib::home_dir()));
+                if cfg!(windows) {
+                    // The app's own SSH client does not read ~/.ssh/config: the form takes
+                    // what the file says.
+                    host.set_text(&r.host_name);
+                    user.set_text(r.user.as_deref().unwrap_or(""));
+                    port.set_value(r.port.unwrap_or(0) as f64);
+                } else {
+                    // OpenSSH reads the file itself: the address names the host as the file
+                    // does, and user and port come from there.
+                    host.set_text(&r.alias);
+                    user.set_text("");
+                    port.set_value(0.0);
+                }
+                let current = name.text().trim().to_string();
+                if current.is_empty() || current == *filled.borrow() {
+                    name.set_text(&r.alias);
+                    *filled.borrow_mut() = r.alias.clone();
+                }
+                show_ssh();
+            });
+        }
+        // The details of a host picked before (editing a server).
+        if let Some(r) = ssh.active_id().filter(|id| !id.is_empty()).and_then(|id| failbrauwser::sshconfig::resolve(&id)) {
+            ssh_info.set_text(&r.summary(&glib::home_dir()));
+        }
         let u = update.clone();
-        kind.connect_changed(move |_| u());
+        let s = show_ssh.clone();
+        kind.connect_changed(move |_| {
+            u();
+            s();
+        });
         let u = update.clone();
         port.connect_value_changed(move |_| u());
         update();
@@ -613,6 +690,7 @@ impl NetworkPage {
             p.save_servers(&list);
         });
         d.show_all();
+        show_ssh();
         name.grab_focus();
     }
 }

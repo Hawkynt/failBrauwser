@@ -1,0 +1,20 @@
+# A Host of the SSH configuration picked in Add Server and opened: mounted over SSH like a share, at the
+# folder the server starts its user in.
+open network:///
+network-add-server
+wait-dialog Add Server
+dialog-set Add Server : server-kind = sftp
+dialog-set Add Server : server-ssh-host = testbox
+expect-dialog-label Add Server : sftp://testbox/
+expect-dialog-label Add Server : 127.0.0.1
+dialog-button Add Server : Add
+wait-network-row testbox
+expect-network-subtitle testbox = SFTP (SSH) — testbox (127.0.0.1)
+network-open testbox
+wait-row hello-from-ssh.txt
+# On the drives page like a share, with its free space, and disconnected again.
+open drives:///
+wait-drive-text testbox : sftp://testbox/
+wait-drive-text testbox : free of
+drive-button testbox : sftp://testbox/ : Eject
+wait-no-drive-text testbox : sftp://testbox/

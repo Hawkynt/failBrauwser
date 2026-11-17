@@ -208,6 +208,16 @@ is shown as you type). They are listed below the computers; a double click mount
 one (asking for a password where needed), and the right-click menu edits, removes, pins or
 links them. They are kept in `~/.config/failbrauwser/servers`. WebDAV needs GVfs's WebDAV
 backend (`gvfs-dnssd` on Arch, `gvfs-backends` on Debian and Ubuntu).
+**SSH hosts:** for SFTP, *SSH host* lists the `Host` entries of `~/.ssh/config` (with its
+`Include`s; patterns like `Host *` are left out). Picking one fills the form, and the line below
+it says where OpenSSH really connects (`root@xenon.example.org:2222, through neon`). The address
+names the host as the file does (`sftp://xenon_root/`), so OpenSSH applies everything the file
+says about it: user, port, key, jump host. On Windows, whose SSH client does not read the file,
+the form takes its host name, user and port instead. Or leave it at *None* and type server,
+port and user; a password is asked for when the server wants one. An SSH server opens in the
+folder it starts you in, your home folder there, and is mounted like a share: on the drives
+page with its free space, and *Eject* disconnects it. GVfs speaks SFTP, which every OpenSSH
+server offers; a server that only allows `scp` cannot be opened.
 
 Network addresses also open from the command line (`failbrauwser smb://nas/share`) and from
 other applications. Mounted shares (SMB, SFTP, FTP, WebDAV, NFS) are listed with the drives in

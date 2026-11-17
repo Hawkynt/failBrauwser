@@ -223,6 +223,75 @@ fn servers_on_the_network_page() {
     });
 }
 
+/// A Host of the SSH configuration, picked in Add Server and opened, against an SSH server of the
+/// test's own: `sshd` as this user on a free port of 127.0.0.1, with keys made for the test. GVfs
+/// runs `ssh` from the PATH, so an `ssh` in front of the real one carries the port, the key and
+/// a known-hosts file of the test's own; the user's `~/.ssh` is never read or written.
+#[test]
+#[cfg(unix)]
+fn ssh_host_from_the_configuration_mounts_like_a_share() {
+    let sshd = Path::new("/usr/bin/sshd");
+    if !sshd.exists() || !have("ssh-keygen") || !Path::new("/usr/lib/gvfsd-sftp").exists() && !Path::new("/usr/libexec/gvfsd-sftp").exists() {
+        eprintln!("no sshd, ssh-keygen or GVfs SFTP backend, skipping");
+        return;
+    }
+    let ssh = tempfile::tempdir().unwrap();
+    let d = ssh.path();
+    std::fs::create_dir_all(d.join("remote")).unwrap();
+    std::fs::create_dir_all(d.join("bin")).unwrap();
+    std::fs::write(d.join("remote/hello-from-ssh.txt"), "hi\n").unwrap();
+    for key in ["host", "client"] {
+        let ok = Command::new("ssh-keygen").args(["-q", "-t", "ed25519", "-N", "", "-f"]).arg(d.join(key)).status().unwrap().success();
+        assert!(ok, "ssh-keygen {key}");
+    }
+    std::fs::copy(d.join("client.pub"), d.join("authorized_keys")).unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let p = |name: &str| d.join(name).display().to_string();
+    std::fs::write(
+        d.join("sshd_config"),
+        format!(
+            "ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nAuthorizedKeysFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nPidFile none\nSubsystem sftp internal-sftp -d {}\n",
+            p("host"),
+            p("authorized_keys"),
+            p("remote")
+        ),
+    )
+    .unwrap();
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _server = Kill(Command::new(sshd).arg("-D").arg("-f").arg(d.join("sshd_config")).stderr(std::process::Stdio::null()).spawn().unwrap());
+    std::fs::write(d.join("config"), "Host *.example\n  User nobody\n\nHost testbox\n  HostName 127.0.0.1\n").unwrap();
+    let wrapper = d.join("bin/ssh");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nexec /usr/bin/ssh -F {} -p {port} -i {} -o IdentitiesOnly=yes -o UserKnownHostsFile={} -o StrictHostKeyChecking=accept-new \"$@\"\n",
+            p("config"),
+            p("client"),
+            p("known_hosts")
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    // The server is up once it takes connections.
+    let up = (0..50).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+    });
+    assert!(up, "sshd did not start on port {port}");
+    let path = format!("{}:{}", p("bin"), std::env::var("PATH").unwrap_or_default());
+    let config = p("config");
+    run_checked("ssh_host.fbt", &[("PATH", &path), ("FAILBRAUWSER_SSH_CONFIG", &config)], |_| {}, |t| {
+        let saved = std::fs::read_to_string(t.join("config/failbrauwser/servers")).unwrap();
+        assert_eq!(saved, "testbox\tsftp://testbox/\n");
+    });
+}
+
 /// A picture of soft colour shapes; `variant` moves them.
 fn picture(w: i32, h: i32, variant: i32) -> gtk::gdk_pixbuf::Pixbuf {
     let pb = gtk::gdk_pixbuf::Pixbuf::new(gtk::gdk_pixbuf::Colorspace::Rgb, false, 8, w, h).unwrap();

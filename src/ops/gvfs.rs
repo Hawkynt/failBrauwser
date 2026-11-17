@@ -66,8 +66,8 @@ pub fn share_root(p: &Path) -> Option<PathBuf> {
     unc_parts(p).map(|(root, ..)| root)
 }
 
-/// A readable name for the share: `share on server` for SMB, the device's name for a phone,
-/// else its folder name.
+/// A readable name for the share: `share on server` for SMB, `user@host` over SSH, the
+/// device's name for a phone, else its folder name.
 #[cfg(unix)]
 pub fn share_name(root: &Path) -> String {
     if let Some((_, name, _)) = crate::devices::named_root(root).filter(|(r, ..)| r == root) {
@@ -77,6 +77,12 @@ pub fn share_name(root: &Path) -> String {
     let field = |key: &str| dir.split([':', ',']).find_map(|kv| kv.strip_prefix(key).map(str::to_string));
     match (field("share="), field("server=")) {
         (Some(share), Some(server)) => format!("{share} on {server}"),
+        // SSH: `sftp:host=pi,user=me` reads as me@pi.
+        _ if dir.starts_with("sftp:") => match (field("host="), field("user=")) {
+            (Some(host), Some(user)) => format!("{user}@{host}"),
+            (Some(host), None) => host,
+            _ => dir,
+        },
         _ => dir,
     }
 }
@@ -251,6 +257,8 @@ mod tests {
         let root = share_root(&p).unwrap();
         assert_eq!(root, on_share(""));
         assert_eq!(share_name(&root), "gamingcrypt-drive on 192.168.1.198");
+        assert_eq!(share_name(&fuse_root().join("sftp:host=pi.local,user=me")), "me@pi.local");
+        assert_eq!(share_name(&fuse_root().join("sftp:host=neon_whisper")), "neon_whisper");
         assert_eq!(share_root(Path::new("/home/me")), None);
         assert!(check(Path::new("/definitely/not/a/share"), Duration::from_millis(1)).is_ok());
     }
