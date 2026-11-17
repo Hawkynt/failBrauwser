@@ -87,11 +87,17 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
   `tests\source_rules.rs` walks all of `src` and reports every `Command::new(` whose nearby lines
   carry none of them; a start the compiler only builds for Unix is exempt, because no window can
   appear there.
-- **Which standard handles it is given.** A client never inherits this program's own stdin: a CLI
-  left on that handle can block on input nobody will type, and a start that carries handles from a
-  program that no longer has them is a start that fails. The exception is deliberate: the launcher
-  hand-over (`src\portable.rs:46`) and the scenario `run` step pass the handles on, because their
-  answers belong to the terminal or the harness log that started them.
+- **Which standard handles it is given.** Nothing started here is handed this program's own three
+  streams, and it does not depend on each start remembering: `win::console::keep_our_handles_from_children`
+  (`src\main.rs`) clears the inherit mark on them once, before anything is started. Windows marks the
+  standard handles inheritable and duplicates every inheritable handle into a child, so without that
+  each tool would hold a second copy of whatever started this program — a pipe a reader waits on for
+  an end that never arrives, a console it can write into, or an input a CLI blocks on that nobody will
+  type. What a start is given explicitly (`Stdio::piped()` for the answers that are read, `Stdio::null()`
+  where a client must not read) is untouched by that mark; a start naming no stream falls back to the
+  console device, which is what a windowed program has anyway. The single-file launcher keeps its own
+  streams for the program it hands over, because that clearing happens inside the program being handed
+  to, not inside the launcher.
 - **What it may answer by itself.** The `NON_INTERACTIVE` table plus the caller's locale, and for
   the windows the askpass names in `progress::prepare`.
 
@@ -103,6 +109,7 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
 | `tests\win_startup.rs` | the program file is windowed, and the flag's value is the API's |
 | `tests\source_rules.rs::no_tree_iterators_changed_in_place` | unrelated: the row-stepping rule |
 | `src\vcs\run.rs` unit test `the_client_environment_leaves_nothing_to_answer_on_its_own` | the table names each way the five clients prompt or page, and names no key twice |
+| `src\win\console.rs` unit test `the_standard_handles_stay_this_programs_own` | the three standard streams of this program end up marked not inheritable |
 
 ## Measured, and what is not
 
@@ -115,9 +122,21 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
 - Not verified: no scenario watches the desktop while a Repository command runs, so "no black
   window" for a running log or commit rests on the flag value, the exception-free rule and the 2026
   -11-12 measurement — not on an observed desktop.
+- Measured 2026-11-17, the inherited handle is not a theory: with the mark still on its standard
+  handles this program leaves a second copy of them in what it starts. A Git UI scenario had
+  answered `SELFTEST OK` into the win32 harness, the harness read two empty streams, the test
+  wrapper waited on them for minutes with nothing printed, and one `git` from the run was still
+  alive (one thread, `WaitReason=Suspended`, no CPU — it never ran). The same three handles are
+  `Some(true)` for inheritable before the call and `Some(false)` after it, printed by
+  `src\win\console.rs` unit test `the_standard_handles_stay_this_programs_own`; with the call body
+  neutralized that test fails on exactly that assertion, which is how it was seen to be load-bearing.
+  The scenario's own test wrapper now reads the harness through a file for the same reason
+  (`tests\ui_git.rs`).
 - Open: the reported start failures `0x800700E8` (Win32 232, a pipe already closed) for `git log`,
-  `git ls-files` and the log-graph read name this program's own command lines, and those starts do
-  pass fresh pipes, so the handle rule above does not explain them. That text is not produced by
-  this repository's code (no such message and no translation catalog), so which program reported it
-  is still open; reproduce it against a real working copy with the installed build before changing
-  anything for it.
+  `git ls-files` and the log-graph read name this program's own command lines. A handle inherited
+  from whatever started failBrauwser is a plausible route to a start failing that way, and the rule
+  above now cuts that route off at the source; it is not a proven explanation, because the reports
+  came from an installed build that predates the per-start `Stdio::null()` and this clearing. That
+  text is not produced by this repository's code (no such message and no translation catalog), so
+  which program reported it is still open; reproduce it against a real working copy with the
+  installed build before changing anything further for it.
