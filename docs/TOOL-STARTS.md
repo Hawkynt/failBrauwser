@@ -115,12 +115,20 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
   reached on that path. Measured here on 2026-11-17 with only the return path covered: a failing Git
   scenario left `git ls-files -z -- .` running with its own process gone, and it was still there a
   quarter of an hour after that run had ended.
-  The list has one limit that follows from its shape: an id gets onto it after the start call has
-  returned, so a client started in the instant before an end is out of reach of both the walk and
-  that gate. Nothing here has measured that case; it is written down because the shape allows it, and
-  because the answer on Windows — a job object with kill-on-close, this instance assigned to it at
-  startup — would also end the file swap of an update, which is deliberately left to run, so that
-  start would have to be given its breakaway with it.
+  The list has one limit that follows from its shape, and it has been met: an id gets onto it only
+  after the start call has returned, so a client created in the instant before an end is out of reach
+  of both the walk and that gate. Measured here on 2026-11-17, straight after one serial full run:
+  three such clients were still there — `"git" ls-files -z -- .` (15:16:19), `"git" status
+  --porcelain=v2 … -- .` (15:19:17) and `"svn" info --show-item relative-url -- .` (15:24:43), each
+  one thread deep with `WaitReason=Suspended`, no CPU and 25 handles, which is the same state the
+  five tools of the earlier run were in: **created and never scheduled**. Two of the three fall at
+  the end of a test target whose own process builds working copies with `git`/`svn` for fixtures —
+  only `src\main.rs` and `src\ui\selftest.rs` reach an ending, so a cargo test process never does.
+  The mechanism that would cover all of it is a job object with kill-on-close that this process joins
+  at startup, since the operating system then ends every child at the last handle, started or not;
+  it was not taken here because that job would also end the file swap of an update, which is
+  deliberately left to run around a replaced image, so that one start would have to be given its
+  breakaway — and the update path is not something these checks can exercise.
   That covers the reads only, on purpose. An *act* the user
   asked for is left to finish — a commit (`run::with_input` feeds its message over a pipe, and its
   client is deliberately not registered), a push, a merge under its progress window, the installer
@@ -175,13 +183,16 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
   `status --porcelain=v2 -z --untracked-files=normal --ignored=matching -- .`, the scenario failed on
   its 20 s wait, the instance ended itself through `run::end_and_exit`, and the process that wrote
   that marker was no longer running when the marker was read.
-- Measured 2026-11-17, and not explained: one client of a green `ui_git` run was still running when
-  the process census ran two minutes later (`git ls-files -z -- .`, started 14:55:58 inside a run that
-  ended 14:56:06); it was stopped as the test environment's cleanup before it could be looked at
-  further. The same target after the end of a scenario run had been covered answered 6 passed in
-  148.56 s, and the census straight after it named no client of this program's — only two `git -C …
-  branch --show-current` of the shell's own from earlier in the day. One observation, no reproduction;
-  the shape above is the only candidate the code offers, and it was not measured.
+- Measured 2026-11-17: the rule holds for the ends it covers, and the limit above is real. `ui_git`
+  alone, serial, answered 6 passed in 148.56 s and 6 passed in 206.37 s (the full run), with a census
+  straight after naming **no** client of the program's — only two `git -C … branch --show-current` of
+  the shell's own from earlier in the day. A serial full run left three, described in the limit above:
+  created, never scheduled, at the end of a scenario run or of a test target that was building
+  fixtures with `git`/`svn`. All of them were stopped as the test environment's cleanup; one
+  (`git ls-files -z -- .`, started 14:55:58 inside a run that ended 14:56:06) had been seen an hour
+  earlier and stopped before it could be looked at. The three started at the moment a scenario run or
+  a fixture-building test target was ending — which is where the limit sits, not a claim about which
+  process started each of them.
 - Open: the reported start failures `0x800700E8` (Win32 232, a pipe already closed) for `git log`,
   `git ls-files` and the log-graph read name this program's own command lines. A handle inherited
   from whatever started failBrauwser is a plausible route to a start failing that way, and the rule
