@@ -204,7 +204,7 @@ fn storage_property(h: windows::Win32::Foundation::HANDLE, property: i32) -> Opt
     let mut got = 0u32;
     unsafe {
         DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, Some(&query as *const _ as *const c_void), std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32, Some(&mut header as *mut _ as *mut c_void), std::mem::size_of::<STORAGE_DESCRIPTOR_HEADER>() as u32, Some(&raw mut got), None).ok()?;
-        if header.Size <= 0 {
+        if header.Size == 0 {
             return None;
         }
         let mut buf = vec![0u8; header.Size as usize];
