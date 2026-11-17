@@ -241,6 +241,10 @@ pub fn admin_path(path: Option<&std::ffi::OsStr>) -> std::ffi::OsString {
     std::env::join_paths(dirs).unwrap_or_else(|_| "/usr/sbin:/usr/bin:/sbin:/bin".into())
 }
 
+/// The base the root half mounts under, read from this machine's own `/etc/os-release`. Its two
+/// callers live in that root half below, so it is asked for nowhere else: naming it on a platform
+/// that never reaches it would only hide that the answer is Linux-shaped.
+#[cfg(unix)]
 fn user_media_base(user: &str) -> PathBuf {
     media_base(user, &std::fs::read_to_string("/etc/os-release").unwrap_or_default(), |p| p.exists())
 }

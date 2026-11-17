@@ -311,18 +311,6 @@ pub fn kind_needs_passphrase(id: &str) -> bool {
     VOLUME_KINDS.iter().any(|(kind, _)| *kind == id)
 }
 
-impl OpenAs {
-    /// Must the passphrase arrive before the file is opened (M14)? Every volume kind the menu
-    /// offers is an encrypted one, and its reader is worth running only with the answer in hand:
-    /// a search started without it can only answer with the shell of a locked volume. *Archive*
-    /// keeps the ask where the library puts it — on the reader that needs one. (The menu asks
-    /// `kind_needs_passphrase` with the kind it has; this is the same rule per entry.)
-    #[cfg(test)]
-    pub fn needs_passphrase(&self) -> bool {
-        match self { OpenAs::Volume(id, _) => kind_needs_passphrase(id), OpenAs::Archive => false }
-    }
-}
-
 /// Which *Open as* entries one selected file gets (M14). Decided apart from the menu so it can be
 /// tested without a pane: a folder gets none, and a file the archive viewer already opens by name
 /// needs no *Archive* entry, because that entry is for what the name sends somewhere else.
@@ -397,14 +385,17 @@ mod tests {
         }
     }
 
-    /// A chosen encrypted kind reads its volume with the passphrase, so the ask comes first:
-    /// a search that runs before the answer can only end in the shell of a locked volume (M14).
+    /// A chosen encrypted kind reads its volume with the passphrase, so the ask comes first: a
+    /// search that runs before the answer can only end in the shell of a locked volume (M14). Pinned
+    /// through `kind_needs_passphrase`, because that is what *Open as* asks with when a menu entry
+    /// is chosen (`archive::open_as_volume`) — the ids the menu offers are the single source.
+    /// *Archive* needs no assertion here: it carries no kind id, and what it does offer is pinned by
+    /// the choice tests below.
     #[test]
     fn a_chosen_volume_asks_its_passphrase_before_opening() {
         for (id, label) in VOLUME_KINDS {
-            assert!(OpenAs::Volume(id, label).needs_passphrase(), "{id} is encrypted: it asks before anything is read");
+            assert!(kind_needs_passphrase(id), "{id} ({label}) is encrypted: it asks before anything is read");
         }
-        assert!(!OpenAs::Archive.needs_passphrase(), "Archive asks only when a reader of its own asks");
         assert!(!kind_needs_passphrase("Zip"), "a forced ordinary archive keeps the reader's own ask");
     }
 
