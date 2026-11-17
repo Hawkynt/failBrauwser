@@ -115,6 +115,12 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
   reached on that path. Measured here on 2026-11-17 with only the return path covered: a failing Git
   scenario left `git ls-files -z -- .` running with its own process gone, and it was still there a
   quarter of an hour after that run had ended.
+  The list has one limit that follows from its shape: an id gets onto it after the start call has
+  returned, so a client started in the instant before an end is out of reach of both the walk and
+  that gate. Nothing here has measured that case; it is written down because the shape allows it, and
+  because the answer on Windows — a job object with kill-on-close, this instance assigned to it at
+  startup — would also end the file swap of an update, which is deliberately left to run, so that
+  start would have to be given its breakaway with it.
   That covers the reads only, on purpose. An *act* the user
   asked for is left to finish — a commit (`run::with_input` feeds its message over a pipe, and its
   client is deliberately not registered), a push, a merge under its progress window, the installer
@@ -160,6 +166,22 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
   neutralized that test fails on exactly that assertion, which is how it was seen to be load-bearing.
   The scenario's own test wrapper now reads the harness through a file for the same reason
   (`tests\ui_git.rs`).
+- Measured 2026-11-17, that the end of a scenario run reaches a client whose answer never arrives: a
+  stand-in `git.exe` put first on `PATH`, which writes a marker naming the arguments it was given and
+  then sleeps, driven by a scratch scenario that switches integration on
+  (`action app.vcs-integration` — without that the reads never start, which is how the first two
+  attempts of this measurement learned nothing, a folder holding only a `.git` folder included) and
+  then waits for an overlay that cannot arrive. The marker named
+  `status --porcelain=v2 -z --untracked-files=normal --ignored=matching -- .`, the scenario failed on
+  its 20 s wait, the instance ended itself through `run::end_and_exit`, and the process that wrote
+  that marker was no longer running when the marker was read.
+- Measured 2026-11-17, and not explained: one client of a green `ui_git` run was still running when
+  the process census ran two minutes later (`git ls-files -z -- .`, started 14:55:58 inside a run that
+  ended 14:56:06); it was stopped as the test environment's cleanup before it could be looked at
+  further. The same target after the end of a scenario run had been covered answered 6 passed in
+  148.56 s, and the census straight after it named no client of this program's — only two `git -C …
+  branch --show-current` of the shell's own from earlier in the day. One observation, no reproduction;
+  the shape above is the only candidate the code offers, and it was not measured.
 - Open: the reported start failures `0x800700E8` (Win32 232, a pipe already closed) for `git log`,
   `git ls-files` and the log-graph read name this program's own command lines. A handle inherited
   from whatever started failBrauwser is a plausible route to a start failing that way, and the rule
