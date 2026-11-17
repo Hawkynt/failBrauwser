@@ -3,4 +3,4 @@
 # bump these deliberately and re-run: bootstrap.ps1 -Clean
 # The version must exist in the mirror's ucrt64.db or bootstrap fails loudly.
 mingw-w64-ucrt-x86_64-gtk3 3.24.52-1
-mingw-w64-ucrt-x86_64-pkgconf 1~3.0.10-1
+mingw-w64-ucrt-x86_64-pkgconf 1~3.0.11-2
