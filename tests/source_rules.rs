@@ -64,3 +64,28 @@ fn every_start_of_another_program_hides_its_console_window() {
     }
     assert!(found.is_empty(), "start each outside program with win::console::no_window: {found:?}");
 }
+
+/// The client of a read ends with the instance that started it (docs\TOOL-STARTS.md). One way an
+/// instance ends is `main` returning; the other is the process ending itself, which is what a
+/// self-test run does — and an end of its own skips `main`'s tail, where the clients are ended.
+/// Measured 2026-11-17 with only the return path covered: a failing Git scenario left
+/// `git ls-files -z -- .` running with its own process gone, still there a quarter of an hour later.
+/// Everything below `src\ui` therefore ends the instance through `vcs::run::end_and_exit`, which ends
+/// the clients first — the code still works without it, and only a process list shows the difference.
+#[test]
+fn no_end_of_the_process_in_the_ui_skips_the_reading_clients() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("ui");
+    let mut files = Vec::new();
+    rust_files(&root, &mut files);
+    assert!(!files.is_empty(), "the ui tree is expected to exist");
+    let mut found = Vec::new();
+    for f in &files {
+        for (n, line) in std::fs::read_to_string(f).unwrap().lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            if code.contains("process::exit(") || code.contains("process::abort(") {
+                found.push(format!("{}:{}", f.display(), n + 1));
+            }
+        }
+    }
+    assert!(found.is_empty(), "end the instance through vcs::run::end_and_exit, which ends the clients of reads still in flight: {found:?}");
+}

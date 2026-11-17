@@ -105,6 +105,15 @@ pub fn end_our_clients() {
     }
 }
 
+/// Ends the instance where an end never reaches `main`'s tail: the clients of reads still in flight
+/// go first, so the rule does not depend on which way the instance ends. A self-test run ends the
+/// process itself (`src\ui\selftest.rs`), which is where this is called; `tests\source_rules.rs`
+/// keeps any other end in `src\ui` from coming back.
+pub fn end_and_exit(code: i32) -> ! {
+    end_our_clients();
+    std::process::exit(code)
+}
+
 #[cfg(windows)]
 fn end_process(pid: u32) {
     use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};

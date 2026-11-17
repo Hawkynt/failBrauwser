@@ -96,9 +96,12 @@ struct Runner {
     current: (usize, String),
 }
 
+/// Ends the run of a scenario that cannot go on. The end goes through `vcs::run::end_and_exit`
+/// rather than `std::process::exit`, because `main`'s tail — where the clients of reads still in
+/// flight are ended — is never reached from here (docs\TOOL-STARTS.md).
 fn fail(line: usize, msg: &str) -> ! {
     eprintln!("SELFTEST FAIL (line {line}): {msg}");
-    std::process::exit(1);
+    failbrauwser::vcs::run::end_and_exit(1);
 }
 
 pub fn start(app: &Rc<AppCtx>, window: &Rc<Window>) {
@@ -109,7 +112,7 @@ pub fn start(app: &Rc<AppCtx>, window: &Rc<Window>) {
     }
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         eprintln!("SELFTEST FAIL: cannot read {path}: {e}");
-        std::process::exit(2);
+        failbrauwser::vcs::run::end_and_exit(2);
     });
     let steps = text
         .lines()
@@ -170,7 +173,7 @@ pub fn start(app: &Rc<AppCtx>, window: &Rc<Window>) {
         }
         let Some((line, step)) = r.steps.pop_front() else {
             println!("SELFTEST OK");
-            std::process::exit(0);
+            failbrauwser::vcs::run::end_and_exit(0);
         };
         r.current = (line, step.clone());
         if let Err(e) = run_step(&mut r, &step) {
@@ -1479,7 +1482,7 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         }
         "quit" => {
             println!("SELFTEST OK");
-            std::process::exit(0);
+            failbrauwser::vcs::run::end_and_exit(0);
         }
         _ => match super::vcs::testing::step(&w, cmd, arg) {
             Some(Ok(Some(check))) => wait(r, move |_| check()),
