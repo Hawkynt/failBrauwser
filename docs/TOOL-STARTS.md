@@ -107,8 +107,15 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
   and patch reads that go through it — and a read still in flight when this instance ends has its
   client ended there: `vcs::run::end_our_clients` (`src\main.rs`) walks the clients this instance
   registered and terminates each by id, and from that moment a client that starts is ended as soon
-  as it is registered, so a read beginning during the shutdown cannot be left behind either. That
-  covers the reads only, on purpose. An *act* the user
+  as it is registered, so a read beginning during the shutdown cannot be left behind either.
+  **Both ways this instance ends do that.** The ordinary end is the return through `src\main.rs`.
+  The other is an end the process gives itself: a self-test run ends the process from
+  `src\ui\selftest.rs` — its `SELFTEST OK`, its failed step, its unreadable script — and there
+  `vcs::run::end_and_exit` ends the clients before the process, because `main`'s tail is never
+  reached on that path. Measured here on 2026-11-17 with only the return path covered: a failing Git
+  scenario left `git ls-files -z -- .` running with its own process gone, and it was still there a
+  quarter of an hour after that run had ended.
+  That covers the reads only, on purpose. An *act* the user
   asked for is left to finish — a commit (`run::with_input` feeds its message over a pipe, and its
   client is deliberately not registered), a push, a merge under its progress window, the installer
   script of an update detached on purpose (`src\ui\update.rs:255`) — and so is anything the user
@@ -130,6 +137,7 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
 | `src\vcs\run.rs` unit test `the_client_environment_leaves_nothing_to_answer_on_its_own` | the table names each way the five clients prompt or page, and names no key twice |
 | `src\win\console.rs` unit test `the_standard_handles_stay_this_programs_own` | the three standard streams of this program end up marked not inheritable |
 | `src\vcs\run.rs` unit test `a_client_still_reading_when_the_instance_ends_is_ended_there` | a client of a read still in flight is gone when `end_our_clients` has run, and the call comes back refusing rather than hanging |
+| `tests\source_rules.rs::no_end_of_the_process_in_the_ui_skips_the_reading_clients` | an instance that ends itself ends its reading clients first: no `std::process::exit` below `src\ui` outside `run::end_and_exit` |
 
 ## Measured, and what is not
 
