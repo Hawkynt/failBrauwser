@@ -774,6 +774,26 @@ impl DrivesPage {
                 menu.append(&item);
             }
         }
+        // The two device-icon verbs write files and nothing else. Where the volume cannot take them the items
+        // are shut and the reason the act gives stands on their tooltip (README: *Device icons*).
+        match failbrauwser::fsformat::act::icon_refusal(&v) {
+            None => {
+                menu.append(&gtk::SeparatorMenuItem::new());
+                let vol = v.clone();
+                add("_Create device icon…", Box::new(move |p| p.create_icon_window(&vol)));
+                let vol = v.clone();
+                add("_Remove device icon", Box::new(move |p| p.remove_icon(&vol)));
+            }
+            Some(why) => {
+                menu.append(&gtk::SeparatorMenuItem::new());
+                for label in ["_Create device icon…", "_Remove device icon"] {
+                    let item = super::menuicons::item(label);
+                    item.set_sensitive(false);
+                    item.set_tooltip_text(Some(&why));
+                    menu.append(&item);
+                }
+            }
+        }
         if let Some(link) = super::desktoplink::for_volume(&v) {
             menu.append(&gtk::SeparatorMenuItem::new());
             add("Create _Link on Desktop", Box::new(move |p| {
@@ -825,6 +845,21 @@ impl DrivesPage {
         if let Some((w, _)) = self.context() {
             let (win, vol) = (Rc::downgrade(&w), v.clone());
             super::format::show(&w, v, usage, move |fs, chosen| format_volume(win.clone(), &vol, fs, chosen));
+        }
+    }
+
+    /// The window naming the shape a device icon is drawn for, which then hands that shape to the act
+    /// (README: *Device icons*).
+    fn create_icon_window(&self, v: &Volume) {
+        if let Some((w, _)) = self.context() {
+            icon_window(&w, v);
+        }
+    }
+
+    /// Taking a device icon away: the two text files of ours and the image files they name, nothing else.
+    fn remove_icon(&self, v: &Volume) {
+        if let Some((w, _)) = self.context() {
+            remove_device_icon(&w, v);
         }
     }
 }
@@ -1021,6 +1056,40 @@ pub fn show_properties(w: &Rc<Window>, pane: &Rc<Pane>, v: &Volume, usage: Optio
         }
     }
     acts.pack_start(&format, false, false, 0);
+
+    // The two device-icon verbs write files and nothing else: they never dismount, never format, never touch a
+    // file system. Where the volume cannot take them the buttons stay shut, with the act's own reason on their
+    // tooltip (README: *Device icons*).
+    let create = gtk::Button::with_mnemonic("_Create device icon…");
+    let remove = gtk::Button::with_mnemonic("_Remove device icon");
+    match failbrauwser::fsformat::act::icon_refusal(v) {
+        None => {
+            create.connect_clicked({
+                let (win, vol) = (Rc::downgrade(w), v.clone());
+                move |_| {
+                    if let Some(w) = win.upgrade() {
+                        icon_window(&w, &vol);
+                    }
+                }
+            });
+            remove.connect_clicked({
+                let (win, vol) = (Rc::downgrade(w), v.clone());
+                move |_| {
+                    if let Some(w) = win.upgrade() {
+                        remove_device_icon(&w, &vol);
+                    }
+                }
+            });
+        }
+        Some(why) => {
+            for button in [&create, &remove] {
+                button.set_sensitive(false);
+                button.set_tooltip_text(Some(&why));
+            }
+        }
+    }
+    acts.pack_start(&create, false, false, 0);
+    acts.pack_start(&remove, false, false, 0);
     area.add(&acts);
 
     if v.mount_point().is_some() && !no_storage(v) || v.is_device() {
@@ -1161,6 +1230,113 @@ fn format_volume(win: Weak<Window>, v: &Volume, fs: failbrauwser::fsformat::File
             error(&win, "Cannot format the volume", &e);
         }
     });
+}
+
+/// The window a *Create device icon* verb opens (README: *Device icons*): the shape the machine detected with
+/// its evidence spelled out beside it — the same dropdown and the same words the format window carries — and a
+/// *Create* button that hands that shape to the act. Nothing is written before it is pressed.
+fn icon_window(w: &Rc<Window>, v: &Volume) {
+    let d = gtk::Dialog::with_buttons(Some(&format!("{} — Device icon", v.title())), Some(&w.win), gtk::DialogFlags::DESTROY_WITH_PARENT, &[("_Cancel", gtk::ResponseType::Cancel)]);
+    d.set_resizable(false);
+    let area = d.content_area();
+    area.set_border_width(12);
+    area.set_spacing(10);
+
+    let heading = gtk::Label::new(None);
+    heading.set_markup(&format!("<b>{}</b>", glib::markup_escape_text(&format!("Device icon of “{}”", v.title()))));
+    heading.set_xalign(0.0);
+    area.add(&heading);
+    let files = gtk::Label::new(Some("The four files are written onto this volume: DevIcon.fil and folder.ico, autorun.inf and desktop.ini. Nothing else is touched."));
+    files.set_xalign(0.0);
+    files.set_line_wrap(true);
+    files.set_max_width_chars(52);
+    area.add(&files);
+
+    let grid = gtk::Grid::new();
+    grid.set_column_spacing(12);
+    grid.set_row_spacing(6);
+    let shape = gtk::ComboBoxText::new();
+    shape.set_widget_name("device-shape");
+    for kind in failbrauwser::fsformat::Shape::all() {
+        shape.append(Some(kind.asset()), kind.label());
+    }
+    shape.set_active_id(Some(failbrauwser::fsformat::Shape::detected(v).unwrap_or(failbrauwser::fsformat::Shape::UsbStick).asset()));
+    let key = gtk::Label::new(Some("Device shape:"));
+    key.set_xalign(1.0);
+    key.style_context().add_class("dim-label");
+    let evidence = gtk::Label::new(Some(&failbrauwser::fsformat::Shape::evidence(v)));
+    evidence.set_widget_name("shape-carried");
+    evidence.set_xalign(0.0);
+    evidence.set_line_wrap(true);
+    evidence.set_max_width_chars(52);
+    evidence.style_context().add_class("dim-label");
+    grid.attach(&key, 0, 0, 1, 1);
+    grid.attach(&shape, 1, 0, 1, 1);
+    grid.attach(&evidence, 1, 1, 1, 1);
+    area.add(&grid);
+
+    let create = gtk::Button::with_mnemonic("_Create");
+    create.set_widget_name("create-icon-button");
+    create.style_context().add_class("suggested-action");
+    d.add_action_widget(&create, gtk::ResponseType::Accept);
+    d.set_default_response(gtk::ResponseType::Cancel);
+    d.connect_response({
+        let (win, vol) = (Rc::downgrade(w), v.clone());
+        move |d, resp| {
+            if resp == gtk::ResponseType::Accept {
+                let chosen = shape.active_id().and_then(|id| failbrauwser::fsformat::Shape::parse(id.as_str())).unwrap_or(failbrauwser::fsformat::Shape::UsbStick);
+                if let Some(w) = win.upgrade() {
+                    create_device_icon(&w, &vol, chosen);
+                }
+            }
+            d.close();
+        }
+    });
+    d.show_all();
+}
+
+/// Writes the four files off the UI thread with the shape the window named, the volume marked busy while the
+/// act runs, and answers in the words the act wrote — which name the files that stand (README: *Device icons*).
+fn create_device_icon(w: &Rc<Window>, v: &Volume, shape: failbrauwser::fsformat::Shape) {
+    let win = Rc::downgrade(w);
+    let (key, vol, fs, name) = (busy_key(v), v.clone(), v.fs_type.clone(), v.label.clone());
+    set_busy(&key, true);
+    glib::spawn_future_local(async move {
+        let answer = gio::spawn_blocking(move || failbrauwser::fsformat::act::create_icon(&vol, &fs, shape, &name)).await.map_err(|_| "the device-icon run ended".to_string()).and_then(|r| r);
+        set_busy(&key, false);
+        match answer {
+            Ok(words) => notice(&win, "Device icon", &words),
+            Err(e) => error(&win, "Cannot write the device icon", &e),
+        }
+    });
+}
+
+/// Takes a device icon away off the UI thread, the volume marked busy while the act runs. What was kept — an
+/// `autorun.inf` or `desktop.ini` of somebody else — is told, because the verb promises to say so (README:
+/// *Device icons*).
+fn remove_device_icon(w: &Rc<Window>, v: &Volume) {
+    let win = Rc::downgrade(w);
+    let (key, vol) = (busy_key(v), v.clone());
+    set_busy(&key, true);
+    glib::spawn_future_local(async move {
+        let answer = gio::spawn_blocking(move || failbrauwser::fsformat::act::remove_icon(&vol)).await.map_err(|_| "the device-icon run ended".to_string()).and_then(|r| r);
+        set_busy(&key, false);
+        match answer {
+            Ok(words) => notice(&win, "Device icon", &words),
+            Err(e) => error(&win, "Cannot take the device icon away", &e),
+        }
+    });
+}
+
+/// The words of an act that worked, told in a window of its own: for the two device-icon verbs the answer —
+/// which files stand, which were kept and why — is the point of the verb, not a side note.
+fn notice(w: &Weak<Window>, title: &str, detail: &str) {
+    if let Some(w) = w.upgrade() {
+        let d = gtk::MessageDialog::new(Some(&w.win), gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT, gtk::MessageType::Info, gtk::ButtonsType::Close, title);
+        d.set_secondary_text(Some(detail));
+        d.connect_response(|d, _| d.close());
+        d.show();
+    }
 }
 
 /// Shows a volume's files in `pane` (or a new tab), mounting it or connecting to the phone

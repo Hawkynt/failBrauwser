@@ -659,8 +659,13 @@ fn unmounted_drives_in_the_side_panel() {
 
 #[test]
 fn renaming_and_formatting_a_volume() {
-    // The stand-in volume of this scenario is never mounted, so its folder is never read.
-    run("drive_format.fbt", |_| {});
+    // The stand-in volume whose format and name are driven here is never mounted, so its folder is never read.
+    // The mounted image the two device-icon verbs write into is a folder of this run's own, which is why the
+    // folder and the image file both exist before the scenario starts.
+    run("drive_format.fbt", |t| {
+        std::fs::create_dir_all(t.join("inside")).unwrap();
+        std::fs::write(t.join("backup.ntfs"), "fake image").unwrap();
+    });
 }
 
 #[test]

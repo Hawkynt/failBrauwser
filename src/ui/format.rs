@@ -8,7 +8,7 @@
 use super::window::Window;
 use failbrauwser::drives::{Usage, Volume};
 use failbrauwser::fs::format::human_size;
-use failbrauwser::fsformat::{FormatOption, FileSystem, Target, Value, Values};
+use failbrauwser::fsformat::{FormatOption, FileSystem, Shape, Target, Value, Values};
 use gtk::{glib, prelude::*};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -85,10 +85,8 @@ pub fn show(w: &Rc<Window>, v: &Volume, usage: Option<Usage>, on_format: impl Fn
         move |d, resp| {
             // The choice leaves through `on_format` alone; the act it starts is not this window's business,
             // and a window that cannot name a file system has nothing to hand over.
-            if resp == gtk::ResponseType::Accept {
-                if let Some(fs) = page.chosen() {
-                    on_format(fs, page.values());
-                }
+            if resp == gtk::ResponseType::Accept && let Some(fs) = page.chosen() {
+                on_format(fs, page.values());
             }
             d.close();
         }
@@ -156,6 +154,10 @@ struct Page {
     /// The shorter name the file system really carries, beside the entry.
     carried: gtk::Label,
     typed: gtk::Entry,
+    /// The box that asks for the four files of a device icon, and the shape they are drawn for with the words
+    /// the machine reported beside it (README: *Device icons*).
+    icon: gtk::CheckButton,
+    shape: gtk::ComboBoxText,
     button: gtk::Button,
     /// Every row of the option grid: its option, the values it was filled from (which is how it is read
     /// back), the control itself, and the words in front of it — both of which answer to [`Page::carries`].
@@ -203,18 +205,38 @@ impl Page {
         asking.set_xalign(1.0);
         asking.style_context().add_class("dim-label");
 
+        // The device icon contributes no switch at all: it arrives as the four files that carry it, so it is a
+        // box of its own rather than a row of the option grid. The shape is chosen here because the machine
+        // cannot tell one memory card from another, and the evidence beside the dropdown says as much.
+        let icon = gtk::CheckButton::new();
+        icon.set_widget_name(FormatOption::DeviceIcon.field());
+        let shape = gtk::ComboBoxText::new();
+        shape.set_widget_name("device-shape");
+        for kind in Shape::all() {
+            shape.append(Some(kind.asset()), kind.label());
+        }
+        shape.set_active_id(Some(Shape::detected(v).unwrap_or(Shape::UsbStick).asset()));
+        let evidence = words(&Shape::evidence(v), false);
+        evidence.set_widget_name("shape-carried");
+        evidence.set_max_width_chars(52);
+
         grid.attach(&key("File system:"), 0, 0, 1, 1);
         grid.attach(&chooser, 1, 0, 2, 1);
         grid.attach(&options, 0, 1, 3, 1);
         grid.attach(&key("Volume name:"), 0, 2, 1, 1);
         grid.attach(&name, 1, 2, 1, 1);
         grid.attach(&carried, 1, 3, 2, 1);
-        grid.attach(&asking, 0, 4, 1, 1);
-        grid.attach(&typed, 1, 4, 1, 1);
+        grid.attach(&key(FormatOption::DeviceIcon.label()), 0, 4, 1, 1);
+        grid.attach(&icon, 1, 4, 2, 1);
+        grid.attach(&key("Device shape:"), 0, 5, 1, 1);
+        grid.attach(&shape, 1, 5, 2, 1);
+        grid.attach(&evidence, 1, 6, 2, 1);
+        grid.attach(&asking, 0, 7, 1, 1);
+        grid.attach(&typed, 1, 7, 1, 1);
 
         let button = gtk::Button::with_mnemonic("_Format");
 
-        Page { wanted, grid, chooser, options, name, carried, typed, button, controls: RefCell::new(Vec::new()) }
+        Page { wanted, grid, chooser, options, name, carried, typed, icon, shape, button, controls: RefCell::new(Vec::new()) }
     }
 
     /// The file system the dropdown names, or nothing where it names none.
@@ -232,8 +254,9 @@ impl Page {
         let Some(fs) = self.chosen() else { return };
         let mut y = 0;
         for option in FormatOption::all() {
-            // The name has an entry of its own, and the device icon writes no switch at all — it arrives
-            // with the files that carry it — so neither is a row of this grid.
+            // The name has an entry of its own, and the device icon writes no switch at all — it arrives with
+            // the files that carry it, and has its box and its shape dropdown above the confirmation — so
+            // neither is a row of this grid.
             if matches!(option, FormatOption::VolumeName | FormatOption::DeviceIcon) {
                 continue;
             }
@@ -311,6 +334,11 @@ impl Page {
     /// answer for itself.
     fn values(&self) -> Choices {
         let mut out = vec![(FormatOption::VolumeName, Value::Text(self.name.text().to_string()))];
+        // The icon box carries the shape it will draw, by the name that shape's picture travels under; a box
+        // that is not ticked contributes nothing at all, and no file is written.
+        if self.icon.is_active() {
+            out.push((FormatOption::DeviceIcon, Value::Text(self.shape.active_id().map(String::from).unwrap_or_default())));
+        }
         for (option, allowed, control, _) in self.controls.borrow().iter() {
             // A row the choice does not carry answers nothing, hidden or not: the tool would refuse it.
             if !self.carries(*option) {

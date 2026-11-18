@@ -17,7 +17,7 @@
 //! `shortcut-menu <entry> : <item>` (`Show Hidden Entry/<name>` for the submenu),
 //! `shortcut-drag <entry> > <before entry>`, `shortcut-drop <folder> > <before entry>`,
 //! `window-snapshot <png>`, `wait-error <text>`, `wait-dialog <text>`,
-//! `dialog-button <dialog text> : <button>`, `dialog-entry <dialog text> = <text>`, `expect-dialog-entry <dialog text> = <text>`, `wait-no-dialog <text>`, `properties-choose-app <desktop id>`, `clipboard-text <text>`, `batch-set <field> = <value>`, `dialog-set <dialog> : <field> = <value>`, `expect-dialog-label <dialog> : <text>`, `network-add-server`, `expect-batch-preview <a -> b | …>`, `expect-batch-status <text>`, `properties-button <label>`, `wait-properties-text <text>`, `properties-set <field> = <value>`, `expect-properties-button <label> = none|off|on`, `expect-format-button = none|off|on`, `format-set <field> = <value>`, `format-accept`, `expect-format-text <text>`, `expect-no-format-text <text>`,
+//! `dialog-button <dialog text> : <button>`, `dialog-entry <dialog text> = <text>`, `expect-dialog-entry <dialog text> = <text>`, `wait-no-dialog <text>`, `properties-choose-app <desktop id>`, `clipboard-text <text>`, `batch-set <field> = <value>`, `dialog-set <dialog> : <field> = <value>`, `expect-dialog-label <dialog> : <text>`, `network-add-server`, `expect-batch-preview <a -> b | …>`, `expect-batch-status <text>`, `properties-button <label>`, `wait-properties-text <text>`, `properties-set <field> = <value>`, `expect-properties-button <label> = none|off|on`, `expect-format-button = none|off|on`, `format-set <field> = <value>`, `format-accept`, `expect-format-text <text>`, `expect-no-format-text <text>`, `icon-set <field> = <value>`, `expect-icon-text <text>`, `expect-icon-button = none|off|on`, `icon-accept`,
 //! `expect-default-app <content type> = <desktop id>`, `fake-phone <name> = <folder>`,
 //! `wait-drive-text <title> : <text>`, `wait-no-drive-text <title> : <text>`,
 //! `drive-button <title> : <row text> : <button>`, `drives-menu <title> : <item>`, `expect-no-format-text <text>`, `expect-tabs <a | b>`, `expect-title <text>`,
@@ -249,6 +249,12 @@ fn properties_dialog() -> Option<gtk::Dialog> {
 #[allow(deprecated)]
 fn format_dialog() -> Option<gtk::Dialog> {
     titled_dialog("— Format")
+}
+
+/// The Device icon window shown — the shape a device icon is drawn for (README: *Device icons*).
+#[allow(deprecated)]
+fn icon_dialog() -> Option<gtk::Dialog> {
+    titled_dialog("— Device icon")
 }
 
 /// The shown dialog whose title ends with these words (the Properties window, the Format window …).
@@ -544,7 +550,7 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             // not shown, shown and disabled, or shown and pressable.
             let (label, want) = arg.split_once(" = ").ok_or("usage: expect-properties-button <label> = none|off|on")?;
             let d = properties_dialog().ok_or("no Properties dialog")?;
-            expect_button(&d.upcast_ref(), label.trim(), want)?;
+            expect_button(d.upcast_ref(), label.trim(), want)?;
         }
         "format-set" => {
             // format-set <field name> = <value>: a field of the open Format dialog.
@@ -574,7 +580,7 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             // answers when the window itself is gone — a scenario reads its end as an answer.
             let want = arg.trim().trim_start_matches('=').trim();
             match format_dialog() {
-                Some(d) => expect_button(&d.upcast_ref(), "Format", want)?,
+                Some(d) => expect_button(d.upcast_ref(), "Format", want)?,
                 None if want == "none" => {}
                 None => return Err("no Format dialog".into()),
             }
@@ -584,6 +590,39 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             // scenario only drives it against a volume the act refuses (a stand-in with no drive letter).
             let d = format_dialog().ok_or("no Format dialog")?;
             let b = find_button(d.upcast_ref(), "Format").ok_or("no Format button")?;
+            if !b.is_sensitive() {
+                return Err("the button is disabled".into());
+            }
+            b.clicked();
+        }
+        "icon-set" => {
+            // icon-set <field name> = <value>: a field of the open Device icon window.
+            let (name, value) = arg.split_once(" = ").map(|(n, v)| (n.trim(), v)).ok_or("usage: icon-set <field> = <value>")?;
+            let d = icon_dialog().ok_or("no Device icon window")?;
+            set_field(&find_named(d.upcast_ref(), name).ok_or("no such field")?, value)?;
+        }
+        "expect-icon-text" => {
+            // expect-icon-text <text>: a label the open Device icon window shows holds these words.
+            let d = icon_dialog().ok_or("no Device icon window")?;
+            let texts = label_texts(d.upcast_ref());
+            if !texts.iter().any(|t| t.contains(arg)) {
+                return Err(format!("labels: {texts:?}"));
+            }
+        }
+        "expect-icon-button" => {
+            // expect-icon-button = none|off|on: that window's Create button.
+            let want = arg.trim().trim_start_matches('=').trim();
+            match icon_dialog() {
+                Some(d) => expect_button(d.upcast_ref(), "Create", want)?,
+                None if want == "none" => {}
+                None => return Err("no Device icon window".into()),
+            }
+        }
+        "icon-accept" => {
+            // Presses the Device icon window's Create button. The act it starts is driven against a volume the
+            // act refuses, so no volume of this machine is written by a scenario.
+            let d = icon_dialog().ok_or("no Device icon window")?;
+            let b = find_button(d.upcast_ref(), "Create").ok_or("no Create button")?;
             if !b.is_sensitive() {
                 return Err("the button is disabled".into());
             }

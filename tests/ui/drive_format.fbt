@@ -4,6 +4,9 @@
 # drive letter, so the act answers for it without any volume of this machine being touched and without a
 # consent dialog anywhere.
 fake-volume Photos = $T/photos : ntfs : NTFS,exFAT,FAT32
+# A stand-in disk image of this run's own, mounted later, so the two device-icon verbs have a volume that
+# names a folder: the folder it names is a folder of this run, and nothing of the machine's volumes is written.
+fake-image $T/backup.ntfs = $T/inside
 action win.drives
 wait-drive Photos
 # The Label row is an entry you type into, and the Rename button beside it answers only while the typed
@@ -28,6 +31,10 @@ properties-button Close
 !win drive-properties $C
 !win expect-properties-button Rename = none
 !win expect-properties-button Format… = off
+# The two device-icon verbs *are* offered for the volume Windows runs from — it names a folder and is not
+# read-only — and they are named here, never pressed, because pressing them would write onto that volume.
+!win expect-properties-button Create device icon… = on
+!win expect-properties-button Remove device icon = on
 !win properties-button Close
 # The row menu and the properties window open the same format window.
 drives-menu Photos : Format…
@@ -58,6 +65,15 @@ format-set quick = off
 expect-format-text Overwrite passes
 format-set quick = on
 expect-no-format-text Overwrite passes
+# The device icon is a box of its own above the confirmation, not a row of the option grid: it contributes no
+# switch, because it arrives as the four files that carry it. The shape it draws is chosen from the nine, and
+# the words the machine gave are spelled out beside the dropdown — the same dropdown and the same words the
+# *Create device icon* window shows.
+expect-format-text Write a device icon
+expect-format-text Device shape:
+expect-format-text detected:
+format-set device-shape = msd
+format-set device-icon = on
 # Pressing it hands the choice to the act, which answers for a stand-in naming no drive: on Windows there
 # is no letter to format, and over there the options of the table belong to this system's tool. Neither
 # answer starts a tool of any kind, and the window closes either way.
@@ -69,6 +85,36 @@ format-accept
 !win dialog-button This volume has no drive letter to format : Close
 !unix dialog-button the options of the format table belong to this system : Close
 expect-format-button = none
-# The properties window of the same volume answers again afterwards.
+# The properties window of the same volume answers again afterwards, and the two device-icon verbs are shut
+# for it: the act refuses this stand-in because it names no folder, and that refusal is why they are shut.
 drive-properties Photos
 expect-properties-button Format… = on
+expect-properties-button Create device icon… = off
+expect-properties-button Remove device icon = off
+properties-button Close
+# The stand-in image is mounted through its file first, because a device icon needs a volume naming a folder.
+open $T
+select backup.ntfs
+action win.mount-image
+wait-location $T/inside
+action win.drives
+wait-drive backup.ntfs
+# *Create device icon…* names the shape before anything is written, and nothing is written until *Create* is
+# pressed. The evidence beside the dropdown says what the machine could not tell. The answer is the act's own
+# words, naming the files that stand, and the file it wrote names the data name that shape carries.
+drives-menu backup.ntfs : Create device icon…
+expect-icon-text The four files are written onto this volume
+expect-icon-text Device shape:
+expect-icon-text nothing detected:
+expect-icon-button = on
+icon-set device-shape = msd
+icon-accept
+wait-dialog The device icon stands on
+dialog-button The device icon stands on : Close
+expect-icon-button = none
+wait-file-text $T/inside/autorun.inf = ModelName=micro SD card
+wait-file-text $T/inside/autorun.inf = icon=folder.ico
+# *Remove device icon* takes those four away again and says so; the folder is left with nothing of ours in it.
+drives-menu backup.ntfs : Remove device icon
+wait-dialog taken away from
+dialog-button taken away from : Close
