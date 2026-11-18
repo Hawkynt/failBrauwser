@@ -203,12 +203,15 @@ and the new program started. The *build from source* channel is Linux-only there
   sysroot has never had a `dbus-daemon.exe`), and selftests additionally run
   `NON_UNIQUE`/`HANDLES_COMMAND_LINE` so they need no bus at all.
 - **Elevation on Windows is one consent prompt per act, never a service and never at startup.**
-  Renaming the label of a volume that is not yours to write, and formatting, run this program's own
-  file again with the verb `runas` (`ShellExecuteExW`) and the parameters `--rename-volume …` /
-  `--format …`, each told by `--outcome <path>` which file to write its answer into; the window waits for
-  that run and reads the file back. Cancelling the consent dialog is a no-op and leaves nothing running,
-  and the run is started hidden, since it has nothing to show the user beyond the consent dialog itself. The Linux twin of the same two acts goes through the
-  `pkexec` helper that Backup Mode already uses (`src\links\helper.rs`).
+  Renaming the label of a volume that is not yours to write, formatting one, and writing or removing the
+  four files of a device icon where the volume refuses the write, all run this program's own file again
+  with the verb `runas` (`ShellExecuteExW`) and the parameters `--rename-volume …` / `--format …` /
+  `--device-icon …` / `--remove-device-icon …`, each told by `--outcome <path>` which file to write its
+  answer into; the window waits for that run and reads the file back. The two device-icon verbs ask only
+  once the write itself answers that the rights are what is missing, so a volume this user may write to is
+  settled with no prompt at all. Cancelling the consent dialog is a no-op and leaves nothing running, and
+  the run is started hidden, since it has nothing to show beyond the consent dialog itself. The Linux twin
+  of the same acts goes through the `pkexec` helper that Backup Mode already uses (`src\links\helper.rs`).
 - **The arguments of that run travel quoted, and this machine's own parser answers them back unchanged.**
   `ShellExecuteExW` takes the whole tail of a command line as one string, so `src\win\elevate.rs` builds it
   by the rule `CommandLineToArgvW` reads. Measured 2026-11-18 in this checkout: ten arguments — a bare drive
@@ -343,20 +346,26 @@ and the new program started. The *build from source* channel is Linux-only there
   only a file carrying the section of ours and the icon names that file points at, so a foreign
   `autorun.inf` keeps every byte it had and an icon file no marked file names stays where it is; a name
   walking out of the root is not obeyed. The display name that pair produces, and the removal taking it back,
-  are the folder measurement above. What is left unbuilt is the reaching of those two verbs: *Create device
-  icon* and *Remove device icon* are on no drive menu and no properties window, and the format window has no
-  *Write a device icon* row and no *Device shape* dropdown — so what these files do on a **mounted volume**,
-  where `autorun.inf`'s `icon=` and `label=` and the `DevIcon.fil` hook belong, is still unmeasured and stays
-  for the authorized format step.
+  are the folder measurement above. Those two verbs are reached now: *Create device icon* and *Remove device
+  icon* stand on a drive's row menu and on its properties window — shut, with the act's own reason on their
+  tooltip, wherever a volume names no folder or is read-only — and the format window carries the *Write a
+  device icon* box with the *Device shape* dropdown beside the words this machine reported. The scenario
+  `drive_format.fbt` drives that create and that removal against a stand-in image mounted into a folder of
+  the run's own, and reads back the four files, the answer naming them, and the removal's words. Still
+  unmeasured is what those files do on a **mounted volume of this machine**, where `autorun.inf`'s `icon=`
+  and `label=` and the `DevIcon.fil` hook belong: that stays for the authorized format step.
 - **No automated run writes a volume or elevates.** The format scenario drives a stand-in volume that names
   no drive letter and holds no mount point, so the act answers before a start of any program exists — on
   Windows *This volume has no drive letter to format.*, and over there the switches of the table belonging
   to this system's tool — and the scenario reads that answer out of the window it is told in. No consent
   dialog appears and no format tool is reached, so that scenario needs no stand-in act program; the
   `FAILBRAUWSER_ELEVATE` seam (`src\fsformat\act.rs`, shaped as `src\links\helper.rs` already uses) stays
-  pinned by its own lib test, and a run that records the argv an act program was handed comes with the
-  icon step. The single real format in this project's verification is the one authorized step on the 64 GB
-  removable stick, recorded where it was measured.
+  pinned by its own lib test. The device-icon half of that same scenario does write, and writes four real
+  files — into a folder of the run's own, which a stand-in image of that run is mounted into. That folder
+  needs no rights beyond the ones this program already has, so the write reaches no elevation, no consent
+  dialog and no act program either, and nothing of this machine's volumes is touched. The single real format
+  in this project's verification is the one authorized step on the 64 GB removable stick, recorded where it
+  was measured.
 
 ## Test suite state on Windows
 
@@ -366,8 +375,9 @@ Scenarios that need Linux-only services skip with a printed reason:
 `desktop_links.fbt` (roaming-profile Desktop, see above), `summary.fbt` (symlink fixture),
 and the portal/default-app parts elsewhere. Timing budgets for the big-listing paints are
 widened for win32 GTK plus Defender (`big_listings.fbt`) — measured here, not guessed.
-That made 45 scripts across 46 scenario tests — the tree carries 61 scripts and 52
-scenario tests in `tests\ui_selftest.rs` today, the numbers further down being today's; run serially (`RUST_TEST_THREADS=1
+That made 45 scripts across 46 scenario tests — the tree carries 62 scripts and 54
+scenario tests in `tests\ui_selftest.rs` today (one of each being `drive_format.fbt` and its test, added by
+this feature), the numbers further down being today's; run serially (`RUST_TEST_THREADS=1
 cargo test --release --test ui_selftest`), 43 of them answered green on this host on
 2026-11-13 in 376.95 s, the suite's slowest run here, with `big_listings.fbt` inside both of
 its budgets that time. On 2026-11-12 the same command read 42 green of 45 in the morning
@@ -527,8 +537,8 @@ targets carried no `warning:` line at all — which is what `winpack\build.ps1` 
 writes to stderr as fatal.
 
 Measured on 2026-11-18 for the drives windows' two acts (README: *Renaming a volume*, *Formatting a
-volume*). The new scenario `tests\drive_format.fbt`, driven as `renaming_and_formatting_a_volume` (the 53rd
-test of the UI target), answers green and touches no volume of this machine: the stand-in it drives names no
+volume*). The new scenario `tests\drive_format.fbt`, driven as `renaming_and_formatting_a_volume`, answers
+green and touches no volume of this machine: the stand-in it drives names no
 drive letter and holds no mount point, so the act answers before any program is started, no consent dialog
 appears and no format tool is reached. Driven serially with the four scenarios that share that page —
 `drives_page`, `unmounted_drives_in_the_side_panel`, `phones_with_the_drives`, `disk_image_as_drive` — the
@@ -541,6 +551,20 @@ out of `git archive` of the commit this work starts on, exported into a scratch 
 the same place with no line of this work in it. The module suites behind those windows read **67 passed, 0
 failed** across `fsformat::`, `win::elevate::`, `win::storage::` and `drives::`, and `source_rules`,
 `win_startup` and `helper_lifetime` read 2, 3 and 2 green. `cargo clippy --release --lib` names 51 warnings
-in the crate and none in `src\fsformat\mod.rs`, `src\ui\format.rs`, `src\ui\drives.rs` or
-`src\ui\selftest.rs` — which is what a re-check with those four files touched answers, and the release build
-of the same tree carried no `warning:` line either.
+in the crate and none of them in `src\fsformat\` — which is what a re-check with that module touched answers;
+the files under `src\ui\` are no part of that target, so they are measured with the binary below. The release
+build of the same tree carried no `warning:` line either.
+
+Measured again on 2026-11-18 for the device-icon verbs and the format page's box (README: *Device icons*).
+The scenario reads green with its create and removal legs, and driven serially with the three drive scenarios
+that share those windows — `drives_page`, `drives_in_the_side_panel` and `unmounted_drives_in_the_side_panel`
+— the target reads **4 of 4 green in 18.79 s**. The whole lib of the same tree reads **392 passed, 3 failed,
+1 ignored**, and those three are the Linux-only assertions named further down this section —
+`terminals_debian_and_others`, `the_folder_s_filesystem_is_read_by_statfs` and
+`admin_tools_are_found_in_sbin` — which is their state here before this feature and after it; the three guards
+read 3, 2 and 2. `cargo clippy --release --bins --lib` names
+**168** warnings across crate and binary, of which `src\fsformat\` and `src\ui\format.rs` carry none, and
+`src\ui\selftest.rs` and `src\ui\drives.rs` carry four and seven — every one on a line this feature never
+touched, blamed to commits of 2026-09-29 through 2026-11-14; the two findings that did stand on lines of this
+feature's own code (a collapsible `if` in `src\ui\format.rs`, three needless borrows in
+`src\ui\selftest.rs`) were cleared rather than left, and the older ones were left where they are.
