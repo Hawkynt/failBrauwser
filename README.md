@@ -944,9 +944,17 @@ and the shape can be changed. The same words go into the volume name the format 
 
 Two of those files also carry the volume's long name: `autorun.inf` names it as the drive's label and
 `desktop.ini` names it as the folder's display name, which is what makes a `Samsung 64 GB` name work
-on a file system whose own label holds 11 characters. Which of the two this Windows answers to is
-measured on the authorized volume rather than assumed, and `docs\WINDOWS.md` records the answer
-including the case where neither is honoured.
+on a file system whose own label holds 11 characters. How that second pin behaves is measured here
+(2026-11-18) on a plain folder rather than assumed: the folder shows the pinned name **only while the
+folder itself carries the system attribute** — with that attribute taken off, the folder's own name shows
+again — and of the three encodings tried, UTF-16 with a byte-order mark and the machine's own single-byte
+codepage show the name while UTF-8 shows what a single-byte reader makes of it (`Große` came back as
+`GroÃŸÃ¶e`), so `desktop.ini` is written in UTF-16 with that mark. What the pin does on a mounted volume is
+read back at the authorized format step, and a volume answering differently from a folder is what gets
+recorded there, not a promise. `autorun.inf` is a single-byte file, so its `label=` line names the volume
+only where the short label the file system itself carries is plain ASCII: a name reaching past that
+codepage is not written down in a form that would lose characters, and the long name then rests on
+`desktop.ini` alone.
 
 Four files go on the volume, because the systems ask for four different ones: `DevIcon.fil`, an icon
 file in the shape Windows describes for a device icon — twelve images, the sizes 16×16, 32×32, 48×48
@@ -954,10 +962,20 @@ and 256×256 in 24-bit colour with an 8-bit alpha channel, 8-bit with 1-bit tran
 with 1-bit transparency; on a case-insensitive file system the two spellings `DevIcon.fil` and
 `devicon.fil` are the same one file; `autorun.inf`, naming that icon and describing the device
 (`ModelName`, `Manufacturer`); and `desktop.ini` with `folder.ico` for the folder's own picture, the
-volume's root marked system-and-hidden so the shell honours it. *Create device icon* writes files and
-nothing else: it never dismounts, never formats, never touches a file system. *Remove device icon*
-deletes exactly the files it wrote, recognised by what is inside them, never a wildcard over the
-volume.
+volume's root marked system-and-hidden so the shell honours it.
+
+Each of the two text files carries a line of its own saying so: a `[failBrauwser]` section with
+`DeviceIcon=1`, and a second line of that section saying whether the root's system attribute was already
+there before this feature put it. That section is what *Remove device icon* removes by, and it removes by
+nothing else: it reads the two files, and only where one of them carries the marker does it delete that
+file and the icon files the marked file names. An `autorun.inf` or `desktop.ini` of somebody else — one
+without that section — keeps every byte and the verb says so; a `folder.ico` no marked file names stays
+where it is; and the root is unmarked again only where the marker says the marking came from here. Measured
+on this machine, none of that removal needs a trick: an ordinary delete takes a hidden-and-system file, a
+system-and-hidden folder still enumerates its own children, and both attributes come back off. *Create
+device icon* writes files and nothing else — it never dismounts, never formats, never touches a file
+system — and the section of our own leaves the shell's own keys working: a folder carrying it and no pinned
+name still shows its own name.
 
 **Phones:** plug in an Android phone, unlock it and choose *File transfer* in its USB
 notification. It shows up on the Drives page with the USB sticks, called by its name, with a
