@@ -226,6 +226,15 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
   206 s of 2026-11-17 were runs inside a full run; the difference was not investigated and no speedup
   is claimed. A census of `git`/`svn`/`svnadmin`/`hg`/`cvs` straight after named only the shell's own
   two `git -C … branch --show-current`.
+- Measured 2026-11-18, the same against the **installed** program rather than a build product: a
+  scratch driver started `…\Programs\failbrauwser\bin\failbrauwser.exe` with a self-test script that
+  opens a working copy, switches integration on and then waits for an overlay that cannot arrive, with
+  a stand-in `git.exe` first on `PATH` (the version probe answered, every other call leaves a marker and
+  sleeps 10 minutes). The marker named
+  `status --porcelain=v2 -z --untracked-files=normal --ignored=matching -- .`; three seconds after
+  `taskkill /F` had ended the instance — no `/T`, so no tree was taken and nothing of ours ran — that
+  client was no longer running. The folder of that run was removed afterwards, and the census named no
+  client of the program's.
 - Not verified, and not answered: the other side of the job. `PR_SET_PDEATHSIG` is the Unix answer to
   kill-on-close, but it has to be set by the child at its own exec, which stable `Command` gives no
   hook for; a process watching from this instance would die in the same crash it is meant to survive.
