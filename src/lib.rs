@@ -7,6 +7,7 @@ pub mod archive;
 pub mod chooser;
 pub mod clipformat;
 pub mod fs;
+pub mod fsformat;
 pub mod config;
 pub mod desktoplink;
 pub mod devices;
