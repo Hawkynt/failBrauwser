@@ -53,6 +53,10 @@ askpass on top of it, so a password question comes to a failBrauwser window inst
 | `src\ui\customactions.rs:81` | `cmd /C`, else `sh -c` | a custom action, including *Open Terminal Here* | guarded (`:85`); stdin nulled | the same start, and see below for why its window still appears |
 | `src\links\helper.rs:115` | `pkexec failbrauwser --links …` | Backup Mode and mountpoints as root | guarded (`:127`) for the starts a Windows build can reach through `FAILBRAUWSER_ELEVATE`; the elevation run itself is the Unix path (`ui\links.rs:49`) | pkexec's own authentication dialog appears, which is the point |
 | `src\ui\drives.rs:1071` | `pkexec failbrauwser --lvm …` | the LVM volumes inside an unlocked partition | never reached: `pkexec` is looked for first (`:1068`) and the answer is the "no pkexec" message | polkit's dialog appears, which is the point |
+| `src\fsformat\act.rs` (Windows) | this program's own file, verb `runas` | the label write and the format, as the administrator | `ShellExecuteExW`, **not** `Command::new`, so the walk below cannot see it: there is no console of ours to hide, the run writes an outcome file the window reads, and the consent dialog is the window the user asked for | not built |
+| `src\fsformat\act.rs` (the elevated run) | `format` | the format itself | guarded (`win\console::no_window`); an **act**, so deliberately none of the reading clients the read job holds | not built |
+| `src\fsformat\act.rs` (Linux) | `e2label`, `exfatlabel`, `ntfslabel`, `mlabel`, `swaplabel` | the volume name, as the administrator | `#[cfg(unix)]`: compiles nowhere else | through the `src\links\helper.rs` elevation, whose prompt is polkit's |
+| `src\fsformat\act.rs` (Linux) | `mkfs.<type>` | the format, as the administrator | `#[cfg(unix)]` | as left |
 | `src\lvm.rs:259` | `lsblk`, `lvm`, `cryptsetup` … | the Linux drive facts, as root | `#[cfg(unix)]`: the whole half compiles nowhere else | no terminal is given to a child of a GUI process |
 | `src\network.rs:184` | `smbclient -N -L` | the workgroup share probe | `#[cfg(not(windows))]`; the Windows build asks the network APIs | as left |
 | `src\ui\network.rs:728` | `smbclient` | the browse list of a machine | guarded (`:733`) — this one does run on a Windows build | as left |
@@ -77,7 +81,10 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
 - **The program the user chose.** `gio::AppInfo` launches (`src\ui\util.rs:190`, `:203`,
   `src\ui\window.rs:532`, …) open the handler for a file type or URI: a window is the requested act.
 - **The administrator's password.** pkexec's polkit dialog (rows above) is the only elevation
-  prompt this program causes; it is never replaced by a window of ours.
+  prompt this program causes on Linux; it is never replaced by a window of ours. On Windows the
+  equivalent is the consent dialog of `ShellExecuteExW` with verb `runas`, shown for the volume label
+  write and for the format and naming the command it will run: that dialog is the point, it is not
+  replaced by a window of ours, and cancelling it leaves the volume exactly as it was.
 - **A custom action's own program.** The action's command line is written for the shell named in
   `src\ui\customactions.rs:77`; its output goes where this program's output goes.
 
@@ -145,7 +152,11 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
   asked for is left to finish — a commit (`run::with_input` feeds its message over a pipe, and its
   client is deliberately not registered), a push, a merge under its progress window, the installer
   script of an update detached on purpose (`src\ui\update.rs:255`) — and so is anything the user
-  opened a window for: a terminal, a chosen handler, a custom action's own program.
+  opened a window for: a terminal, a chosen handler, a custom action's own program. A **format** is an
+  act of that same kind, and the elevated run of this program that performs it is a separate instance,
+  so its own clients are covered by that instance's own rule and never by the job of the window that
+  asked for the format: putting a format under a kill-on-close rule is how a half-written file system
+  is left behind.
   Measured here on 2026-11-17, before that rule existed: five tools were still running with their
   parent process gone when UI scenarios had ended — `git log -z --format=…`, two
   `git status --porcelain=v2 … -- .` and two `svn log --xml --verbose --revision 4 -- .`. They were
@@ -165,6 +176,7 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
 | `src\vcs\run.rs` unit test `a_client_still_reading_when_the_instance_ends_is_ended_there` | a client of a read still in flight is gone when `end_our_clients` has run, and the call comes back refusing rather than hanging |
 | `tests\source_rules.rs::no_end_of_the_process_in_the_ui_skips_the_reading_clients` | an instance that ends itself ends its reading clients first: no `std::process::exit` below `src\ui` outside `run::end_and_exit` |
 | `src\vcs\run.rs` unit test `a_reading_client_is_gone_when_the_instance_is_killed_without_ending_anything` | the read job ends the client too, on an end that runs no ending code at all; it names the reason when this machine's own job forbids the assignment |
+| `src\fsformat` unit tests reading the README's option table (the precedent is `src\vcs\caps.rs`) | the format window cannot offer a switch the README does not list, nor leave out one it does — entered ahead of the code, which arrives with the tests |
 
 ## Measured, and what is not
 

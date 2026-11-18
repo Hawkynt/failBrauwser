@@ -821,7 +821,88 @@ where they came from, recreating missing folders and asking if the name is taken
 deleted for good. The status bar shows where a selected item was deleted from.
 
 **Drives:** *Drives* on the left lists every volume; the button at the end of a row (or a
-right-click, or <kbd>Alt</kbd>+<kbd>Enter</kbd>) shows its properties.
+right-click, or <kbd>Alt</kbd>+<kbd>Enter</kbd>) shows its properties. Its *Volume* section holds
+the volume name, and the page has *Format…* and *Device icon*.
+
+**Renaming a volume:** the *Label* row of a drive's properties window is an entry you can type
+into; a *Rename* button appears beside it as soon as the text differs from what the volume says, and
+disappears again when it does not. The characters the file system allows are refused while typing
+(FAT and FAT32 take 11, exFAT 15, NTFS and ReFS 32, UDF 32), and where the machine answers
+differently, its own words are shown rather than a wording of ours. A USB stick is renamed without
+asking anyone: writing the label of a volume you do not own runs this same program elevated, so
+Windows asks for the administrator's approval at that moment — and cancelling that prompt changes
+nothing at all.
+
+**Formatting a volume:** *Format…* on the drive's row menu and on its properties window. The
+dropdown lists the file systems this machine offers for *that* volume: the system's own answer where
+it gives one, otherwise the installed format tool's own list. `format.exe` on this build names FAT,
+FAT32, exFAT, NTFS, ReFS and UDF. Choosing one shows only the options that file system has, and
+nothing outside the table below can reach the command — the table also says which switch each option
+contributes, which is what its test compares against:
+
+| Option | FAT / FAT32 | exFAT | NTFS | ReFS | UDF |
+|---|---|---|---|---|---|
+| volume name | `/V:` | `/V:` | `/V:` | `/V:` | `/V:` |
+| allocation unit (cluster size) | `/A:` | `/A:` | `/A:` | `/A:` | — |
+| quick instead of full | `/Q` | `/Q` | `/Q` | `/Q` | `/Q` |
+| overwrite passes | `/P:` | `/P:` | `/P:` | `/P:` | — |
+| NTFS compression | — | — | `/C` | — | — |
+| file-record size | — | — | `/L:` | — | — |
+| log size | — | — | `/LogSize:` | — | — |
+| short names | — | — | `/S:` | — | — |
+| no repair logs | — | — | `/NoRepairLogs` | — | `/NoRepairLogs` |
+| no trim | — | — | `/NoTrim` | `/NoTrim` | — |
+| persistent memory (DAX) | — | — | `/DAX:` | — | — |
+| TXF | — | — | `/TXF:` | — | — |
+| development drive, SHA-256 checksums | — | — | — | `/DevDrv`, `/I:` | — |
+| UDF revision and domain | — | — | — | — | `/R:`, `/D` |
+| device icon (see *Device icons*) | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+The switches are measured from `format /?` on this build (2026-11-18); which file system each one
+belongs to is this table's own decision, and where it is wrong the format tool's refusal is what the
+window shows. The allowed values are the operating system's business too: it refused an 8 KiB
+allocation unit for NTFS on a 64 GB removable volume as `Invalid Parameter` (measured through
+`Format-Volume -WhatIf`, which writes nothing), and every range it refuses is quoted in the result
+window verbatim. There is no per-volume MFT reserve on this Windows to offer — the MFT zone is set
+machine-wide by `fsutil behavior set mftzone`, which this feature never touches — so the
+NTFS-specific space knob is the log size.
+
+The volume name is pre-filled with the manufacturer and the size the device icon prints, quick is on
+by default because a full format of a big stick runs for hours, and no command exists until the
+confirmation has the drive's **letter typed into it**, which also states how many bytes are in use
+there. Refused before anything is asked for: the system or boot volume, the volume this program's own
+file sits on, a read-only volume, a network share, a volume one of this program's own operations is
+using, and a volume too small for the smallest file system offered. The format runs elevated: the
+UAC dialog names the command, and a cancelled prompt is a no-op. The tool's own output is shown,
+whether it succeeded or refused.
+
+**Device icons:** the picture and the name a device shows with its own folder. *Create device icon*
+and *Remove device icon* on a drive's row menu and on its properties window write and take away
+those files, and the format window has a box for the same thing, so a stick gets its picture as it is
+formatted. The art is drawn here for the shapes a device comes in — nvme, solid-state disk, hard
+disk, usb stick, sd card, µsd card, 3.5″ floppy, 5.25″ floppy, optical drive — and the words are
+composited when the icon is written: the manufacturer the machine reported (`SanDisk Ultra`,
+`Samsung SSD 870 QVO` …, reduced to the brand word a long model string begins with) and the size in
+the units the packaging prints, decimal (1 GB = 1 000 000 000 bytes, so a 64 160 400 896-byte stick
+reads `64 GB`). At 16 and 32 pixels only the size is drawn; at 48 and 256 the manufacturer goes on
+too, because the smaller sizes turn to mush.
+
+The shape is detected where the machine can tell one (`bus sdio` at 64 GB is a memory card, an nvme
+disk is nvme, a disk with no seek penalty is a solid-state one); where it cannot — an sd card in a
+reader looks exactly like a µsd card, and a 3.5″ floppy exactly like a 5.25″ one — the format window
+shows a *Device shape* dropdown set to the detected answer with the evidence spelled out next to it,
+and the shape can be changed. The same words go into the volume name the format window proposes.
+
+Four files go on the volume, because the systems ask for four different ones: `DevIcon.fil`, an icon
+file in the shape Windows describes for a device icon — twelve images, the sizes 16×16, 32×32, 48×48
+and 256×256 in 24-bit colour with an 8-bit alpha channel, 8-bit with 1-bit transparency and 4-bit
+with 1-bit transparency; on a case-insensitive file system the two spellings `DevIcon.fil` and
+`devicon.fil` are the same one file; `autorun.inf`, naming that icon and describing the device
+(`ModelName`, `Manufacturer`); and `desktop.ini` with `folder.ico` for the folder's own picture, the
+volume's root marked system-and-hidden so the shell honours it. *Create device icon* writes files and
+nothing else: it never dismounts, never formats, never touches a file system. *Remove device icon*
+deletes exactly the files it wrote, recognised by what is inside them, never a wildcard over the
+volume.
 
 **Phones:** plug in an Android phone, unlock it and choose *File transfer* in its USB
 notification. It shows up on the Drives page with the USB sticks, called by its name, with a

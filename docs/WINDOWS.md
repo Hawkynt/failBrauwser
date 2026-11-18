@@ -143,6 +143,7 @@ and the new program started. The *build from source* channel is Linux-only there
 |---|---|---|
 | System calls under copy/delete/trash | `osprim` errno predicates | same file, Win32 codes through `raw_os_error` |
 | Drives, mount state | UDisks2 / GVfs | `win::storage` (drive types, geometry, SSD/HDD), WNet for shares |
+| Volume name, format, device icon (README: *Drives*) | UDisks2 `Filesystem` and `Format` methods, `mkfs.<type>`, `e2label` and friends | `SetVolumeLabelW`, `format.exe` run by an elevated copy of this program, the icon read back through `SHGetFileInfoW` |
 | Trash | freedesktop `$Trashdir` | Recycle Bin through `IFileOperation` (`win::recyclebin`) |
 | Network folders | GVfs `smb://` | real UNC paths via WNet — the whole engine works on them |
 | Servers (SFTP/FTP) | system tools | in-app VFS (`src/remote_fs/`, russh/suppaftp) — browsable like archives, not mapped drives |
@@ -201,6 +202,36 @@ and the new program started. The *build from source* channel is Linux-only there
   still works over GLib's own local bus (probed during the GTK spike, and the packaged
   sysroot has never had a `dbus-daemon.exe`), and selftests additionally run
   `NON_UNIQUE`/`HANDLES_COMMAND_LINE` so they need no bus at all.
+
+- **Elevation on Windows is one consent prompt per act, never a service and never at startup.**
+  Renaming the label of a volume that is not yours to write, and formatting, run this program's own
+  file again with the verb `runas` (`ShellExecuteExW`) and the parameters `--rename-volume …` /
+  `--format …`; that elevated run writes an outcome file the window reads back. Cancelling the consent
+  dialog is a no-op and leaves nothing running. The Linux twin of the same two acts goes through the
+  `pkexec` helper that Backup Mode already uses (`src\links\helper.rs`).
+- **What the format window offers is what this build's `format.exe` offers, and the parameter set is
+  closed.** Measured 2026-11-18 from its own usage text: FAT, FAT32, exFAT, NTFS, ReFS and UDF, plus
+  the switches of the README's option table. There is **no per-volume MFT reserve** on this Windows:
+  `fsutil fsinfo ntfsinfo d:\` reports an MFT zone (224 MB on this machine) that
+  `fsutil behavior set mftzone` sets machine-wide (`MftZone = 0` → 200 MB), and `format` has no
+  per-volume switch for it, so the NTFS space knob the window offers is the log size
+  (`/LogSize:`) and the zone is never written. The operating system keeps the ranges: it answered
+  `Invalid Parameter` for an 8 KiB NTFS allocation unit on a 64 GB removable volume
+  (`Format-Volume -WhatIf`, which writes nothing), and its refusal is shown as it says it.
+- **Not measured here yet:** which of the four device-icon hooks this Windows 11 build actually
+  honours. The read-back of the drive's icon through `SHGetFileInfoW` and of the name shown under it
+  is the measurement that settles it; until that line stands in this file the hook list is unverified,
+  and the device-description section names of `autorun.inf` (the 2011-era schema) are the part most
+  likely to answer nothing at all.
+- **The Linux half of this feature has never been run here** — there is no Linux on this host.
+  `e2label`, `exfatlabel`, `ntfslabel`, `mlabel`, `swaplabel` and `mkfs.<type>` behind the
+  administrator helper, with the option table read from each tool's own usage text and the built table
+  as the fallback: written to the same shape as the Windows half, recorded as unverified, and its
+  starts named in `docs\TOOL-STARTS.md`.
+- **No automated run writes a volume or elevates.** The format scenario substitutes a stand-in act
+  program through `FAILBRAUWSER_ELEVATE` (the seam `src\links\helper.rs` already provides) and asserts
+  the command that stand-in was handed. The single real format in this project's verification is the
+  one authorized step on the 64 GB removable stick, recorded where it was measured.
 
 ## Test suite state on Windows
 
