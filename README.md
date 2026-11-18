@@ -850,9 +850,13 @@ the reason, and where the machine answers differently from this table its own wo
 the files this feature wrote itself are ever rewritten or removed.
 
 **Formatting a volume:** *Format…* on the drive's row menu and on its properties window. The
-dropdown lists the file systems this machine offers for *that* volume: the system's own answer where
-it gives one, otherwise the installed format tool's own list. `format.exe` on this build names FAT,
-FAT32, exFAT, NTFS, ReFS and UDF. Choosing one shows only the options that file system has, and
+dropdown lists the file systems this machine offers for *that* volume, and on Windows the machine
+answers through the tool that will run: its own usage text is asked once (`format /?`, started without
+a window) and only the file-system words that text names are offered, so a build whose tool answers
+for fewer of them offers fewer. There is no system answer to prefer: `FSCTL_QUERY_FILE_SYSTEM_SUPPORT`
+measured on this build fails for `C:` and `F:` alike, with and without rights on the handle, and names
+nothing about what a volume could be formatted to. `format.exe` on this build names FAT, FAT32, exFAT,
+NTFS, ReFS and UDF, and a volume narrows that list by its size and kind. Choosing one shows only the options that file system has, and
 nothing outside the table below can reach the command — the table also says which switch each option
 contributes, which is what its test compares against:
 

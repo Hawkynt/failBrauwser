@@ -223,6 +223,18 @@ and the new program started. The *build from source* channel is Linux-only there
   that `fsutil behavior set mftzone` sets machine-wide (`MftZone = 0` → 200 MB), and `format` has no
   per-volume switch for it, so the NTFS space knob the window offers is the log size (`/LogSize:`) and
   the zone is never written.
+- **The list of file systems comes from the tool that will run, because no Windows query answers the
+  question.** Measured 2026-11-18: `FSCTL_QUERY_FILE_SYSTEM_SUPPORT` sent to `\\.\C:` and `\\.\F:`
+  answers `ERROR_INVALID_FUNCTION` (win32 1) with a rights-free handle and with `FILE_READ_ATTRIBUTES`
+  alike, so it says nothing about what a volume could be formatted to — the offer is read from
+  `format /?` once per run, kept, and narrowed per volume by the README's size and kind rules, and a
+  word that module's table does not know is simply not offered. What the machine does answer about file
+  systems is which drivers it carries, and that answer **disagrees** with the tool: the registry holds
+  `fastfat`, `exfat`, `ntfs` and `refs` (Start 3, loaded on demand) but `udfs` with **Start 4 =
+  disabled**, while the same tool names UDF in its list. Whether a UDF format on this machine is
+  therefore refused is not tested here — the authorized format step reformats the stick to NTFS — so the
+  disagreement is recorded and UDF stays offered because the tool offers it, with the OS answering in
+  its own words if the driver refuses.
 - **Not measured here yet:** the label ceilings the README names. FAT's 11 characters and NTFS' 32
   are what the drivers and the tools have always taken, exFAT's 15 and UDF's 32 are the file systems'
   own documented fields, and `Format-Volume -WhatIf` validates no label length at all — it took a
