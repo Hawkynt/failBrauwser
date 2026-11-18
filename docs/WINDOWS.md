@@ -287,19 +287,35 @@ and the new program started. The *build from source* channel is Linux-only there
   administrator helper, with the option table read from each tool's own usage text and the built table
   as the fallback: written to the same shape as the Windows half, recorded as unverified, and its
   starts named in `docs\TOOL-STARTS.md`.
-- **A name longer than the file system's own label holds is pinned, not dropped.** The label written
-  on the volume is the short variant the README describes (forbidden characters dropped, FAT's label
-  upper-cased, a cut inside a word pulled back to the word boundary), and the name as typed is written
-  into `autorun.inf` as the drive's label (`label=`) and into `desktop.ini` as the folder's display
-  name (`[.ShellClassInfo] LocalizedResourceName=`). **Which of the two this Windows answers to is not
-  known here**: `SHGetFileInfoW` and the name shown under the drive are read back at the authorized
-  format step, and if neither pin shows the long name that is what gets written down, not a claim that
-  it works. The short variant is deterministic rather than the volume's serial-numbered `8.3` form, so
-  the same long name always yields the same label.
-- **No automated run writes a volume or elevates.** The format scenario substitutes a stand-in act
-  program through `FAILBRAUWSER_ELEVATE` (the seam `src\links\helper.rs` already provides) and asserts
-  the command that stand-in was handed. The single real format in this project's verification is the
-  one authorized step on the 64 GB removable stick, recorded where it was measured.
+- **A name longer than the file system's own label holds is planned, not dropped.** The short variant the
+  README describes (forbidden characters dropped, FAT's label upper-cased, a cut inside a word pulled back
+  to the word boundary) is what `fsformat::name_plan` computes, and both windows show it beside the entry
+  you type into: the properties row says *the volume itself carries "SAMSUNG 64" — FAT holds 11 characters
+  at most*, and the format window says the same in its own words. Those are the words a scenario reads
+  (`tests\drive_format.fbt`), and the plan is pinned by `fsformat::tests` for the models this machine
+  reports. **What writes the pinning files is not built yet**: nothing of this feature writes
+  `autorun.inf` or `desktop.ini` today, so the long name survives as the name the windows call the volume
+  and as `NamePlan::called`, and the writing of those two files — with `folder.ico` and `DevIcon.fil` — is
+  the commit after this one. **Which of the two pins this Windows answers to is not known here**:
+  `SHGetFileInfoW` and the name shown under the drive are read back at the authorized format step, and if
+  neither pin shows the long name that is what gets written down, not a claim that it works. The short
+  variant is deterministic rather than the volume's serial-numbered `8.3` form, so the same long name
+  always yields the same label.
+- **The device-icon half of the README's promise stands unbuilt.** *Create device icon* and *Remove device
+  icon* are on no drive menu and no properties window, the format window has no *Write a device icon* row
+  and no *Device shape* dropdown, and no glyph of the README's nine shapes is in the tree. The words the
+  format window does propose as the volume name come from `fsformat::proposed_name`, which is built and
+  tested on its own; the picture, the twelve images of `DevIcon.fil` and the four files that carry them are
+  the next commit, and nothing about the shell honouring them has been measured.
+- **No automated run writes a volume or elevates.** The format scenario drives a stand-in volume that names
+  no drive letter and holds no mount point, so the act answers before a start of any program exists — on
+  Windows *This volume has no drive letter to format.*, and over there the switches of the table belonging
+  to this system's tool — and the scenario reads that answer out of the window it is told in. No consent
+  dialog appears and no format tool is reached, so that scenario needs no stand-in act program; the
+  `FAILBRAUWSER_ELEVATE` seam (`src\fsformat\act.rs`, shaped as `src\links\helper.rs` already uses) stays
+  pinned by its own lib test, and a run that records the argv an act program was handed comes with the
+  icon step. The single real format in this project's verification is the one authorized step on the 64 GB
+  removable stick, recorded where it was measured.
 
 ## Test suite state on Windows
 
@@ -468,3 +484,22 @@ being what the online tree carries. Neither dead-code warning of that base stand
 ask at all. Measured on 2026-11-17: the release builds of the `vcs_backends`, `ui_git`, `ui_vcs` and `ui_selftest`
 targets carried no `warning:` line at all — which is what `winpack\build.ps1` needs, since it treats anything cargo
 writes to stderr as fatal.
+
+Measured on 2026-11-18 for the drives windows' two acts (README: *Renaming a volume*, *Formatting a
+volume*). The new scenario `tests\drive_format.fbt`, driven as `renaming_and_formatting_a_volume` (the 53rd
+test of the UI target), answers green and touches no volume of this machine: the stand-in it drives names no
+drive letter and holds no mount point, so the act answers before any program is started, no consent dialog
+appears and no format tool is reached. Driven serially with the four scenarios that share that page —
+`drives_page`, `unmounted_drives_in_the_side_panel`, `phones_with_the_drives`, `disk_image_as_drive` — the
+target reads **5 of 6 green in 37.52 s**. The one standing is `encrypted_drive_with_lvm_inside`, named in
+this section for as long as it has existed, today stopping at its line 12
+(`wait-side-drive Linux : Encrypted — click to unlock`, the entry that should come back after the
+scenario's own *Unmount* step). That this is not the work above was measured rather than assumed: the same
+script, the same space-free work folder and the same sysroot answered that same line 12 for a binary built
+out of `git archive` of the commit this work starts on, exported into a scratch folder — the same failure in
+the same place with no line of this work in it. The module suites behind those windows read **67 passed, 0
+failed** across `fsformat::`, `win::elevate::`, `win::storage::` and `drives::`, and `source_rules`,
+`win_startup` and `helper_lifetime` read 2, 3 and 2 green. `cargo clippy --release --lib` names 51 warnings
+in the crate and none in `src\fsformat\mod.rs`, `src\ui\format.rs`, `src\ui\drives.rs` or
+`src\ui\selftest.rs` — which is what a re-check with those four files touched answers, and the release build
+of the same tree carried no `warning:` line either.

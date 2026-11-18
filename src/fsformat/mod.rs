@@ -253,6 +253,33 @@ impl FormatOption {
         })
     }
 
+    /// The name the format window gives this option's control, which is also the name a scenario
+    /// drives it by (`format-set allocation-unit = 4096`). Stable: a scenario names these, so a row
+    /// renamed here is a scenario that stops answering, which is the point.
+    pub fn field(self) -> &'static str {
+        use FormatOption::*;
+        match self {
+            VolumeName => "volume-name",
+            AllocationUnit => "allocation-unit",
+            Quick => "quick",
+            Overwrite => "overwrite",
+            Compression => "compression",
+            BiggerFileRecords => "bigger-file-records",
+            LogSize => "log-size",
+            ShortNames => "short-names",
+            RepairLogs => "repair-logs",
+            Trim => "trim",
+            DirectAccess => "direct-access",
+            TransactionalNames => "transactional-names",
+            Integrity => "integrity",
+            DevDrive => "dev-drive",
+            Sha256 => "sha256",
+            UdfRevision => "udf-revision",
+            UdfDuplicatedMetadata => "udf-duplicated-metadata",
+            DeviceIcon => "device-icon",
+        }
+    }
+
     /// The words the window shows for this option.
     pub fn label(self) -> &'static str {
         use FormatOption::*;
@@ -836,6 +863,20 @@ mod tests {
     fn the_state_words_are_the_tools_own() {
         assert_eq!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::ReFs, &[(Integrity, State("disable"))]).unwrap(), vec!["F:", "/FS:ReFS", "/I:disable", "/Y"]);
         assert!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::ReFs, &[(Integrity, State("on"))]).unwrap_err().contains("enable"));
+    }
+
+    /// The format window and its scenario name a control by these words, so every option needs its own
+    /// and no two options may share one.
+    #[test]
+    fn every_option_names_its_control_in_the_window_alone() {
+        let fields: Vec<&str> = FormatOption::all().iter().map(|o| o.field()).collect();
+        for field in &fields {
+            // A name is words a scenario types whole: lower-case, joined by a dash, and holding the digits
+            // of an option whose own word has them ("sha256") — a scenario sets those by name like any other.
+            assert!(!field.is_empty() && field.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'), "{field} is a name a scenario can type");
+            assert_eq!(fields.iter().filter(|f| *f == field).count(), 1, "{field} names two options");
+        }
+        assert_eq!(fields.len(), FormatOption::all().len());
     }
 
     #[test]

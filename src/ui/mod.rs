@@ -19,6 +19,7 @@ pub mod drives;
 pub mod extensions;
 pub mod fileops;
 pub mod filemanager;
+pub mod format;
 pub mod vcs;
 pub mod icons;
 pub mod jobs;

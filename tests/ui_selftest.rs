@@ -658,6 +658,12 @@ fn unmounted_drives_in_the_side_panel() {
 }
 
 #[test]
+fn renaming_and_formatting_a_volume() {
+    // The stand-in volume of this scenario is never mounted, so its folder is never read.
+    run("drive_format.fbt", |_| {});
+}
+
+#[test]
 fn light_and_dark_follow_the_desktop() {
     run("appearance.fbt", |_| {});
 }

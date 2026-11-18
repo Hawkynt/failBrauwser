@@ -17,11 +17,11 @@
 //! `shortcut-menu <entry> : <item>` (`Show Hidden Entry/<name>` for the submenu),
 //! `shortcut-drag <entry> > <before entry>`, `shortcut-drop <folder> > <before entry>`,
 //! `window-snapshot <png>`, `wait-error <text>`, `wait-dialog <text>`,
-//! `dialog-button <dialog text> : <button>`, `dialog-entry <dialog text> = <text>`, `expect-dialog-entry <dialog text> = <text>`, `wait-no-dialog <text>`, `properties-choose-app <desktop id>`, `clipboard-text <text>`, `batch-set <field> = <value>`, `dialog-set <dialog> : <field> = <value>`, `expect-dialog-label <dialog> : <text>`, `network-add-server`, `expect-batch-preview <a -> b | …>`, `expect-batch-status <text>`, `properties-button <label>`, `wait-properties-text <text>`,
+//! `dialog-button <dialog text> : <button>`, `dialog-entry <dialog text> = <text>`, `expect-dialog-entry <dialog text> = <text>`, `wait-no-dialog <text>`, `properties-choose-app <desktop id>`, `clipboard-text <text>`, `batch-set <field> = <value>`, `dialog-set <dialog> : <field> = <value>`, `expect-dialog-label <dialog> : <text>`, `network-add-server`, `expect-batch-preview <a -> b | …>`, `expect-batch-status <text>`, `properties-button <label>`, `wait-properties-text <text>`, `properties-set <field> = <value>`, `expect-properties-button <label> = none|off|on`, `expect-format-button = none|off|on`, `format-set <field> = <value>`, `format-accept`, `expect-format-text <text>`, `expect-no-format-text <text>`,
 //! `expect-default-app <content type> = <desktop id>`, `fake-phone <name> = <folder>`,
 //! `wait-drive-text <title> : <text>`, `wait-no-drive-text <title> : <text>`,
-//! `drive-button <title> : <row text> : <button>`, `expect-tabs <a | b>`, `expect-title <text>`,
-//! `fake-share <folder>`, `fake-image <file> = <folder>`, `sleep-begin`, `sleep-end`, `expect-menu-item <label>`, `wait-compare-rows <rows>`, `wait-duplicates <n>`, `setenv NAME=value`, `wait-update-checked`, `expect-update-status <text>`, `wait-update-progress <text> @ <percent>`, `update-choose <release|source>`, `update-start`, `wait-update-done`, `run <command>`, `wait-file-text <path> = <text>`, `wait-chooser`, `chooser-open <folder>`, `chooser-select <a | b>`, `expect-chooser-rows <a | b>`, `chooser-name <text>`, `chooser-filter <n>`, `chooser-accept`, `chooser-cancel`, `chooser-activate`, `expect-duplicate-group <*kept | …>`, `duplicate-keep <name>`, `duplicate-click <delete|skip|previous>`, `compare-show-identical <on|off>`, `compare-copy <left|right>`, `close-compare`, `expect-no-menu-item <label>`, `expect-file-mode <path> = <octal>`, `fake-job <seconds> <MB>`, `wait-progress-chart <points>`, `expect-progress-text <text>`, `progress-snapshot <png>`,
+//! `drive-button <title> : <row text> : <button>`, `drives-menu <title> : <item>`, `expect-no-format-text <text>`, `expect-tabs <a | b>`, `expect-title <text>`,
+//! `fake-share <folder>`, `fake-image <file> = <folder>`, `fake-volume <label> = <folder> : <file system> [: <offer, …>]`, `sleep-begin`, `sleep-end`, `expect-menu-item <label>`, `wait-compare-rows <rows>`, `wait-duplicates <n>`, `setenv NAME=value`, `wait-update-checked`, `expect-update-status <text>`, `wait-update-progress <text> @ <percent>`, `update-choose <release|source>`, `update-start`, `wait-update-done`, `run <command>`, `wait-file-text <path> = <text>`, `wait-chooser`, `chooser-open <folder>`, `chooser-select <a | b>`, `expect-chooser-rows <a | b>`, `chooser-name <text>`, `chooser-filter <n>`, `chooser-accept`, `chooser-cancel`, `chooser-activate`, `expect-duplicate-group <*kept | …>`, `duplicate-keep <name>`, `duplicate-click <delete|skip|previous>`, `compare-show-identical <on|off>`, `compare-copy <left|right>`, `close-compare`, `expect-no-menu-item <label>`, `expect-file-mode <path> = <octal>`, `fake-job <seconds> <MB>`, `wait-progress-chart <points>`, `expect-progress-text <text>`, `progress-snapshot <png>`,
 //! `expect-network-subtitle <row> = <text>`, `wait-side-drive <name> : <place>`, `wait-no-side-drive <name>`, `expect-no-side-drive-at <path>`,
 //! `side-drive-click <name> : <place>`, `side-drive-menu <name> : <place> : <item>`,
 //! the Git steps of `git/testing.rs`,
@@ -242,10 +242,38 @@ fn find_named(w: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
 /// The Properties dialog shown.
 #[allow(deprecated)]
 fn properties_dialog() -> Option<gtk::Dialog> {
+    titled_dialog("— Properties")
+}
+
+/// The Format dialog shown.
+#[allow(deprecated)]
+fn format_dialog() -> Option<gtk::Dialog> {
+    titled_dialog("— Format")
+}
+
+/// The shown dialog whose title ends with these words (the Properties window, the Format window …).
+#[allow(deprecated)]
+fn titled_dialog(suffix: &str) -> Option<gtk::Dialog> {
     gtk::Window::list_toplevels()
         .into_iter()
         .filter_map(|w| w.downcast::<gtk::Dialog>().ok())
-        .find(|d| d.is_visible() && d.title().is_some_and(|t| t.ends_with("— Properties")))
+        .find(|d| d.is_visible() && d.title().is_some_and(|t| t.ends_with(suffix)))
+}
+
+/// Tells a scenario what a button of a dialog answers: `none` where it is not shown at all, `off` where it
+/// is shown but cannot be pressed, `on` where it can. The windows of the acts show a control only where
+/// that control has something to do, so a scenario reads its absence as an answer and not as a miss.
+fn expect_button(w: &gtk::Widget, label: &str, want: &str) -> Result<(), String> {
+    let got = match find_button(w, label) {
+        None => "none",
+        Some(b) if !b.is_visible() => "none",
+        Some(b) if !b.is_sensitive() => "off",
+        Some(_) => "on",
+    };
+    if got != want {
+        return Err(format!("button {label:?} is {got}, not {want}"));
+    }
+    Ok(())
 }
 
 /// A button under `w` whose label (without mnemonic marks) is `label`.
@@ -504,6 +532,62 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         "wait-properties-text" => {
             let want = arg.to_string();
             wait(r, move |_| Ok(properties_dialog().is_some_and(|d| label_texts(d.upcast_ref()).iter().any(|t| t.contains(&want)))));
+        }
+        "properties-set" => {
+            // properties-set <field name> = <value>: types into a named field of the open Properties dialog.
+            let (name, value) = arg.split_once(" = ").map(|(n, v)| (n.trim(), v)).ok_or("usage: properties-set <field> = <value>")?;
+            let d = properties_dialog().ok_or("no Properties dialog")?;
+            set_field(&find_named(d.upcast_ref(), name).ok_or("no such field")?, value)?;
+        }
+        "expect-properties-button" => {
+            // expect-properties-button <label> = none|off|on: that button of the open Properties dialog is
+            // not shown, shown and disabled, or shown and pressable.
+            let (label, want) = arg.split_once(" = ").ok_or("usage: expect-properties-button <label> = none|off|on")?;
+            let d = properties_dialog().ok_or("no Properties dialog")?;
+            expect_button(&d.upcast_ref(), label.trim(), want)?;
+        }
+        "format-set" => {
+            // format-set <field name> = <value>: a field of the open Format dialog.
+            let (name, value) = arg.split_once(" = ").map(|(n, v)| (n.trim(), v)).ok_or("usage: format-set <field> = <value>")?;
+            let d = format_dialog().ok_or("no Format dialog")?;
+            set_field(&find_named(d.upcast_ref(), name).ok_or("no such field")?, value)?;
+        }
+        "expect-format-text" => {
+            // expect-format-text <text>: a label the open Format dialog shows holds these words.
+            let d = format_dialog().ok_or("no Format dialog")?;
+            let texts = label_texts(d.upcast_ref());
+            if !texts.iter().any(|t| t.contains(arg)) {
+                return Err(format!("labels: {texts:?}"));
+            }
+        }
+        "expect-no-format-text" => {
+            // expect-no-format-text <text>: no label the open Format dialog shows holds these words, which
+            // is how a scenario pins that an option a file system has no switch for shows no row at all.
+            let d = format_dialog().ok_or("no Format dialog")?;
+            let texts = label_texts(d.upcast_ref());
+            if texts.iter().any(|t| t.contains(arg)) {
+                return Err(format!("a label holds {arg:?}: {texts:?}"));
+            }
+        }
+        "expect-format-button" => {
+            // expect-format-button = none|off|on: the Format dialog's own Format button, where `none` also
+            // answers when the window itself is gone — a scenario reads its end as an answer.
+            let want = arg.trim().trim_start_matches('=').trim();
+            match format_dialog() {
+                Some(d) => expect_button(&d.upcast_ref(), "Format", want)?,
+                None if want == "none" => {}
+                None => return Err("no Format dialog".into()),
+            }
+        }
+        "format-accept" => {
+            // Presses the Format dialog's Format button — the act it starts is the machine's own act, so a
+            // scenario only drives it against a volume the act refuses (a stand-in with no drive letter).
+            let d = format_dialog().ok_or("no Format dialog")?;
+            let b = find_button(d.upcast_ref(), "Format").ok_or("no Format button")?;
+            if !b.is_sensitive() {
+                return Err("the button is disabled".into());
+            }
+            b.clicked();
         }
         "properties-choose-app" => {
             // In the open Properties dialog, picks the application with this desktop id.
@@ -1272,6 +1356,12 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             let want = arg.to_string();
             wait(r, move |r| Ok(super::drives::shown_volumes(&r.window.current_pane()).iter().any(|v| v.title() == want)));
         }
+        "drives-menu" => {
+            // drives-menu <title> : <item>: activates that item of the right-click menu of the drive with
+            // this title, without popping the menu up. Any row of that drive answers, so the item names it.
+            let (title, item) = arg.split_once(" : ").ok_or("usage: drives-menu <title> : <item>")?;
+            super::drives::menu_item(&w.current_pane(), title.trim(), "", item.trim())?;
+        }
         "fake-phone" => {
             // fake-phone <name> = <folder>: a phone whose storages are the folder's subfolders.
             let (name, dir) = arg.split_once(" = ").ok_or("usage: fake-phone <name> = <folder>")?;
@@ -1287,6 +1377,15 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
                 None => (pass, false),
             };
             super::drives::add_fake(label.trim(), PathBuf::from(dir.trim()), pass, lvm);
+        }
+        "fake-volume" => {
+            // fake-volume <label> = <folder> : <file system> [: <offer, …>]: a volume whose file system and
+            // whose format offer are the scenario's own words, so the format window is driven over a
+            // stand-in and never over a volume this machine actually holds.
+            let (label, rest) = arg.split_once(" = ").ok_or("usage: fake-volume <label> = <folder> : <file system> [: <offer, …>]")?;
+            let (dir, tail) = rest.split_once(" : ").ok_or("usage: fake-volume <label> = <folder> : <file system> [: <offer, …>]")?;
+            let (fs, offer) = tail.split_once(" : ").map_or((tail, ""), |(f, o)| (f, o));
+            super::drives::add_fake_volume(label.trim(), PathBuf::from(dir.trim()), fs.trim(), offer.split(',').map(|w| w.trim().to_string()).filter(|w| !w.is_empty()).collect());
         }
         "fake-host" => {
             // fake-host <name> = <share>:<folder>, … [: <password>]: a computer on the network

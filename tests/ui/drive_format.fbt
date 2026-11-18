@@ -1,0 +1,74 @@
+# Renaming a volume and formatting one are reached from the drives windows, and each tells its refusal
+# in the act's own words before a command exists (README: *Renaming a volume*, *Formatting a volume*).
+# The volume driven here is a stand-in whose file system and format offer the scenario names: it holds no
+# drive letter, so the act answers for it without any volume of this machine being touched and without a
+# consent dialog anywhere.
+fake-volume Photos = $T/photos : ntfs : NTFS,exFAT,FAT32
+action win.drives
+wait-drive Photos
+# The Label row is an entry you type into, and the Rename button beside it answers only while the typed
+# name differs from what the volume says.
+drive-properties Photos
+expect-properties-button Rename = none
+properties-set label-entry = Family Pictures
+expect-properties-button Rename = on
+properties-set label-entry = Photos
+expect-properties-button Rename = none
+# A name longer than the file system holds is cut at a word boundary, and the variant the volume itself
+# carries is shown beside the entry before anything is written. A name nothing can carry is refused where
+# it is typed: the button appears, because the text differs, and stays shut.
+properties-set label-entry = Family Pictures of the summer holidays
+wait-properties-text the volume itself carries
+expect-properties-button Rename = on
+properties-set label-entry = Photos:2026
+wait-properties-text cannot hold
+expect-properties-button Rename = off
+properties-button Close
+# The volume this machine runs Windows from is named out of both acts, and its name is no entry at all.
+!win drive-properties $C
+!win expect-properties-button Rename = none
+!win expect-properties-button Format… = off
+!win properties-button Close
+# The row menu and the properties window open the same format window.
+drives-menu Photos : Format…
+expect-format-text Everything on it is gone
+expect-format-button = off
+# The window opens on the file system the volume already holds, and shows only the options that one has a
+# switch for: NTFS has a compression row and FAT32 has none, while both have an allocation unit.
+expect-format-text Compress new files by default
+expect-format-text Allocation unit size
+format-set fs-choice = FAT32
+expect-no-format-text Compress new files by default
+expect-format-text Allocation unit size
+format-set fs-choice = NTFS
+# The name the volume is called, and the shorter one it carries.
+format-set volume-name = Family Pictures of the summer holidays in 2026
+expect-format-text the volume itself carries
+# The format button answers once the volume is named by hand, and the words it asks for are shown beside
+# the entry that types them.
+expect-format-text Type /dev/fake-Photos to format
+expect-format-button = off
+format-set confirm-entry = /dev/fake-Photos
+expect-format-button = on
+# Quick is ticked from the start, and the tool states that `/Q` overrides the pass count, so the pass count
+# is no row at all while quick is ticked: it comes back when the tick goes away and goes again when it
+# returns. A row the choice does not carry answers nothing, so the act is never handed both at once.
+expect-no-format-text Overwrite passes
+format-set quick = off
+expect-format-text Overwrite passes
+format-set quick = on
+expect-no-format-text Overwrite passes
+# Pressing it hands the choice to the act, which answers for a stand-in naming no drive: on Windows there
+# is no letter to format, and over there the options of the table belong to this system's tool. Neither
+# answer starts a tool of any kind, and the window closes either way.
+format-accept
+# The answer is the act's own words, told in a window: on Windows a stand-in naming no drive letter cannot
+# be formatted at all, and over there the switches of the table are this system's format tool's own words.
+!win wait-dialog This volume has no drive letter to format
+!unix wait-dialog the options of the format table belong to this system
+!win dialog-button This volume has no drive letter to format : Close
+!unix dialog-button the options of the format table belong to this system : Close
+expect-format-button = none
+# The properties window of the same volume answers again afterwards.
+drive-properties Photos
+expect-properties-button Format… = on
