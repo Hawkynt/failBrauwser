@@ -951,10 +951,12 @@ again — and of the three encodings tried, UTF-16 with a byte-order mark and th
 codepage show the name while UTF-8 shows what a single-byte reader makes of it (`Große` came back as
 `GroÃŸÃ¶e`), so `desktop.ini` is written in UTF-16 with that mark. What the pin does on a mounted volume is
 read back at the authorized format step, and a volume answering differently from a folder is what gets
-recorded there, not a promise. `autorun.inf` is a single-byte file, so its `label=` line names the volume
-only where the short label the file system itself carries is plain ASCII: a name reaching past that
-codepage is not written down in a form that would lose characters, and the long name then rests on
-`desktop.ini` alone.
+recorded there, not a promise. `autorun.inf` is a single-byte file, so every word it carries is plain
+ASCII: the shape's data name (`micro SD card`, `3.5 inch floppy`) and the brand the machine reported, since
+the shown label of a shape holds a `µ` and a `″` that a single-byte file cannot carry — and its `label=`
+line names the volume only where the short label the file system itself carries is plain ASCII, because a
+name reaching past that codepage is not written down in a form that would lose characters, leaving the long
+name to rest on `desktop.ini` alone.
 
 Four files go on the volume, because the systems ask for four different ones: `DevIcon.fil`, an icon
 file in the shape Windows describes for a device icon — twelve images, the sizes 16×16, 32×32, 48×48
@@ -964,8 +966,8 @@ with 1-bit transparency; on a case-insensitive file system the two spellings `De
 (`ModelName`, `Manufacturer`); and `desktop.ini` with `folder.ico` for the folder's own picture, the
 volume's root marked system-and-hidden so the shell honours it.
 
-Each of the two text files carries a line of its own saying so: a `[failBrauwser]` section with
-`DeviceIcon=1`, and a second line of that section saying whether the root's system attribute was already
+Each of the two text files carries a section of its own saying so: `[failBrauwser]` with `DeviceIcon=1`,
+with the name of the image file `DevIcon.fil`, and with whether the root's system attribute was already
 there before this feature put it. That section is what *Remove device icon* removes by, and it removes by
 nothing else: it reads the two files, and only where one of them carries the marker does it delete that
 file and the icon files the marked file names. An `autorun.inf` or `desktop.ini` of somebody else — one
