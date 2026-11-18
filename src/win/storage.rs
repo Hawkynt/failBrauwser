@@ -12,7 +12,7 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
 };
 use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW, GetLogicalDrives, GetDiskFreeSpaceExW, GetVolumeInformationW, GetVolumeNameForVolumeMountPointW, OPEN_EXISTING, BusType1394, BusTypeAta, BusTypeAtapi, BusTypeFibre, BusTypeFileBackedVirtual, BusTypeMmc, BusTypeNvme, BusTypeRAID, BusTypeSCM, BusTypeSas, BusTypeSata, BusTypeScsi, BusTypeSd, BusTypeSsa, BusTypeSpaces, BusTypeUfs, BusTypeUsb, BusTypeVirtual, BusTypeiScsi, STORAGE_BUS_TYPE,
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW, GetLogicalDrives, GetDiskFreeSpaceExW, GetVolumeInformationW, GetVolumeNameForVolumeMountPointW, OPEN_EXISTING, SetVolumeLabelW, BusType1394, BusTypeAta, BusTypeAtapi, BusTypeFibre, BusTypeFileBackedVirtual, BusTypeMmc, BusTypeNvme, BusTypeRAID, BusTypeSCM, BusTypeSas, BusTypeSata, BusTypeScsi, BusTypeSd, BusTypeSsa, BusTypeSpaces, BusTypeUfs, BusTypeUsb, BusTypeVirtual, BusTypeiScsi, STORAGE_BUS_TYPE,
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
@@ -235,6 +235,16 @@ pub fn system_volume_letter() -> Option<char> {
     let taken = unsafe { GetSystemWindowsDirectoryW(Some(&mut buffer)) } as usize;
     if taken < 3 { return None; }
     crate::fsformat::drive_letter(&String::from_utf16_lossy(&buffer[..taken]))
+}
+
+/// The volume's own name, written by the call Explorer's Label row and `vol` read back. The answer of a
+/// refusal is the win32 code alone, because the caller has to tell one answer apart from another: `5` means
+/// the rights are what is missing, which is what sends an internal volume to the privileged run of this
+/// program (`fsformat::act`), while every other code is the machine refusing the name or the volume and is
+/// told to the user as it stands.
+pub fn set_label(root: &str, label: &str) -> Result<(), i32> {
+    unsafe { SetVolumeLabelW(PCWSTR(wide_text(root).as_ptr()), PCWSTR(wide_text(label).as_ptr())) }
+        .map_err(|e| (e.code().0 as u32 & 0xFFFF) as i32)
 }
 
 /// Opens the volume device (`\\.\C:`) for queries; no access rights needed for those.

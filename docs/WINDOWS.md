@@ -143,7 +143,7 @@ and the new program started. The *build from source* channel is Linux-only there
 |---|---|---|
 | System calls under copy/delete/trash | `osprim` errno predicates | same file, Win32 codes through `raw_os_error` |
 | Drives, mount state | UDisks2 / GVfs | `win::storage` (drive types, geometry, SSD/HDD), WNet for shares |
-| Volume name, format, device icon (README: *Drives*) | UDisks2 `Filesystem` and `Format` methods, `mkfs.<type>`, `e2label` and friends | `SetVolumeLabelW`, `format.exe` run by an elevated copy of this program, the icon read back through `SHGetFileInfoW` |
+| Volume name, format, device icon (README: *Drives*) | UDisks2 `Filesystem` and `Format` methods, `mkfs.<type>`, `e2label` and friends | `SetVolumeLabelW`, `format.com` run by an elevated copy of this program, the icon read back through `SHGetFileInfoW` |
 | Trash | freedesktop `$Trashdir` | Recycle Bin through `IFileOperation` (`win::recyclebin`) |
 | Network folders | GVfs `smb://` | real UNC paths via WNet — the whole engine works on them |
 | Servers (SFTP/FTP) | system tools | in-app VFS (`src/remote_fs/`, russh/suppaftp) — browsable like archives, not mapped drives |
@@ -209,7 +209,20 @@ and the new program started. The *build from source* channel is Linux-only there
   that run and reads the file back. Cancelling the consent dialog is a no-op and leaves nothing running,
   and the run is started hidden, since it has nothing to show the user beyond the consent dialog itself. The Linux twin of the same two acts goes through the
   `pkexec` helper that Backup Mode already uses (`src\links\helper.rs`).
-- **What the format window offers is what this build's `format.exe` offers, and the parameter set is
+- **The arguments of that run travel quoted, and this machine's own parser answers them back unchanged.**
+  `ShellExecuteExW` takes the whole tail of a command line as one string, so `src\win\elevate.rs` builds it
+  by the rule `CommandLineToArgvW` reads. Measured 2026-11-18 in this checkout: ten arguments — a bare drive
+  letter, a `/FS:` switch, a `/V:` label holding spaces, an empty argument, a temp path, a name ending in a
+  backslash, one holding quotes, one holding a tab, one ending in a backslash before a quote, and a label of
+  the format act itself — were round-tripped through that parser and came back exactly as they went in
+  (`win::elevate::tests`). The consent prompt itself has been answered nowhere yet: the elevated half of both
+  acts is built, and it stays recorded as not run until the authorized format step reaches it.
+- **A refused label write comes back as a code, and only one code means the rights are missing.** Measured
+  2026-11-18 on an un-elevated instance: `SetVolumeLabelW` for `Z:\` — a letter this machine names no drive
+  for — answers a code that is neither 0 nor 5. `fsformat::act` therefore sends only win32 5
+  (`ERROR_ACCESS_DENIED`) to the privileged run, which is what a stick never answers and an internal volume
+  does, and tells every other code as the machine's own refusal of that name or that volume.
+- **What the format window offers is what this build's `format.com` offers, and the parameter set is
   closed.** Measured 2026-11-18 from that tool's own usage text, which is where the README's option
   table gets its switches, its per-file-system value lists (the allocation-unit ladders, the
   `enable`/`disable` state words, the UDF revisions), its "only NTFS / only ReFS" markers and its

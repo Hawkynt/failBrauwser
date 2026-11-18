@@ -2,6 +2,7 @@
 // `.windows.rs` module arms; shared code reaches it through `osprim` or a
 // `#[cfg(windows)]` call — never through ad-hoc re-derivations.
 pub mod console;
+pub mod elevate;
 pub mod err;
 pub mod longpath;
 pub mod netinfo;

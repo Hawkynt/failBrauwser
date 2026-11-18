@@ -10,6 +10,8 @@
 //! or a combination that text names as a reason to stop is refused here rather than handed to the
 //! tool to be found out.
 
+pub mod act;
+
 use crate::drives::Volume;
 
 /// A file system the installed format tool can write.
