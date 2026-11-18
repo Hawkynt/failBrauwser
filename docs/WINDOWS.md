@@ -205,8 +205,9 @@ and the new program started. The *build from source* channel is Linux-only there
 - **Elevation on Windows is one consent prompt per act, never a service and never at startup.**
   Renaming the label of a volume that is not yours to write, and formatting, run this program's own
   file again with the verb `runas` (`ShellExecuteExW`) and the parameters `--rename-volume …` /
-  `--format …`; that elevated run writes an outcome file the window reads back. Cancelling the consent
-  dialog is a no-op and leaves nothing running. The Linux twin of the same two acts goes through the
+  `--format …`, each told by `--outcome <path>` which file to write its answer into; the window waits for
+  that run and reads the file back. Cancelling the consent dialog is a no-op and leaves nothing running,
+  and the run is started hidden, since it has nothing to show the user beyond the consent dialog itself. The Linux twin of the same two acts goes through the
   `pkexec` helper that Backup Mode already uses (`src\links\helper.rs`).
 - **What the format window offers is what this build's `format.exe` offers, and the parameter set is
   closed.** Measured 2026-11-18 from that tool's own usage text, which is where the README's option

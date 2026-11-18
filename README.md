@@ -1029,6 +1029,11 @@ src/
                    overlays, making and retargeting links, the tree operations, Smart Move,
                    hard link siblings, Volume Mountpoints, Backup Mode and its administrator
                    helper (`failbrauwser --links …`, run through pkexec)
+    fsformat/      a volume's name, its format with the file systems this machine offers and their
+                   options, and the device icon: the closed option table, the name that is too long for
+                   the file system and where it survives, and the administrator half of both acts, run as
+                   `failbrauwser --rename-volume …` / `failbrauwser --format …` and told which outcome
+                   file to write by `--outcome <path>`
     search.rs      file name search, also inside archives
     shortcuts.rs   side panel entries: order, names, hidden ones, saved
     thumbs.rs      freedesktop.org thumbnail cache
