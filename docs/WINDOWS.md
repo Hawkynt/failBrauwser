@@ -238,6 +238,15 @@ and the new program started. The *build from source* channel is Linux-only there
   administrator helper, with the option table read from each tool's own usage text and the built table
   as the fallback: written to the same shape as the Windows half, recorded as unverified, and its
   starts named in `docs\TOOL-STARTS.md`.
+- **A name longer than the file system's own label holds is pinned, not dropped.** The label written
+  on the volume is the short variant the README describes (forbidden characters dropped, FAT's label
+  upper-cased, a cut inside a word pulled back to the word boundary), and the name as typed is written
+  into `autorun.inf` as the drive's label (`label=`) and into `desktop.ini` as the folder's display
+  name (`[.ShellClassInfo] LocalizedResourceName=`). **Which of the two this Windows answers to is not
+  known here**: `SHGetFileInfoW` and the name shown under the drive are read back at the authorized
+  format step, and if neither pin shows the long name that is what gets written down, not a claim that
+  it works. The short variant is deterministic rather than the volume's serial-numbered `8.3` form, so
+  the same long name always yields the same label.
 - **No automated run writes a volume or elevates.** The format scenario substitutes a stand-in act
   program through `FAILBRAUWSER_ELEVATE` (the seam `src\links\helper.rs` already provides) and asserts
   the command that stand-in was handed. The single real format in this project's verification is the

@@ -826,12 +826,28 @@ the volume name, and the page has *Format…* and *Device icon*.
 
 **Renaming a volume:** the *Label* row of a drive's properties window is an entry you can type
 into; a *Rename* button appears beside it as soon as the text differs from what the volume says, and
-disappears again when it does not. The characters the file system allows are refused while typing
-(FAT and FAT32 take 11, exFAT 15, NTFS and ReFS 32, UDF 32), and where the machine answers
-differently, its own words are shown rather than a wording of ours. A USB stick is renamed without
-asking anyone: writing the label of a volume you do not own runs this same program elevated, so
-Windows asks for the administrator's approval at that moment — and cancelling that prompt changes
-nothing at all.
+disappears again when it does not. A USB stick is renamed without asking anyone: writing the label of
+a volume you do not own runs this same program elevated, so Windows asks for the administrator's
+approval at that moment — and cancelling that prompt changes nothing at all.
+
+**A name too long for the file system is kept, not thrown away.** What you type is the name the
+volume is *called*; what the volume itself can *hold* is shorter on the file systems that name
+things shortly, and the difference is bridged rather than lost:
+
+| File system | What its own label holds | Where a longer name still survives |
+|---|---|---|
+| FAT, FAT32 | 11 characters, upper case, without `+ , ; = [ ] " * ? \ / : < > |` | pinned in `autorun.inf` and in `desktop.ini` |
+| exFAT | 15 characters | pinned in `autorun.inf` and in `desktop.ini` |
+| NTFS, ReFS, UDF | 32 characters | pinned in `autorun.inf` and in `desktop.ini` |
+
+The volume's own label is a **short variant** of the name: the characters that file system forbids are
+dropped, FAT's is upper-cased, and a cut that would land inside a word is pulled back to the word
+boundary before it. The window shows that variant beside the entry, so a *Rename* of
+`Samsung 64 GB` onto FAT is seen to write the label `SAMSUNG 64` and to pin `Samsung 64 GB` in both
+files — and the volume is still *called* `Samsung 64 GB` wherever the shell reads those files. A name
+that nothing can carry (only forbidden characters, or nothing left after shortening) is refused with
+the reason, and where the machine answers differently from this table its own words are shown. Only
+the files this feature wrote itself are ever rewritten or removed.
 
 **Formatting a volume:** *Format…* on the drive's row menu and on its properties window. The
 dropdown lists the file systems this machine offers for *that* volume: the system's own answer where
@@ -914,6 +930,12 @@ disk is nvme, a disk with no seek penalty is a solid-state one); where it cannot
 reader looks exactly like a µsd card, and a 3.5″ floppy exactly like a 5.25″ one — the format window
 shows a *Device shape* dropdown set to the detected answer with the evidence spelled out next to it,
 and the shape can be changed. The same words go into the volume name the format window proposes.
+
+Two of those files also carry the volume's long name: `autorun.inf` names it as the drive's label and
+`desktop.ini` names it as the folder's display name, which is what makes a `Samsung 64 GB` name work
+on a file system whose own label holds 11 characters. Which of the two this Windows answers to is
+measured on the authorized volume rather than assumed, and `docs\WINDOWS.md` records the answer
+including the case where neither is honoured.
 
 Four files go on the volume, because the systems ask for four different ones: `DevIcon.fil`, an icon
 file in the shape Windows describes for a device icon — twelve images, the sizes 16×16, 32×32, 48×48
