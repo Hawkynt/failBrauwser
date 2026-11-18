@@ -257,9 +257,17 @@ pub fn split_arguments(args: &[String]) -> (Option<String>, Vec<String>) {
     }
 }
 
+/// Whether this program's own file was started to do one of the acts: the start routes exactly these flags to
+/// [`execute`] before a window, a setting or a reading client exists, and a flag answered there but missed at
+/// the start opens the program on screen instead of doing the act — which leaves the waiting window reading
+/// back an answer file that never gets written.
+pub fn is_act(argument: Option<&str>) -> bool {
+    matches!(argument, Some(RENAME) | Some(FORMAT) | Some(ICON) | Some(UNICON))
+}
+
 /// The privileged half, run by this program's own file as the administrator: the act is done here and its
-/// answer written to the file `--outcome` named. `main` routes the two flags here before any window is
-/// built, so this run holds no display, no settings and no reading clients.
+/// answer written to the file `--outcome` named. `main` routes every flag of [`is_act`] here before any window
+/// is built, so this run holds no display, no settings and no reading clients.
 pub fn execute(args: &[String]) -> i32 {
     let (outcome, rest) = split_arguments(args);
     let answer = match rest.first().map(String::as_str) {
@@ -658,6 +666,18 @@ mod tests {
         }
         assert!(text.contains("kept"), "the answer does not say what was kept: {text}");
         let _ = std::fs::remove_file(&outcome);
+    }
+
+    /// Every flag `execute` answers has to be one the program's own file recognizes when it is started with
+    /// it: a flag that reaches the privileged half but is named to no branch of the start opens the program's
+    /// windows instead of doing the act, and the waiting window reads back an answer file that never comes.
+    #[test]
+    fn the_start_routes_every_act_the_privileged_half_answers() {
+        for flag in [RENAME, FORMAT, ICON, UNICON] {
+            assert!(is_act(Some(flag)), "{flag} is answered as an act but named to no branch of the start");
+        }
+        assert!(!is_act(Some("--elsewhere")), "an argument that names no act must not be taken as one");
+        assert!(!is_act(None), "a start naming no argument at all is not an act");
     }
 
     /// The device-icon box of the format page is a second act on the volume the format tool has just written,

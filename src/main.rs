@@ -63,10 +63,11 @@ fn main() -> gtk::glib::ExitCode {
     if args.get(1).map(String::as_str) == Some("--lvm") {
         std::process::exit(failbrauwser::lvm::helper_main(&args[2..]));
     }
-    // A volume's name, or its format, as the administrator (fsformat::act): this same file started again
-    // through the shell's `runas` verb, and told by --outcome which file to write its answer into. No
-    // window, no settings and no reading client belongs to that run (docs\WINDOWS.md).
-    if matches!(args.get(1).map(String::as_str), Some(failbrauwser::fsformat::act::RENAME) | Some(failbrauwser::fsformat::act::FORMAT)) {
+    // A volume's name, its format, or the four files of its device icon, as the administrator
+    // (fsformat::act): this same file started again through the shell's `runas` verb, and told by --outcome
+    // which file to write its answer into. No window, no settings and no reading client belongs to that run
+    // (docs\WINDOWS.md), and the flags it answers are exactly the ones the act module names.
+    if failbrauwser::fsformat::act::is_act(args.get(1).map(String::as_str)) {
         std::process::exit(failbrauwser::fsformat::act::execute(&args[1..]));
     }
     // Started by git or ssh to ask for a password while a Git command of ours runs.
