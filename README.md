@@ -931,8 +931,10 @@ disk, usb stick, sd card, µsd card, 3.5″ floppy, 5.25″ floppy, optical driv
 composited when the icon is written: the manufacturer the machine reported (`SanDisk Ultra`,
 `Samsung SSD 870 QVO` …, reduced to the brand word a long model string begins with) and the size in
 the units the packaging prints, decimal (1 GB = 1 000 000 000 bytes, so a 64 160 400 896-byte stick
-reads `64 GB`). At 16 and 32 pixels only the size is drawn; at 48 and 256 the manufacturer goes on
-too, because the smaller sizes turn to mush.
+reads `64 GB`). Only the size is drawn at 16, 32 and 48 pixels, and the manufacturer goes on at 256
+pixels alone: at 48 a line of both words fits only by shrinking below the height the size word has by
+itself, which measured here as *less* ink on the picture than the size word carries alone (17
+against 27 sampled pixels of the band) — the mush the earlier rule meant to avoid.
 
 The shape is detected where the machine can tell one (`bus sdio` at 64 GB is a memory card, an nvme
 disk is nvme, a disk with no seek penalty is a solid-state one); where it cannot — an sd card in a
