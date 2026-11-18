@@ -13,6 +13,7 @@
 pub mod act;
 pub mod art;
 pub mod ico;
+pub mod icon;
 
 use crate::drives::Volume;
 
@@ -627,6 +628,22 @@ impl Shape {
         }
     }
 
+    /// The name the data files carry (`autorun.inf`'s `ModelName`): plain ASCII, because that file is a
+    /// single-byte one and the shown label of a µSD card or a 5.25″ floppy holds characters it cannot hold.
+    pub fn data_label(self) -> &'static str {
+        match self {
+            Shape::Nvme => "NVMe drive",
+            Shape::Ssd => "solid-state drive",
+            Shape::Hdd => "hard disk",
+            Shape::UsbStick => "USB stick",
+            Shape::SdCard => "SD card",
+            Shape::MicroSd => "micro SD card",
+            Shape::Floppy35 => "3.5 inch floppy",
+            Shape::Floppy525 => "5.25 inch floppy",
+            Shape::Optical => "optical drive",
+        }
+    }
+
     /// The tracked glyph under `assets\device-glyphs\`.
     pub fn asset(self) -> &'static str {
         match self {
@@ -941,6 +958,19 @@ mod tests {
         assert_eq!(decimal_size(1_474_560), "1.5 MB");
         assert_eq!(decimal_size(999), "999 B");
         assert_eq!(decimal_size(0), "0 B");
+    }
+
+    /// The data name is what `autorun.inf` carries, and that file is a single-byte one: two of the shown
+    /// labels hold a `µ` and a `″` it cannot, and the data names exist for exactly those.
+    #[test]
+    fn the_data_name_of_every_shape_is_plain_ascii_and_its_own() {
+        let names: Vec<&str> = Shape::all().iter().map(|s| s.data_label()).collect();
+        assert!(names.iter().all(|n| !n.is_empty() && n.is_ascii()), "a data name no single-byte file can carry: {names:?}");
+        for (i, a) in names.iter().enumerate() {
+            for b in names.iter().skip(i + 1) { assert_ne!(a, b, "two shapes answer the same data name"); }
+        }
+        assert_ne!(Shape::MicroSd.label(), Shape::MicroSd.data_label(), "the µSD card's shown label is what the file gets");
+        assert_ne!(Shape::Floppy525.label(), Shape::Floppy525.data_label(), "the 5.25 inch floppy's shown label is what the file gets");
     }
 
     /// The model strings measured on this machine are the fixtures here.

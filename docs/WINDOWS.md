@@ -276,12 +276,21 @@ and the new program started. The *build from source* channel is Linux-only there
   are what the drivers and the tools have always taken, exFAT's 15 and UDF's 32 are the file systems'
   own documented fields, and `Format-Volume -WhatIf` validates no label length at all — it took a
   33-character label for exFAT and FAT32 on the stick without a word — so the entry enforces the
-  table's number and the authorized format step reads back what the tool actually wrote. Also not
-  measured yet: which of the four device-icon hooks this Windows 11 build actually honours. The read-back
-  of the drive's icon through `SHGetFileInfoW` and of the name shown under it is the measurement that
-  settles it; until that line stands in this file the hook list is unverified,
-  and the device-description section names of `autorun.inf` (the 2011-era schema) are the part most
-  likely to answer nothing at all.
+  table's number and the authorized format step reads back what the tool actually wrote. **One of the
+  device-icon hooks is measured: the folder's display name.** A folder carrying the files this feature writes
+  — `desktop.ini` in UTF-16 with its mark, the folder itself marked system — is called by `SHGetFileInfoW`
+  under the pinned name and not under its own, and after the removal the same reader calls it by its own name
+  again with the two attributes back where they were (2026-11-18, `fsformat::icon` driven against a scratch
+  folder outside the repository, deleted again). The attribute and the encodings were asked about on their
+  own, on folders carrying a hand-written `desktop.ini` in each spelling: the pin is ignored the moment the
+  system attribute is taken off the folder, and a `desktop.ini` written as UTF-8 shows the name a single-byte
+  reader makes of it (`223.246` for `ßö` against `195.376.195.182`), while UTF-16 with its mark and the
+  machine's own codepage both show the name whole. A folder carrying the section of ours and no pinned name
+  shows its own name, so that section disturbs nothing of the shell's own keys. Still unmeasured is the rest
+  of the hook list — `autorun.inf`'s `icon=` and `label=`, and the `DevIcon.fil` device-image hook, which
+  belong to a drive rather than to a folder and are read back at the authorized format step — and the
+  device-description section names of `autorun.inf` (the 2011-era schema) stay the part most likely to answer
+  nothing at all.
 - **The Linux half of this feature has never been run here** — there is no Linux on this host.
   `e2label`, `exfatlabel`, `ntfslabel`, `mlabel`, `swaplabel` and `mkfs.<type>` behind the
   administrator helper, with the option table read from each tool's own usage text and the built table
@@ -293,16 +302,16 @@ and the new program started. The *build from source* channel is Linux-only there
   you type into: the properties row says *the volume itself carries "SAMSUNG 64" — FAT holds 11 characters
   at most*, and the format window says the same in its own words. Those are the words a scenario reads
   (`tests\drive_format.fbt`), and the plan is pinned by `fsformat::tests` for the models this machine
-  reports. **What writes the pinning files is not built yet**: nothing of this feature writes
-  `autorun.inf` or `desktop.ini` today, so the long name survives as the name the windows call the volume
-  and as `NamePlan::called`, and the writing of those two files — with `folder.ico` and `DevIcon.fil` — is
-  the commit after this one. **Which of the two pins this Windows answers to is not known here**:
-  `SHGetFileInfoW` and the name shown under the drive are read back at the authorized format step, and if
+  reports. `fsformat::icon` writes both pinning files now — `desktop.ini` in UTF-16 with its byte-order mark,
+  `autorun.inf` in plain ASCII, both carrying the section of ours that *Remove device icon* removes by — and
+  the folder display name they produce is measured above. **Which pin a mounted volume answers to is
+  still not known here**: `SHGetFileInfoW` and the name shown under the drive are read back at the
+  authorized format step, and if
   neither pin shows the long name that is what gets written down, not a claim that it works. The short
   variant is deterministic rather than the volume's serial-numbered `8.3` form, so the same long name
   always yields the same label.
-- **The picture is built, and this Windows reads the icon file it writes; the four files that would carry
-  it on a volume are not built yet.** `src\fsformat\art.rs` composites one of the nine tracked glyphs —
+- **The picture, the icon file it goes into, and the four files of one device icon are built, and this
+  Windows reads them.** `src\fsformat\art.rs` composites one of the nine tracked glyphs —
   `assets\device-glyphs\`, drawn by the `make-glyphs.ps1` that sits beside them, none of another program's
   artwork — with the words the machine reported about the device, and `src\fsformat\ico.rs` writes the
   twelve images the README names: 16, 32, 48 and 256 pixels at 24-bit colour with an 8-bit alpha, at an
@@ -326,10 +335,19 @@ and the new program started. The *build from source* channel is Linux-only there
   leaves `biClrUsed` at zero counts nothing at all for 8-bit and is read for 4-bit, and a 32-bit image with
   its mask named in the header's height extracts whether the directory names its planes and bits or leaves
   them zero, so this writer names the palette count and carries the mask for every image.
-  *Create device icon* and *Remove device icon* are still on no drive menu and no properties window, the
-  format window has no *Write a device icon* row and no *Device shape* dropdown, and `DevIcon.fil`,
-  `autorun.inf`, `desktop.ini` and `folder.ico` are written by nothing yet — so what `SHGetFileInfoW`
-  answers for a volume that carries them stays unmeasured, and the hook list above stays unverified.
+  `src\fsformat\icon.rs` writes the four files of one device icon — `DevIcon.fil` and `folder.ico` with the
+  bytes that container produced, `autorun.inf` in plain ASCII and `desktop.ini` in UTF-16 with its mark —
+  marks them hidden (the two text files system as well), marks the root system-and-hidden only where the
+  system attribute was not already there, and says in the marker which of the two it did; a create that
+  cannot finish its four files takes back the ones it wrote. Its removal reads the two text files and deletes
+  only a file carrying the section of ours and the icon names that file points at, so a foreign
+  `autorun.inf` keeps every byte it had and an icon file no marked file names stays where it is; a name
+  walking out of the root is not obeyed. The display name that pair produces, and the removal taking it back,
+  are the folder measurement above. What is left unbuilt is the reaching of those two verbs: *Create device
+  icon* and *Remove device icon* are on no drive menu and no properties window, and the format window has no
+  *Write a device icon* row and no *Device shape* dropdown — so what these files do on a **mounted volume**,
+  where `autorun.inf`'s `icon=` and `label=` and the `DevIcon.fil` hook belong, is still unmeasured and stays
+  for the authorized format step.
 - **No automated run writes a volume or elevates.** The format scenario drives a stand-in volume that names
   no drive letter and holds no mount point, so the act answers before a start of any program exists — on
   Windows *This volume has no drive letter to format.*, and over there the switches of the table belonging

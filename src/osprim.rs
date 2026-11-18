@@ -212,6 +212,13 @@ pub fn attribute_names_of(attributes: u32) -> Vec<&'static str> {
     FLAGS.iter().filter(|(bit, _)| attributes & bit != 0).map(|(_, name)| *name).collect()
 }
 
+/// The three attributes a directory entry is read, hidden and system by — the ones `attrs_of` answers and
+/// `set_attr_bits` touches. Windows has them; nowhere else has them to give.
+pub const READONLY: u32 = 1;
+pub const HIDDEN: u32 = 2;
+pub const SYSTEM: u32 = 4;
+const THESE_BITS: u32 = READONLY | HIDDEN | SYSTEM;
+
 /// The propagatable file attributes of a source: Windows answers the HIDDEN/SYSTEM/
 /// READONLY mask (the ones a copy can safely re-set); Unix answers 0 because its
 /// engine carries the mode bits instead.
@@ -238,7 +245,7 @@ pub fn attrs_of(path: &Path) -> u32 {
 pub fn set_attrs(path: &Path, attrs: u32) {
     #[cfg(windows)]
     {
-        if attrs & 0x7 == 0 {
+        if attrs & THESE_BITS == 0 {
             return;
         }
         let w = crate::win::longpath::wide(path);
@@ -247,10 +254,30 @@ pub fn set_attrs(path: &Path, attrs: u32) {
         if existing == windows::Win32::Storage::FileSystem::INVALID_FILE_ATTRIBUTES {
             return;
         }
-        let _ = unsafe { windows::Win32::Storage::FileSystem::SetFileAttributesW(pcw, windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES((existing & !0x7) | attrs & 0x7)) };
+        let kept = existing & !THESE_BITS;
+        let _ = unsafe { windows::Win32::Storage::FileSystem::SetFileAttributesW(pcw, windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES(kept | attrs & THESE_BITS)) };
     }
     #[cfg(not(windows))]
     let _ = (path, attrs);
+}
+
+/// Puts `add` on a path and takes `remove` off it, leaving every other attribute it carries alone — which
+/// is what `set_attrs` cannot do, since it only ever puts the three bits on. Windows has these attributes;
+/// nowhere else has them to give or to take away.
+pub fn set_attr_bits(path: &Path, add: u32, remove: u32) {
+    #[cfg(windows)]
+    {
+        let w = crate::win::longpath::wide(path);
+        let pcw = windows::core::PCWSTR(w.as_ptr());
+        let existing = unsafe { windows::Win32::Storage::FileSystem::GetFileAttributesW(pcw) };
+        if existing == windows::Win32::Storage::FileSystem::INVALID_FILE_ATTRIBUTES {
+            return;
+        }
+        let next = (existing & !(remove & THESE_BITS)) | (add & THESE_BITS);
+        let _ = unsafe { windows::Win32::Storage::FileSystem::SetFileAttributesW(pcw, windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES(next)) };
+    }
+    #[cfg(not(windows))]
+    let _ = (path, add, remove);
 }
 
 /// A quick "may I write here" hint (permission bits only, like access(2)).
@@ -608,7 +635,7 @@ fn win_can_write(path: &Path) -> bool {
 #[cfg(windows)]
 #[cfg(test)]
 mod tests {
-    use super::attribute_names_of;
+    use super::{HIDDEN, READONLY, SYSTEM, attribute_names_of, attrs_of, set_attr_bits};
 
     #[test]
     fn attribute_names_follow_the_flags_and_skip_the_noise() {
@@ -618,6 +645,23 @@ mod tests {
         let all = attribute_names_of(0x1 | 0x2 | 0x4 | 0x10 | 0x20 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 | 0x4000 | 0x8000);
         assert_eq!(all.len(), 12, "every listed flag gets exactly one name");
         assert_eq!(attribute_names_of(0x2000), Vec::<&str>::new(), "NOT_CONTENT_INDEXED is noise and stays out");
+    }
+
+    /// The three bits go on and come back off one at a time, and nothing else the entry carries changes:
+    /// that is what a feature marking a folder and taking the mark back later has to be able to promise.
+    #[cfg(windows)]
+    #[test]
+    fn the_three_bits_are_put_on_and_taken_back_off_one_at_a_time() {
+        let here = tempfile::tempdir().expect("a folder of its own");
+        let file = here.path().join("entry");
+        std::fs::write(&file, b"x").expect("a file to mark");
+        set_attr_bits(&file, HIDDEN | SYSTEM, 0);
+        assert_eq!(attrs_of(&file) & (HIDDEN | SYSTEM), HIDDEN | SYSTEM, "the two bits were not put on");
+        set_attr_bits(&file, 0, HIDDEN);
+        assert_eq!(attrs_of(&file) & (HIDDEN | SYSTEM), SYSTEM, "taking one bit off took the other with it");
+        set_attr_bits(&file, 0, SYSTEM);
+        assert_eq!(attrs_of(&file) & (READONLY | HIDDEN | SYSTEM), 0, "the bits stand after they were taken off");
+        assert_eq!(std::fs::read(&file).expect("the marked file"), b"x", "marking an entry changed what it holds");
     }
 }
 
