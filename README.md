@@ -905,6 +905,17 @@ the diskette geometry switches `/F:`, `/T:` and `/N:` — this machine has no fl
 them against, so offering them would be guessing; the 3.5″ and 5.25″ *shapes* stay, since they belong
 to the device icon.
 
+A volume the machine names no size for is refused a format outright, in the words *the machine names no
+usable size for this volume, so no file system can be chosen for it*, and its offer comes back empty. That was
+read on purpose on 2026-11-18 on a 64 GB stick left without a recognizable file system: it still enumerated by
+its letter and named its model and its bus, but its own size and the size of the drive behind it both answered
+nothing. Windows' own disk tools answer 64 160 400 896 bytes for that same disk while this program reads
+nothing, so what brings such a volume back is their doing rather than this window's, and afterwards the volume
+is offered again. Named here as a limitation and not as an aim: the disk behind such a volume does name its
+size to this machine, and reading it from there instead of from the volume would let this window perform the
+very format that repairs one — a decision left open, since widening that guard widens what any format of this
+program can be pointed at.
+
 What the machine itself answers on top of that is quoted as it says it. Measured the same day through
 `Format-Volume -WhatIf`, which writes nothing: it refused FAT for the 64 GB stick as `Size Not
 Supported`, refused ReFS for it as *the specified file system is not supported*, offered FAT32,
