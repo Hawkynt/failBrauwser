@@ -845,27 +845,49 @@ contributes, which is what its test compares against:
 | volume name | `/V:` | `/V:` | `/V:` | `/V:` | `/V:` |
 | allocation unit (cluster size) | `/A:` | `/A:` | `/A:` | `/A:` | — |
 | quick instead of full | `/Q` | `/Q` | `/Q` | `/Q` | `/Q` |
-| overwrite passes | `/P:` | `/P:` | `/P:` | `/P:` | — |
-| NTFS compression | — | — | `/C` | — | — |
-| file-record size | — | — | `/L:` | — | — |
+| overwrite the whole volume first | `/P:` | `/P:` | `/P:` | `/P:` | `/P:` |
+| compress new files by default | — | — | `/C` | — | — |
+| bigger file records | — | — | `/L:` | — | — |
 | log size | — | — | `/LogSize:` | — | — |
-| short names | — | — | `/S:` | — | — |
-| no repair logs | — | — | `/NoRepairLogs` | — | `/NoRepairLogs` |
-| no trim | — | — | `/NoTrim` | `/NoTrim` | — |
-| persistent memory (DAX) | — | — | `/DAX:` | — | — |
-| TXF | — | — | `/TXF:` | — | — |
-| development drive, SHA-256 checksums | — | — | — | `/DevDrv`, `/I:` | — |
-| UDF revision and domain | — | — | — | — | `/R:`, `/D` |
+| short (8.3) names | — | — | `/S:` | — | — |
+| write repair logs | — | — | `/NoRepairLogs` | — | — |
+| trim while formatting | `/NoTrim` | `/NoTrim` | `/NoTrim` | `/NoTrim` | `/NoTrim` |
+| direct access storage (DAX) | — | — | `/DAX:` | — | — |
+| transactional naming (TxF) | — | — | `/TXF:` | — | — |
+| integrity | — | — | — | `/I:` | — |
+| dev drive | — | — | — | `/DevDrv` | — |
+| SHA-256 checksums | — | — | — | `/SHA256Checksums` | — |
+| UDF revision | — | — | — | — | `/R:` |
+| duplicate UDF metadata | — | — | — | — | `/D` |
 | device icon (see *Device icons*) | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-The switches are measured from `format /?` on this build (2026-11-18); which file system each one
-belongs to is this table's own decision, and where it is wrong the format tool's refusal is what the
-window shows. The allowed values are the operating system's business too: it refused an 8 KiB
-allocation unit for NTFS on a 64 GB removable volume as `Invalid Parameter` (measured through
-`Format-Volume -WhatIf`, which writes nothing), and every range it refuses is quoted in the result
-window verbatim. There is no per-volume MFT reserve on this Windows to offer — the MFT zone is set
-machine-wide by `fsutil behavior set mftzone`, which this feature never touches — so the
-NTFS-specific space knob is the log size.
+Every switch, every value list and every "only for this file system" above is measured from that
+tool's own usage text on this build (2026-11-18, German locale — the switch names and numbers are the
+same in any locale). It says: `/FS:` takes FAT, FAT32, exFAT, NTFS, UDF and ReFS; ReFS takes
+allocation units of 4096 and 64 KB; NTFS takes 512 B, 1 KiB, 2 KiB, 4 KiB, 8 KiB, 16 KiB, 32 KiB,
+64 KiB, 128 KiB, 256 KiB, 512 KiB, 1 MiB and 2 MiB; FAT and FAT32 take 512 B to 64 KiB (128 KiB and
+256 KiB only above a 512-byte sector); exFAT takes 512 B to 32 MiB; the state words are `enable` and
+`disable`; UDF revisions are 1.02, 1.50, 2.00, 2.01 and 2.50, 2.01 by default, and `/D` belongs to
+2.50 alone; the NTFS log size is counted in kilobytes with 2 MB as its floor and `0` meaning the
+tool's own size-dependent default; `/C`, `/L:`, `/S:`, `/TXF:`, `/DAX:`, `/LogSize:` and
+`/NoRepairLogs` are marked NTFS-only, `/I:`, `/DevDrv` and `/SHA256Checksums` ReFS-only; and `/Q`
+overrides `/P:`. Three cross-option rules come from the same text and are checked before a command
+exists, because the tool states them as reasons it stops immediately: FAT takes at most 65 526
+clusters and FAT32 between 65 527 and 4 177 917 of them, so an allocation unit that puts this
+volume's size outside that count is refused; NTFS compression is not supported above a 4096-byte
+allocation unit; and a pass count is ignored once quick is ticked, so that control disappears with
+the tick. `format` is always asked with `/Y` and never with `/X`: a volume something of this program
+is using is refused outright rather than torn out from under it. Left out of the table on purpose are
+the diskette geometry switches `/F:`, `/T:` and `/N:` — this machine has no floppy drive to measure
+them against, so offering them would be guessing; the 3.5″ and 5.25″ *shapes* stay, since they belong
+to the device icon.
+
+What the machine itself answers on top of that is quoted as it says it. Measured the same day through
+`Format-Volume -WhatIf`, which writes nothing: it refused FAT for the 64 GB stick as `Size Not
+Supported`, refused ReFS for it as *the specified file system is not supported*, offered FAT32,
+exFAT and NTFS there, and does not name UDF as a parameter at all. There is no per-volume MFT reserve
+on this Windows to offer — the MFT zone is set machine-wide by `fsutil behavior set mftzone`, which
+this feature never touches — so the NTFS space knob the window offers is the log size.
 
 The volume name is pre-filled with the manufacturer and the size the device icon prints, quick is on
 by default because a full format of a big stick runs for hours, and no command exists until the

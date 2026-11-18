@@ -202,7 +202,6 @@ and the new program started. The *build from source* channel is Linux-only there
   still works over GLib's own local bus (probed during the GTK spike, and the packaged
   sysroot has never had a `dbus-daemon.exe`), and selftests additionally run
   `NON_UNIQUE`/`HANDLES_COMMAND_LINE` so they need no bus at all.
-
 - **Elevation on Windows is one consent prompt per act, never a service and never at startup.**
   Renaming the label of a volume that is not yours to write, and formatting, run this program's own
   file again with the verb `runas` (`ShellExecuteExW`) and the parameters `--rename-volume …` /
@@ -210,17 +209,28 @@ and the new program started. The *build from source* channel is Linux-only there
   dialog is a no-op and leaves nothing running. The Linux twin of the same two acts goes through the
   `pkexec` helper that Backup Mode already uses (`src\links\helper.rs`).
 - **What the format window offers is what this build's `format.exe` offers, and the parameter set is
-  closed.** Measured 2026-11-18 from its own usage text: FAT, FAT32, exFAT, NTFS, ReFS and UDF, plus
-  the switches of the README's option table. There is **no per-volume MFT reserve** on this Windows:
-  `fsutil fsinfo ntfsinfo d:\` reports an MFT zone (224 MB on this machine) that
-  `fsutil behavior set mftzone` sets machine-wide (`MftZone = 0` → 200 MB), and `format` has no
-  per-volume switch for it, so the NTFS space knob the window offers is the log size
-  (`/LogSize:`) and the zone is never written. The operating system keeps the ranges: it answered
-  `Invalid Parameter` for an 8 KiB NTFS allocation unit on a 64 GB removable volume
-  (`Format-Volume -WhatIf`, which writes nothing), and its refusal is shown as it says it.
-- **Not measured here yet:** which of the four device-icon hooks this Windows 11 build actually
-  honours. The read-back of the drive's icon through `SHGetFileInfoW` and of the name shown under it
-  is the measurement that settles it; until that line stands in this file the hook list is unverified,
+  closed.** Measured 2026-11-18 from that tool's own usage text, which is where the README's option
+  table gets its switches, its per-file-system value lists (the allocation-unit ladders, the
+  `enable`/`disable` state words, the UDF revisions), its "only NTFS / only ReFS" markers and its
+  cluster-count rules for FAT and FAT32. The two paths that can be asked **disagree**, and that is
+  recorded rather than resolved: `format`'s text lists an 8 KiB allocation unit for NTFS while
+  `Format-Volume -WhatIf` (which writes nothing) refused exactly that for the 64 GB removable stick as
+  `Invalid Parameter`; `Format-Volume` refuses FAT for that stick as `Size Not Supported`, refuses
+  ReFS for it as *the specified file system is not supported*, offers FAT32/exFAT/NTFS there, and
+  names no UDF parameter at all. The window builds the command for `format`, because `format` is the
+  program that runs, and whatever refuses quotes its own words. There is **no per-volume MFT
+  reserve** on this Windows: `fsutil fsinfo ntfsinfo d:\` reports an MFT zone (224 MB on this machine)
+  that `fsutil behavior set mftzone` sets machine-wide (`MftZone = 0` → 200 MB), and `format` has no
+  per-volume switch for it, so the NTFS space knob the window offers is the log size (`/LogSize:`) and
+  the zone is never written.
+- **Not measured here yet:** the label ceilings the README names. FAT's 11 characters and NTFS' 32
+  are what the drivers and the tools have always taken, exFAT's 15 and UDF's 32 are the file systems'
+  own documented fields, and `Format-Volume -WhatIf` validates no label length at all — it took a
+  33-character label for exFAT and FAT32 on the stick without a word — so the entry enforces the
+  table's number and the authorized format step reads back what the tool actually wrote. Also not
+  measured yet: which of the four device-icon hooks this Windows 11 build actually honours. The read-back
+  of the drive's icon through `SHGetFileInfoW` and of the name shown under it is the measurement that
+  settles it; until that line stands in this file the hook list is unverified,
   and the device-description section names of `autorun.inf` (the 2011-era schema) are the part most
   likely to answer nothing at all.
 - **The Linux half of this feature has never been run here** — there is no Linux on this host.
