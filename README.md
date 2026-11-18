@@ -822,7 +822,7 @@ deleted for good. The status bar shows where a selected item was deleted from.
 
 **Drives:** *Drives* on the left lists every volume; the button at the end of a row (or a
 right-click, or <kbd>Alt</kbd>+<kbd>Enter</kbd>) shows its properties. Its *Volume* section holds
-the volume name, and the page has *Format…* and *Device icon*.
+the volume name, and the page has *Format…*, *Create device icon* and *Remove device icon*.
 
 **Renaming a volume:** the *Label* row of a drive's properties window is an entry you can type
 into; a *Rename* button appears beside it as soon as the text differs from what the volume says, and
@@ -926,7 +926,12 @@ whether it succeeded or refused.
 **Device icons:** the picture and the name a device shows with its own folder. *Create device icon*
 and *Remove device icon* on a drive's row menu and on its properties window write and take away
 those files, and the format window has a box for the same thing, so a stick gets its picture as it is
-formatted. The art is drawn here for the shapes a device comes in — nvme, solid-state disk, hard
+formatted. *Create device icon* opens a small window first: the shape the machine detected with its
+evidence spelled out beside it — the same dropdown the format window has — and *Create* writes what that
+window names. Where writing those files needs the administrator, this same program is started elevated, so
+Windows asks at that moment and a cancelled prompt changes nothing at all. Refused before a file exists:
+a read-only volume, and a volume that names no folder this program can write into — one that is not
+mounted, a phone, or one this machine gives no drive letter. The art is drawn here for the shapes a device comes in — nvme, solid-state disk, hard
 disk, usb stick, sd card, µsd card, 3.5″ floppy, 5.25″ floppy, optical drive — and the words are
 composited when the icon is written: the manufacturer the machine reported (`SanDisk Ultra`,
 `Samsung SSD 870 QVO` …, reduced to the brand word a long model string begins with) and the size in
@@ -938,9 +943,9 @@ against 27 sampled pixels of the band) — the mush the earlier rule meant to av
 
 The shape is detected where the machine can tell one (`bus sdio` at 64 GB is a memory card, an nvme
 disk is nvme, a disk with no seek penalty is a solid-state one); where it cannot — an sd card in a
-reader looks exactly like a µsd card, and a 3.5″ floppy exactly like a 5.25″ one — the format window
-shows a *Device shape* dropdown set to the detected answer with the evidence spelled out next to it,
-and the shape can be changed. The same words go into the volume name the format window proposes.
+reader looks exactly like a µsd card, and a 3.5″ floppy exactly like a 5.25″ one — the format window and
+the *Create device icon* window both show a *Device shape* dropdown set to the detected answer with the
+evidence spelled out next to it, and the shape can be changed. The same words go into the volume name the format window proposes.
 
 Two of those files also carry the volume's long name: `autorun.inf` names it as the drive's label and
 `desktop.ini` names it as the folder's display name, which is what makes a `Samsung 64 GB` name work
