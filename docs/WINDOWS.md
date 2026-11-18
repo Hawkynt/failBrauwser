@@ -301,12 +301,35 @@ and the new program started. The *build from source* channel is Linux-only there
   neither pin shows the long name that is what gets written down, not a claim that it works. The short
   variant is deterministic rather than the volume's serial-numbered `8.3` form, so the same long name
   always yields the same label.
-- **The device-icon half of the README's promise stands unbuilt.** *Create device icon* and *Remove device
-  icon* are on no drive menu and no properties window, the format window has no *Write a device icon* row
-  and no *Device shape* dropdown, and no glyph of the README's nine shapes is in the tree. The words the
-  format window does propose as the volume name come from `fsformat::proposed_name`, which is built and
-  tested on its own; the picture, the twelve images of `DevIcon.fil` and the four files that carry them are
-  the next commit, and nothing about the shell honouring them has been measured.
+- **The picture is built, and this Windows reads the icon file it writes; the four files that would carry
+  it on a volume are not built yet.** `src\fsformat\art.rs` composites one of the nine tracked glyphs —
+  `assets\device-glyphs\`, drawn by the `make-glyphs.ps1` that sits beside them, none of another program's
+  artwork — with the words the machine reported about the device, and `src\fsformat\ico.rs` writes the
+  twelve images the README names: 16, 32, 48 and 256 pixels at 24-bit colour with an 8-bit alpha, at an
+  8-bit palette and at a 4-bit palette, each with its one-bit mask. Measured 2026-11-18 with `ExtractIconExW`,
+  which is the shell's own reader of an icon file, and with GDI+ as a second opinion: a file this writer
+  produces answers `extract-count=1` — one icon group — and extracts a 32×32 large and a 16×16 small icon,
+  and GDI+ opens it at 32×32; the tracked `data\icons\failbrauwser.ico` answers the same way, and so does a
+  one-icon file GDI+ wrote itself, so the reader is not merely agreeing with this writer.
+  Two findings came out of that probe and are pinned by tests rather than remembered.
+  **An entry names its image's length before its place.** With the two words exchanged the pictures were
+  the same, the directory read back plausibly to a reader that mirrored the writer, and every product file
+  still answered `extract-count=0` while GDI+ refused to open it; in the documented order the same pictures
+  extract. A test that reads the file with the writer's own misreading proves nothing, so
+  `fsformat::ico::tests::an_entry_names_the_length_of_its_image_before_its_place` reads the two words from
+  their documented offsets and asks the image's own header whether it is that many bytes long.
+  **A four-bit row of a side that is no even number has one nibble over**, and that nibble names the
+  transparent slot: filling it from the picture instead ran past the picture's own pixels and panicked on
+  the last row of a 17-pixel picture, which is what
+  `a_picture_of_an_odd_side_still_writes_every_row_of_its_four_bit_image` was written to fail on first.
+  A temporary bisect — not a kept test — settled three further spellings: a paletted entry whose header
+  leaves `biClrUsed` at zero counts nothing at all for 8-bit and is read for 4-bit, and a 32-bit image with
+  its mask named in the header's height extracts whether the directory names its planes and bits or leaves
+  them zero, so this writer names the palette count and carries the mask for every image.
+  *Create device icon* and *Remove device icon* are still on no drive menu and no properties window, the
+  format window has no *Write a device icon* row and no *Device shape* dropdown, and `DevIcon.fil`,
+  `autorun.inf`, `desktop.ini` and `folder.ico` are written by nothing yet — so what `SHGetFileInfoW`
+  answers for a volume that carries them stays unmeasured, and the hook list above stays unverified.
 - **No automated run writes a volume or elevates.** The format scenario drives a stand-in volume that names
   no drive letter and holds no mount point, so the act answers before a start of any program exists — on
   Windows *This volume has no drive letter to format.*, and over there the switches of the table belonging

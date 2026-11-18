@@ -11,6 +11,8 @@
 //! tool to be found out.
 
 pub mod act;
+pub mod art;
+pub mod ico;
 
 use crate::drives::Volume;
 
