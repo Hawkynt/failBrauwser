@@ -63,7 +63,22 @@ pub fn format(volume: &Volume, fs: FileSystem, chosen: &[(FormatOption, Value)])
         }
         linux_format_arguments(volume, fs)?
     };
-    elevated(FORMAT, &arguments)
+    let answer = elevated(FORMAT, &arguments)?;
+    Ok(format_words(volume, fs.word(), chosen, &answer))
+}
+
+/// The words one format answers: the format tool's own, joined with those of the device-icon act when the
+/// page had its box ticked. That box is a second act on the volume that now holds the new file system, so it
+/// runs after the format worked, against the name typed on the page and the file system just written — the
+/// record of the volume still names what it was before. A failure of the icon is told beside a format that did
+/// work instead of hiding it, and an unticked box leaves the tool's words exactly as they were.
+fn format_words(volume: &Volume, fs: &str, chosen: &[(FormatOption, Value)], tool: &str) -> String {
+    let Some(shape) = chosen.iter().find(|(option, _)| *option == FormatOption::DeviceIcon).and_then(|(_, value)| match value { Value::Text(asset) => Shape::parse(asset), _ => None }) else { return tool.into() };
+    let typed = chosen.iter().find(|(option, _)| *option == FormatOption::VolumeName).map(|(_, value)| match value { Value::Text(name) => name.as_str(), _ => "" }).unwrap_or("");
+    match create_icon(volume, fs, shape, typed) {
+        Ok(words) => format!("{tool}\n{words}"),
+        Err(why) => format!("{tool}\nThe volume was formatted; its device icon was not written: {why}"),
+    }
 }
 
 /// The command the Linux half runs: the `mkfs.<type>` program of the chosen file system and the volume it
@@ -114,13 +129,15 @@ const NO_FOLDER: &str = "This volume gets no device icon: it names no folder to 
 /// model and size the machine reported, and the name the volume is called. The two text files pin that name
 /// only where the file system holds something shorter, which is the same rule the rename follows. Where the
 /// rights are what is missing, the same write is asked of this program's own file run as the administrator,
-/// and a prompt that is closed without agreeing leaves the volume as it was.
-pub fn create_icon(volume: &Volume, shape: Shape, name: &str) -> Result<String, String> {
+/// and a prompt that is closed without agreeing leaves the volume as it was. `fs` names the file system the
+/// name is settled against: the record's own word for the two verbs, and the one just written for a format,
+/// whose record still says what the volume was before it.
+pub fn create_icon(volume: &Volume, fs: &str, shape: Shape, name: &str) -> Result<String, String> {
     if let Some(why) = icon_refusal(volume) { return Err(why); }
     let Some(root) = root_of(volume) else { return Err(NO_FOLDER.into()) };
-    match icon::create(&root, shape, &volume.drive_name, device_size(volume), &name_words(&volume.fs_type, name)) {
+    match icon::create(&root, shape, &volume.drive_name, device_size(volume), &name_words(fs, name)) {
         Ok(written) => Ok(creation_words(&written, &root)),
-        Err(why) if why.denied => elevated(ICON, &icon_arguments(volume, shape, name)),
+        Err(why) if why.denied => elevated(ICON, &icon_arguments(volume, fs, shape, name)),
         Err(why) => Err(why.text),
     }
 }
@@ -141,8 +158,8 @@ pub fn remove_icon(volume: &Volume) -> Result<String, String> {
 /// What the privileged create is handed: the folder, the shape by the name its picture carries, the model and
 /// the size the words are drawn from, the name to pin, and the file system that bounds that name. Every word
 /// the child needs to draw the same picture is here, so it asks no window anything.
-pub fn icon_arguments(volume: &Volume, shape: Shape, name: &str) -> Vec<String> {
-    vec![root_of(volume).map(|root| root.display().to_string()).unwrap_or_default(), shape.asset().to_string(), volume.drive_name.clone(), device_size(volume).to_string(), name.to_string(), volume.fs_type.clone()]
+pub fn icon_arguments(volume: &Volume, fs: &str, shape: Shape, name: &str) -> Vec<String> {
+    vec![root_of(volume).map(|root| root.display().to_string()).unwrap_or_default(), shape.asset().to_string(), volume.drive_name.clone(), device_size(volume).to_string(), name.to_string(), fs.to_string()]
 }
 
 /// …and what the privileged removal is handed: the folder whose two text files are read.
@@ -567,7 +584,7 @@ mod tests {
     #[test]
     fn a_volume_naming_no_folder_is_refused_both_icon_acts() {
         let v = Volume { device: "/dev/fake-Photos".into(), fs_type: "NTFS".into(), ..Default::default() };
-        for (act, answer) in [("create", create_icon(&v, Shape::UsbStick, "Photos")), ("remove", remove_icon(&v))] {
+        for (act, answer) in [("create", create_icon(&v, "NTFS", Shape::UsbStick, "Photos")), ("remove", remove_icon(&v))] {
             let why = answer.err().unwrap_or_else(|| panic!("the {act} icon act wrote into a folder that does not exist"));
             assert!(why.contains("no folder"), "the {act} act refused a nameless volume with other words: {why}");
         }
@@ -578,7 +595,7 @@ mod tests {
     fn a_read_only_volume_is_refused_both_icon_acts() {
         let v = Volume { device: "/dev/fake-Photos".into(), mount_points: vec![PathBuf::from("/media/photos")], read_only: true, ..Default::default() };
         for act in ["create", "remove"] {
-            let why = if act == "create" { create_icon(&v, Shape::SdCard, "Photos") } else { remove_icon(&v) }.err().unwrap_or_else(|| panic!("the {act} icon act wrote onto a read-only volume"));
+            let why = if act == "create" { create_icon(&v, "NTFS", Shape::SdCard, "Photos") } else { remove_icon(&v) }.err().unwrap_or_else(|| panic!("the {act} icon act wrote onto a read-only volume"));
             assert!(why.contains("read-only"), "the {act} act refused a read-only volume with other words: {why}");
         }
     }
@@ -589,7 +606,7 @@ mod tests {
     #[test]
     fn the_icon_arguments_name_the_folder_the_shape_and_the_words() {
         let v = Volume { device: "/dev/fake-stick".into(), mount_points: vec![PathBuf::from("/media/stick")], fs_type: "FAT32".into(), drive_name: "SanDisk Ultra".into(), drive_size: 64_160_400_896, size: 64_143_622_144, ..Default::default() };
-        assert_eq!(icon_arguments(&v, Shape::MicroSd, "Samsung 64 GB"), ["/media/stick", "msd", "SanDisk Ultra", "64160400896", "Samsung 64 GB", "FAT32"], "the drive size is the size the picture prints, not the partition's");
+        assert_eq!(icon_arguments(&v, "FAT32", Shape::MicroSd, "Samsung 64 GB"), ["/media/stick", "msd", "SanDisk Ultra", "64160400896", "Samsung 64 GB", "FAT32"], "the drive size is the size the picture prints, not the partition's");
         assert_eq!(unicon_arguments(&v), ["/media/stick"]);
     }
 
@@ -641,6 +658,32 @@ mod tests {
         }
         assert!(text.contains("kept"), "the answer does not say what was kept: {text}");
         let _ = std::fs::remove_file(&outcome);
+    }
+
+    /// The device-icon box of the format page is a second act on the volume the format tool has just written,
+    /// so its words join the tool's own answer instead of replacing them: an unticked box answers with the
+    /// tool's words exactly as they were, a ticked one names the icon that stands and the files that carry it,
+    /// and an icon that could not be written is told beside a format that did work (README: *Device icons*).
+    #[test]
+    fn the_icon_of_a_format_joins_the_words_of_the_tool_it_follows() {
+        let here = tempfile::tempdir().expect("a folder of its own");
+        let root = here.path().to_path_buf();
+        let v = Volume { device: "E:".into(), mount_points: vec![root.clone()], fs_type: "FAT32".into(), drive_name: "SanDisk Ultra".into(), drive_size: 64_160_400_896, ..Default::default() };
+        let tool = "The volume was formatted.\nEverything on it is gone.";
+        let named = [(VolumeName, Text("Samsung 64 GB".into()))];
+        assert_eq!(format_words(&v, "FAT32", &named, tool), tool, "a format whose box is unticked answers with the tool's words alone");
+        assert!(!root.join(icon::DEVICE_IMAGE).exists(), "an unticked box wrote a picture anyway");
+        let mut ticked = named.to_vec();
+        ticked.push((DeviceIcon, Text("usbstick".into())));
+        let answer = format_words(&v, "FAT32", &ticked, tool);
+        assert!(answer.starts_with(tool), "the words of the format tool are no longer the head of the answer: {answer}");
+        assert!(answer.contains("The device icon stands on"), "the answer does not name the icon that stands: {answer}");
+        assert!(root.join(icon::DEVICE_IMAGE).is_file(), "a ticked box wrote no picture of its own");
+        crate::osprim::set_attr_bits(&root, 0, crate::osprim::SYSTEM | crate::osprim::HIDDEN);
+        // A volume that names no folder is refused by the icon act, and that refusal cannot undo the format.
+        let nameless = Volume { device: "/dev/fake-Photos".into(), ..Default::default() };
+        let answer = format_words(&nameless, "NTFS", &ticked, tool);
+        assert!(answer.starts_with(tool) && answer.contains("was not written"), "a format that worked is hidden by an icon that failed: {answer}");
     }
 
     /// A privileged icon run that was given no folder is refused with the outcome file written, so the window
