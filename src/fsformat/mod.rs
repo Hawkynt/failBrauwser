@@ -296,7 +296,7 @@ impl Target {
 
 /// The drive letter out of `C:`, `C:\folder`, `/dev/sda1`-shaped noise or a UNC path — nothing where
 /// the text names no letter.
-fn drive_letter(text: &str) -> Option<char> {
+pub(crate) fn drive_letter(text: &str) -> Option<char> {
     let mut chars = text.trim().chars();
     match (chars.next(), chars.next()) {
         (Some(letter), Some(':')) if letter.is_ascii_alphabetic() => Some(letter.to_ascii_lowercase()),
@@ -396,9 +396,23 @@ fn cluster_count_ok(fs: FileSystem, size: u64, unit: u32) -> Result<(), String> 
 /// busy belongs to the windows, which hold the operations that make it busy.
 pub fn refusal(volume: &Volume) -> Option<String> {
     if volume.optical { return Some("an optical drive holds no file system of its own to write".into()); }
-    if volume.system { return Some("this is a system volume — the volume Windows runs from or boots from".into()); }
+    // The volume Windows runs from is answered by the machine on this platform: the drives model's
+    // `system` flag names an internal fixed volume there — the one that gets no unmount button — and says
+    // nothing about where Windows lives (docs\WINDOWS.md, measured). Elsewhere that flag is the hint the
+    // machine itself gives for the system's own volume.
+    #[cfg(windows)]
+    if let Some(system) = crate::win::storage::system_volume_letter()
+        && drive_letter(&volume.device) == Some(system) {
+        return Some("this is the volume Windows runs from".into());
+    }
+    #[cfg(not(windows))]
+    if volume.system { return Some("this is a system volume — the volume the system runs from or boots from".into()); }
     if volume.read_only { return Some("this volume is read-only".into()); }
     if !volume.share_uri.is_empty() { return Some("this is a folder on another computer, not a volume of its own".into()); }
+    // A drive the machine itself calls remote has no volume of its own to write, whether or not a folder
+    // on it is mounted here: measured on this machine, two mapped drives answer it, and the lookup of
+    // their UNC origin answers nothing for them.
+    if volume.network { return Some("this is a drive on another computer, not a volume this machine holds".into()); }
     if !volume.protocol.is_empty() { return Some("this is a phone or a camera, whose storage is not formatted from here".into()); }
     if (if volume.size > 0 { volume.size } else { volume.drive_size }) < SMALLEST_VOLUME { return Some("the machine names no usable size for this volume, so no file system can be chosen for it".into()); }
     None
@@ -933,9 +947,13 @@ mod tests {
     #[test]
     fn a_volume_that_cannot_be_formatted_is_refused_with_a_reason() {
         assert!(refusal(&Volume { optical: true, drive_size: 1_000_000_000, ..Default::default() }).unwrap().contains("optical"));
+        #[cfg(not(windows))]
         assert!(refusal(&Volume { system: true, drive_size: 1_000_000_000, ..Default::default() }).unwrap().contains("system"));
         assert!(refusal(&Volume { read_only: true, drive_size: 1_000_000_000, ..Default::default() }).unwrap().contains("read-only"));
         assert!(refusal(&Volume { share_uri: "smb://nas/Music".into(), drive_size: 1_000_000_000, ..Default::default() }).unwrap().contains("another computer"));
+        // Measured on this machine: two mapped drives answer the machine's own remote-drive fact while the
+        // lookup of their origin answers nothing, so the refusal cannot rest on the origin alone.
+        assert!(refusal(&Volume { network: true, drive_size: 15_698_757_677_056, ..Default::default() }).unwrap().contains("another computer"));
         assert!(refusal(&Volume { protocol: "mtp".into(), drive_size: 1_000_000_000, ..Default::default() }).unwrap().contains("phone"));
         assert_eq!(refusal(&Volume { drive_size: 64_160_400_896, bus: "usb".into(), ..Default::default() }), None);
     }
@@ -948,6 +966,8 @@ mod tests {
         let names: Vec<&str> = accepted(&Volume { drive_size: 1_474_560, ..Default::default() }, &offered).iter().map(|fs| fs.word()).collect();
         assert!(names.contains(&"FAT") && !names.contains(&"FAT32"), "FAT32 needs more clusters than a floppy has: {names:?}");
         assert!(accepted(&Volume { drive_size: 1_000, ..Default::default() }, &offered).is_empty(), "a volume with no usable size offers nothing");
+        assert!(accepted(&Volume { drive_size: 64_160_400_896, optical: true, ..Default::default() }, &offered).is_empty(), "a volume that is refused outright is offered nothing");
+        #[cfg(not(windows))]
         assert!(accepted(&Volume { drive_size: 64_160_400_896, system: true, ..Default::default() }, &offered).is_empty());
         let names: Vec<&str> = accepted(&Volume { drive_size: 64_160_400_896, ..Default::default() }, &["NTFS".into()]).iter().map(|fs| fs.word()).collect();
         assert_eq!(names, ["NTFS"], "what the machine named is what is offered");
@@ -974,7 +994,7 @@ mod tests {
 
     #[test]
     fn the_offer_of_a_volume_names_the_words_a_window_shows() {
-        assert!(offer(&Volume { drive_size: 64_160_400_896, system: true, ..Default::default() }).is_empty(), "a system volume is refused, so it is offered nothing");
+        assert!(offer(&Volume { drive_size: 64_160_400_896, optical: true, ..Default::default() }).is_empty(), "a volume the gate refuses is offered nothing");
         let names = offer(&Volume { device: "F:".into(), size: 64_160_400_896, bus: "usb".into(), ..Default::default() });
         assert!(!names.is_empty(), "a volume the machine names a size for is offered something");
         for word in &names {
@@ -997,6 +1017,20 @@ mod tests {
             assert!(FileSystem::all().contains(fs), "{} is not in the table", fs.word());
         }
         assert_eq!(named, named_by_tool(&tool_usage_text()), "the tool answers the same way when asked twice");
+    }
+
+    /// The volume the gate refuses as the system's is the one the machine says Windows runs from, which is
+    /// not the flag the drives page uses to hide an unmount button: measured on this machine, three lettered
+    /// fixed volumes answer that flag and only one of them holds Windows.
+    #[test]
+    #[cfg(windows)]
+    fn the_gate_refuses_the_volume_windows_runs_from_and_not_a_data_volume() {
+        let Some(system) = crate::win::storage::system_volume_letter() else { panic!("the machine is expected to answer where Windows runs from") };
+        let holds = Volume { device: format!("{system}:"), drive_size: 1_000_000_000, ..Default::default() };
+        assert_eq!(refusal(&holds).as_deref(), Some("this is the volume Windows runs from"), "the volume Windows runs from has to be refused before any command exists");
+        let other = if system == 'd' { "E:" } else { "D:" };
+        let data = Volume { device: other.into(), drive_size: 1_000_000_000, system: true, ..Default::default() };
+        assert_eq!(refusal(&data), None, "a data volume is not refused as the system's, whatever the drives page's flag says about it");
     }
 
     #[test]

@@ -64,6 +64,9 @@ pub struct Volume {
     pub loop_object: String,
     /// A network share mounted through GVfs: its address (`smb://nas/Music`).
     pub share_uri: String,
+    /// A drive the machine itself calls remote (Windows' `DRIVE_REMOTE`), whether or not a folder on it is
+    /// mounted here and whether or not its origin can be named: it has no volume this machine can format.
+    pub network: bool,
     /// The file systems this volume could be formatted to, in the words of the README's option table
     /// (`src\fsformat`), narrowed by what this machine answers and by the volume's own size and kind.
     /// Empty where a volume is refused outright or where the machine says nothing about its formats.
@@ -456,6 +459,7 @@ pub fn parse_udisks(reply: &glib::Variant) -> Vec<Volume> {
             // programs a distribution carries are not asked here: the list stays empty (README:
             // *Formatting a volume*, recorded as unverified in docs\TOOL-STARTS.md).
             supported_file_systems: Vec::new(),
+            network: false,
         });
     }
     sort_volumes(&mut out);
