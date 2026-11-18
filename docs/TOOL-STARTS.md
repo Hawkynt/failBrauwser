@@ -206,6 +206,30 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
   earlier and stopped before it could be looked at. The three started at the moment a scenario run or
   a fixture-building test target was ending — which is where the limit sits, not a claim about which
   process started each of them.
+- Measured 2026-11-18, the job is load-bearing and not a second copy of the id list: the new unit test
+  reads the copy's own announcement (`READING 2164 job=true`) and the client was gone within that
+  second of ending the copy. With `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` taken out of the
+  `SetInformationJobObject` call — the job still created, the client still assigned, only the flag
+  absent — the same scenario answered
+  `the read client 21976 outlived the instance that was ended without ending anything, so the read job
+  did not take it`, which is how the check was seen to refuse for the reason it exists for.
+- Measured 2026-11-18, that the job stays off the acts: `read_answer` is the only path into it, and the
+  starts that must survive an instance were read where they stand — `run::with_input` (a commit
+  message over a pipe, `wait_with_output` of its own), `src\ui\vcs\progress.rs`,
+  `src\ui\vcs\dialogs.rs`, `src\archive\client.rs` and the two `powershell` starts of the file swap in
+  `src\update.rs`. None of them reaches `read_of`.
+- Measured 2026-11-18 after the change: `vcs::` lib 106 passed, the whole lib 304 passed / 3 failed (the
+  three Linux-only assertions of `docs\WINDOWS.md`, unchanged), `source_rules` 3 passed,
+  `vcs_backends` 16 passed in 12.32 s, `win_startup` 2, `helper_lifetime` 2, `ui_vcs` 3 passed in
+  7.26 s, and `ui_git` alone and serial 6 passed in 50.57 s, then again 6 passed in 50.02 s with the
+  output visible and no skip line printed — so those six did drive the real client. The 148 s and
+  206 s of 2026-11-17 were runs inside a full run; the difference was not investigated and no speedup
+  is claimed. A census of `git`/`svn`/`svnadmin`/`hg`/`cvs` straight after named only the shell's own
+  two `git -C … branch --show-current`.
+- Not verified, and not answered: the other side of the job. `PR_SET_PDEATHSIG` is the Unix answer to
+  kill-on-close, but it has to be set by the child at its own exec, which stable `Command` gives no
+  hook for; a process watching from this instance would die in the same crash it is meant to survive.
+  There the ending call stays the whole rule, and a crash does not reach it.
 - Open: the reported start failures `0x800700E8` (Win32 232, a pipe already closed) for `git log`,
   `git ls-files` and the log-graph read name this program's own command lines. A handle inherited
   from whatever started failBrauwser is a plausible route to a start failing that way, and the rule
