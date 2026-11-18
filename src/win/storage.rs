@@ -12,7 +12,7 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
 };
 use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW, GetVolumeNameForVolumeMountPointW, OPEN_EXISTING, BusTypeMmc, BusTypeSd, BusTypeUsb,
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW, GetVolumeNameForVolumeMountPointW, OPEN_EXISTING, BusType1394, BusTypeAta, BusTypeAtapi, BusTypeFibre, BusTypeFileBackedVirtual, BusTypeMmc, BusTypeNvme, BusTypeRAID, BusTypeSCM, BusTypeSas, BusTypeSata, BusTypeScsi, BusTypeSd, BusTypeSsa, BusTypeSpaces, BusTypeUfs, BusTypeUsb, BusTypeVirtual, BusTypeiScsi, STORAGE_BUS_TYPE,
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
@@ -58,7 +58,7 @@ pub fn volumes() -> Vec<Volume> {
         let network = kind.0 == "Network Drive";
         let share_uri = if network { crate::win::wnet::connection_for(&root).as_deref().and_then(|unc| crate::win::wnet::smb_for_unc(std::path::Path::new(unc))).unwrap_or_default() } else { String::new() };
         let internal_fixed = kind.1 == false && kind.2 == false && letter_is_fixed(&root) && disk.bus != "usb";
-        out.push(Volume {
+        let mut volume = Volume {
             device: root.clone(),
             // Without a label Explorer's name for the kind: "Local Disk", "Removable Disk"…
             label: if label.is_empty() { kind.0.to_string() } else { label },
@@ -85,7 +85,11 @@ pub fn volumes() -> Vec<Volume> {
             bus: disk.bus,
             rotation_rate: disk.rotation,
             ..Default::default()
-        });
+        };
+        // The file systems this volume could be formatted to, read from the tool that would do it and
+        // narrowed to this volume (README: *Formatting a volume*); empty for a volume the gate refuses.
+        volume.supported_file_systems = crate::fsformat::offer(&volume);
+        out.push(volume);
     }
     crate::drives::sort_volumes(&mut out);
     out
@@ -214,10 +218,23 @@ fn storage_property(h: windows::Win32::Foundation::HANDLE, property: i32) -> Opt
     }
 }
 
-/// A storage bus in the drives model's words ("usb", "sdio", empty for internal).
+/// A storage bus in the drives model's words. Wherever the machine has a word for the bus it answers,
+/// that word is kept, because the device shape the icon is drawn for and the *Connection:* row both read
+/// it: an NVMe drive, a SATA disk and an ATA disk behind a controller are not the same device to draw.
+/// Only an answer the machine itself calls unknown, and a number it has no name for, stay empty.
 fn bus_name(bus: i32) -> String {
-    if bus == BusTypeUsb.0 { "usb".into() } else if bus == BusTypeSd.0 || bus == BusTypeMmc.0 { "sdio".into() } else { String::new() }
+    BUSES.iter().find(|(known, _)| known.0 == bus).map(|(_, word)| (*word).to_string()).unwrap_or_default()
 }
+
+/// The buses this build's `STORAGE_BUS_TYPE` answers with and the word each one is shown as. The numbers
+/// are the API's own, taken from its metadata, so nothing here is a guess about a driver's value; the
+/// words are the drives model's. `BusTypeSd` keeps the word "sdio" the model has always used.
+const BUSES: &[(STORAGE_BUS_TYPE, &str)] = &[
+    (BusTypeScsi, "scsi"), (BusTypeAtapi, "atapi"), (BusTypeAta, "ata"), (BusType1394, "ieee1394"), (BusTypeSsa, "ssa"),
+    (BusTypeFibre, "fibre"), (BusTypeUsb, "usb"), (BusTypeRAID, "raid"), (BusTypeiScsi, "iscsi"), (BusTypeSas, "sas"),
+    (BusTypeSata, "sata"), (BusTypeSd, "sdio"), (BusTypeMmc, "mmc"), (BusTypeSpaces, "spaces"), (BusTypeVirtual, "virtual"),
+    (BusTypeFileBackedVirtual, "virtual"), (BusTypeNvme, "nvme"), (BusTypeSCM, "scm"), (BusTypeUfs, "ufs"),
+];
 
 /// The drive letter's own type again (the `kind` name alone cannot tell a USB-HDD from an
 /// internal one — the bus can, but a query can fail; this stays true for what GetDriveType saw).
@@ -354,7 +371,33 @@ mod tests {
     fn bus_names_match_the_drives_model() {
         assert_eq!(bus_name(BusTypeUsb.0), "usb");
         assert_eq!(bus_name(BusTypeSd.0), "sdio");
-        assert_eq!(bus_name(3), "");
+        assert_eq!(bus_name(BusTypeMmc.0), "mmc");
+        assert_eq!(bus_name(BusTypeNvme.0), "nvme");
+        assert_eq!(bus_name(BusTypeSata.0), "sata");
+        assert_eq!(bus_name(BusTypeAta.0), "ata");
+        assert_eq!(bus_name(BusTypeAtapi.0), "atapi");
+        assert_eq!(bus_name(BusTypeScsi.0), "scsi");
+        assert_eq!(bus_name(BusTypeRAID.0), "raid");
+        assert_eq!(bus_name(BusTypeVirtual.0), "virtual");
+        assert_eq!(bus_name(BusTypeFileBackedVirtual.0), "virtual");
+        assert_eq!(bus_name(BusType1394.0), "ieee1394");
+        assert_eq!(bus_name(windows::Win32::Storage::FileSystem::BusTypeUnknown.0), "", "an answer the machine itself calls unknown is left empty");
+        assert_eq!(bus_name(windows::Win32::Storage::FileSystem::BusTypeMaxReserved.0), "", "a number the API has no name for is nobody's word");
+    }
+
+    /// The buses and the formats of the volumes this machine actually has, printed for the record
+    /// (docs\WINDOWS.md): the point is that the words are the model's own and that the offer a window
+    /// would show is the same answer the format gate gives, whatever the hardware in front of it is.
+    #[test]
+    fn every_volume_offers_exactly_what_the_format_gate_answers() {
+        for v in volumes() {
+            eprintln!("{}: bus {:?}, rotation {}, formats {:?}", v.device, v.bus, v.rotation_rate, v.supported_file_systems);
+            assert!(v.bus.is_empty() || BUSES.iter().any(|(_, word)| *word == v.bus), "{} answers its bus as {:?}, which is no word of the model's", v.device, v.bus);
+            for word in &v.supported_file_systems {
+                assert!(crate::fsformat::FileSystem::parse(word).is_some(), "{word} is no file system of the format table");
+            }
+            assert_eq!(v.supported_file_systems.is_empty(), crate::fsformat::refusal(&v).is_some(), "{}: the field and the gate answer differently about {:?}", v.device, v.supported_file_systems);
+        }
     }
 
     #[test]

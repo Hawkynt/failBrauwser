@@ -46,7 +46,10 @@ pub struct Volume {
     pub partition_type: String,
     pub serial: String,
     pub revision: String,
-    /// Connection: "usb", "sdio", "ieee1394", or empty for internal (SATA/NVMe).
+    /// Connection, in the drives model's words: "usb", "sdio", "mmc", "nvme", "sata", "ata", "scsi",
+    /// "raid", "virtual", "ieee1394" … Whatever the machine answers is kept as it answered it, so an
+    /// NVMe drive behind a translating driver reads as that driver answers it; only an answer of
+    /// "unknown" leaves the word empty.
     pub bus: String,
     /// -1 unknown, 0 solid state, otherwise spindle speed.
     pub rotation_rate: i32,
@@ -61,6 +64,10 @@ pub struct Volume {
     pub loop_object: String,
     /// A network share mounted through GVfs: its address (`smb://nas/Music`).
     pub share_uri: String,
+    /// The file systems this volume could be formatted to, in the words of the README's option table
+    /// (`src\fsformat`), narrowed by what this machine answers and by the volume's own size and kind.
+    /// Empty where a volume is refused outright or where the machine says nothing about its formats.
+    pub supported_file_systems: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -445,6 +452,10 @@ pub fn parse_udisks(reply: &glib::Variant) -> Vec<Volume> {
             rotation_rate: if drive.is_some() { i(d, "RotationRate") } else { -1 },
             drive_size: u(d, "Size"),
             protocol: String::new(),
+            // UDisks2 names no file systems a volume could be formatted to, and the `mkfs.<type>`
+            // programs a distribution carries are not asked here: the list stays empty (README:
+            // *Formatting a volume*, recorded as unverified in docs\TOOL-STARTS.md).
+            supported_file_systems: Vec::new(),
         });
     }
     sort_volumes(&mut out);
@@ -593,7 +604,7 @@ pub fn drive_kind(v: &Volume) -> String {
         "Optical drive".into()
     } else if v.usb {
         "USB drive".into()
-    } else if v.bus == "sdio" {
+    } else if v.bus == "sdio" || v.bus == "mmc" {
         "Memory card".into()
     } else if v.removable {
         "Removable drive".into()

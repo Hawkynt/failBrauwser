@@ -2,7 +2,9 @@
 //! *Renaming a volume*, *Device icons*). The option table here **is** the README's option table: a
 //! test reads that table out of the README and compares it item for item, the way `vcs::caps.rs`
 //! pins the Version control table, so the window and the specification cannot tell two different
-//! stories. Nothing here needs a display and nothing here starts a program: the windows refuse what
+//! stories. Nothing here needs a display, and the only program it starts is the format tool asked for its
+//! own usage text — a read that writes nothing and ends with this instance, like every reading client
+//! (docs\TOOL-STARTS.md). The windows are what refuse what
 //! must not be refused, and `format_argv` is the closed gate the command is built through — an
 //! option a file system has no place for, a value outside the list the tool's own usage text gives,
 //! or a combination that text names as a reason to stop is refused here rather than handed to the
@@ -313,6 +315,64 @@ pub fn accepted(volume: &Volume, offered: &[String]) -> Vec<FileSystem> {
     let named: Vec<FileSystem> = offered.iter().filter_map(|w| FileSystem::parse(w)).collect();
     let pool: Vec<FileSystem> = if named.is_empty() { FileSystem::all().to_vec() } else { named };
     FileSystem::all().iter().copied().filter(|fs| pool.contains(fs) && fits(*fs, size)).collect()
+}
+
+/// The offer of one volume in the words a window shows: the machine's answer narrowed to this volume,
+/// which is what `Volume.supported_file_systems` holds and what the format page lists.
+pub fn offer(volume: &Volume) -> Vec<String> {
+    let named = tool_file_systems().iter().map(|fs| fs.word().to_string()).collect::<Vec<_>>();
+    accepted(volume, &named).iter().map(|fs| fs.word().to_string()).collect()
+}
+
+/// The file systems the installed format tool answers for, in this module's order. Its own usage text is
+/// asked for once per run and kept, because that tool is the program which will run and its list is the
+/// one matching the switches this table names: a build whose tool answers for fewer of them is offered
+/// fewer. Empty where the read fails, which leaves the whole table as the offer instead of inventing a
+/// shorter list (README: *Formatting a volume*).
+pub fn tool_file_systems() -> Vec<FileSystem> {
+    static ONCE: std::sync::OnceLock<Vec<FileSystem>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| named_by_tool(&tool_usage_text())).clone()
+}
+
+/// Which of the table's file systems the tool names in the part of its usage text that explains `/FS:`.
+/// The words are compared as whole words, because `FAT32` named on its own is not a build that formats
+/// to FAT, and in any case, because the sentences around them are in the user's language while the
+/// file-system names are not.
+fn named_by_tool(text: &str) -> Vec<FileSystem> {
+    let block = fs_block(text).to_lowercase();
+    let tokens = block.split(|c: char| !c.is_ascii_alphanumeric()).filter(|token| !token.is_empty()).collect::<Vec<_>>();
+    FileSystem::all().iter().copied().filter(|fs| tokens.iter().any(|token| *token == fs.word().to_lowercase())).collect()
+}
+
+/// The tool's own explanation of `/FS:`: the paragraph whose first non-blank characters are `/FS:`, with
+/// the continuation lines under it. The synopsis line carries `/FS:` too, inside brackets and naming no
+/// file system, so a search for the words has to start at the paragraph that explains the option.
+fn fs_block(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(at) = lines.iter().position(|line| line.trim_start().starts_with("/FS:")) else { return String::new() };
+    let mut end = at + 1;
+    while end < lines.len() && !lines[end].trim_start().starts_with('/') && !lines[end].trim().is_empty() {
+        end += 1;
+    }
+    lines[at..end].join("\n")
+}
+
+/// The usage text, from the tool itself: `/?` names the usage and writes nothing. The read goes through
+/// the funnel every reading client of ours goes through, so it is started without a window and its client
+/// ends with this instance.
+#[cfg(windows)]
+fn tool_usage_text() -> String {
+    // Asked by its own file name: a start without an extension gets `.exe` appended, and the tool on this
+    // build is `format.com` — measured, asking it as `format` answers that it is not installed.
+    crate::vcs::run::ask("format.com", std::path::Path::new("."), &["/?"]).text
+}
+
+/// Nothing measurable to ask on the other side: the file systems there come from `mkfs.<type>` programs,
+/// which of them a distribution carries is not something this machine can answer, and inventing their
+/// names is what this module refuses to do. The list stays the table's own, recorded as unverified.
+#[cfg(not(windows))]
+fn tool_usage_text() -> String {
+    String::new()
 }
 
 /// Whether this file system can hold this volume: inside the size the window offers at all, and with
@@ -891,6 +951,52 @@ mod tests {
         assert!(accepted(&Volume { drive_size: 64_160_400_896, system: true, ..Default::default() }, &offered).is_empty());
         let names: Vec<&str> = accepted(&Volume { drive_size: 64_160_400_896, ..Default::default() }, &["NTFS".into()]).iter().map(|fs| fs.word()).collect();
         assert_eq!(names, ["NTFS"], "what the machine named is what is offered");
+    }
+
+    #[test]
+    fn only_the_file_systems_named_in_the_tools_own_explanation_are_offered() {
+        // The usage text as this machine's tool answered it on 2026-11-18, its own line break kept: the
+        // six words land in two lines, and the words around them are German.
+        let here = "FORMAT Volume [/FS:Dateisystem] [/V:Bezeichnung] [/Q]\r\n\r\n  /FS:filesystem  Gibt den Typ des Dateisystems an (FAT, FAT32, exFAT,\r\n                  NTFS, UDF oder ReFS).\r\n  /V:Bezeichnung    Erstellt die Volumebezeichnung.\r\n";
+        let names: Vec<&str> = named_by_tool(here).iter().map(|fs| fs.word()).collect();
+        assert_eq!(names, ["FAT", "FAT32", "exFAT", "NTFS", "ReFS", "UDF"], "the table's order, in whatever order the tool names them");
+        // A tool that explains fewer file systems offers fewer, in the table's order either way.
+        let fewer = "FORMAT Volume [/FS:Dateisystem] [/A:Groesse]\r\n  /A:Groesse        Die Groesse der Zuordnungseinheit.\r\n  /FS:filesystem  Gibt den Typ an (UDF, exFAT oder FAT32).\r\n  /Q                Ueberspringt die vollstaendige Ueberpruefung.\r\n";
+        let names: Vec<&str> = named_by_tool(fewer).iter().map(|fs| fs.word()).collect();
+        assert_eq!(names, ["FAT32", "exFAT", "UDF"], "the paragraph explains them, the synopsis line names none");
+        // A file system named only inside another option's sentence is not one this machine formats to.
+        let narrower = "FORMAT Volume [/FS:Dateisystem] [/C]\r\n  /FS:filesystem  Gibt den Typ an (FAT oder FAT32).\r\n  /C                Nur NTFS: Dateien werden komprimiert.\r\n";
+        let names: Vec<&str> = named_by_tool(narrower).iter().map(|fs| fs.word()).collect();
+        assert_eq!(names, ["FAT", "FAT32"], "NTFS is named in the compression option's sentence, not as a format");
+        assert!(named_by_tool("FORMAT Volume [/FS:Dateisystem] [/Q]\r\n").is_empty(), "a synopsis line with no explanation names nothing");
+        assert!(named_by_tool("Die Datei existiert bereits.").is_empty(), "an answer that is no usage text at all names nothing");
+    }
+
+    #[test]
+    fn the_offer_of_a_volume_names_the_words_a_window_shows() {
+        assert!(offer(&Volume { drive_size: 64_160_400_896, system: true, ..Default::default() }).is_empty(), "a system volume is refused, so it is offered nothing");
+        let names = offer(&Volume { device: "F:".into(), size: 64_160_400_896, bus: "usb".into(), ..Default::default() });
+        assert!(!names.is_empty(), "a volume the machine names a size for is offered something");
+        for word in &names {
+            assert!(FileSystem::parse(word).is_some(), "{word} is not a word of the table");
+        }
+        assert!(!names.contains(&"FAT".into()), "FAT cannot hold 64 GB inside its cluster band, whatever the machine offers");
+    }
+
+    /// What the installed tool actually answers, read here rather than assumed: whatever it says, the
+    /// offer stays inside this table, and the same read answers the same way twice.
+    #[test]
+    #[cfg(windows)]
+    fn the_installed_tool_s_answer_stays_inside_the_table() {
+        let answer = crate::vcs::run::ask("format.com", std::path::Path::new("."), &["/?"]);
+        eprintln!("format /? answered ok={} code {:?} in {} bytes, first line {:?}", answer.ok, answer.code, answer.text.len(), answer.text.lines().next().unwrap_or_default());
+        let named = tool_file_systems();
+        eprintln!("this build's format tool names: {:?}", named.iter().map(|fs| fs.word()).collect::<Vec<_>>());
+        assert!(!named.is_empty(), "the installed tool's own text is expected to name at least one file system");
+        for fs in &named {
+            assert!(FileSystem::all().contains(fs), "{} is not in the table", fs.word());
+        }
+        assert_eq!(named, named_by_tool(&tool_usage_text()), "the tool answers the same way when asked twice");
     }
 
     #[test]

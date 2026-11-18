@@ -227,7 +227,9 @@ and the new program started. The *build from source* channel is Linux-only there
   question.** Measured 2026-11-18: `FSCTL_QUERY_FILE_SYSTEM_SUPPORT` sent to `\\.\C:` and `\\.\F:`
   answers `ERROR_INVALID_FUNCTION` (win32 1) with a rights-free handle and with `FILE_READ_ATTRIBUTES`
   alike, so it says nothing about what a volume could be formatted to — the offer is read from
-  `format /?` once per run, kept, and narrowed per volume by the README's size and kind rules, and a
+  `format.com /?` once per run — asked by that file name, since a start without an extension gets `.exe`
+  appended and asking it as `format` answers that it is not installed — kept, and narrowed per volume by
+  the README's size and kind rules, and a
   word that module's table does not know is simply not offered. What the machine does answer about file
   systems is which drivers it carries, and that answer **disagrees** with the tool: the registry holds
   `fastfat`, `exfat`, `ntfs` and `refs` (Start 3, loaded on demand) but `udfs` with **Start 4 =
