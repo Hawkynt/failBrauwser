@@ -1,15 +1,16 @@
-//! The acts themselves: naming a volume and formatting it (README: *Renaming a volume*, *Formatting a
-//! volume*). Nothing here runs where `refusal` says it must not, and neither act needs the window that
-//! asked for it to hold any rights: the privileged half of both is this program's own file started again
-//! as the administrator, told by `--outcome <path>` which file to write its answer into; the window waits
-//! for that run and reads the file back (docs\WINDOWS.md). A consent prompt that is closed without
+//! The acts themselves: naming a volume, formatting it, and writing or taking away the four files of a
+//! device icon (README: *Renaming a volume*, *Formatting a volume*, *Device icons*). Nothing here runs where
+//! `refusal` or `icon_refusal` says it must not, and no act needs the window that
+//! asked for it to hold any rights: the privileged half of every one of them is this program's own file
+//! started again as the administrator, told by `--outcome <path>` which file to write its answer into; the
+//! window waits for that run and reads the file back (docs\WINDOWS.md). A consent prompt that is closed without
 //! agreeing is a no-op: the privileged run never starts and the volume stays as it was.
 //!
 //! The format tool started by the privileged run is deliberately **not** a reading client: a format that
 //! was half-written must not be cut short because some window of ours closed (docs\TOOL-STARTS.md), so
 //! that one start goes through no funnel at all — only through the hidden-window rule.
 
-use super::{FormatOption, FileSystem, NamePlan, Target, Value, accepted, format_argv, holds_our_own_image, name_plan, refusal, tool_file_systems};
+use super::{FormatOption, FileSystem, NamePlan, Shape, Target, Value, accepted, format_argv, holds_our_own_image, icon, name_plan, refusal, tool_file_systems};
 use crate::drives::Volume;
 use std::path::{Path, PathBuf};
 
@@ -17,6 +18,10 @@ use std::path::{Path, PathBuf};
 pub const RENAME: &str = "--rename-volume";
 /// …and to format one.
 pub const FORMAT: &str = "--format";
+/// …to write the four files of a device icon onto one volume,
+pub const ICON: &str = "--device-icon";
+/// …and to take them away again.
+pub const UNICON: &str = "--remove-device-icon";
 /// The flag naming the file the privileged run writes its answer into.
 pub const OUTCOME: &str = "--outcome";
 /// The seam `src\links\helper.rs` already uses: it names another program to start this one through, so a
@@ -93,6 +98,113 @@ pub fn label_arguments(fs: FileSystem, device: &str, label: &str) -> Option<Vec<
     }
 }
 
+/// The words that stand when this volume gets no device icon, or nothing where it could. The verbs write
+/// files and nothing else, so what is refused is a volume that refuses writes and a volume naming no folder
+/// to write into (README: *Device icons*).
+pub fn icon_refusal(volume: &Volume) -> Option<String> {
+    if volume.read_only { return Some("This volume gets no device icon: the volume is read-only.".into()); }
+    if root_of(volume).is_none() { return Some(NO_FOLDER.to_string()); }
+    None
+}
+
+/// The words naming a volume with nowhere to write.
+const NO_FOLDER: &str = "This volume gets no device icon: it names no folder to write the four files into.";
+
+/// The four files of one device icon on a volume (README: *Device icons*): the shape the window named, the
+/// model and size the machine reported, and the name the volume is called. The two text files pin that name
+/// only where the file system holds something shorter, which is the same rule the rename follows. Where the
+/// rights are what is missing, the same write is asked of this program's own file run as the administrator,
+/// and a prompt that is closed without agreeing leaves the volume as it was.
+pub fn create_icon(volume: &Volume, shape: Shape, name: &str) -> Result<String, String> {
+    if let Some(why) = icon_refusal(volume) { return Err(why); }
+    let Some(root) = root_of(volume) else { return Err(NO_FOLDER.into()) };
+    match icon::create(&root, shape, &volume.drive_name, device_size(volume), &name_words(&volume.fs_type, name)) {
+        Ok(written) => Ok(creation_words(&written, &root)),
+        Err(why) if why.denied => elevated(ICON, &icon_arguments(volume, shape, name)),
+        Err(why) => Err(why.text),
+    }
+}
+
+/// Taking a device icon away from a volume: the two text files of ours and the image files they name, and
+/// nothing else. An `autorun.inf` or `desktop.ini` carrying no marker of ours keeps every byte, and the
+/// answer names what was kept (README: *Device icons*).
+pub fn remove_icon(volume: &Volume) -> Result<String, String> {
+    if let Some(why) = icon_refusal(volume) { return Err(why); }
+    let Some(root) = root_of(volume) else { return Err(NO_FOLDER.into()) };
+    match icon::remove(&root) {
+        Ok(gone) => Ok(removal_words(&gone, &root)),
+        Err(why) if why.denied => elevated(UNICON, &unicon_arguments(volume)),
+        Err(why) => Err(why.text),
+    }
+}
+
+/// What the privileged create is handed: the folder, the shape by the name its picture carries, the model and
+/// the size the words are drawn from, the name to pin, and the file system that bounds that name. Every word
+/// the child needs to draw the same picture is here, so it asks no window anything.
+pub fn icon_arguments(volume: &Volume, shape: Shape, name: &str) -> Vec<String> {
+    vec![root_of(volume).map(|root| root.display().to_string()).unwrap_or_default(), shape.asset().to_string(), volume.drive_name.clone(), device_size(volume).to_string(), name.to_string(), volume.fs_type.clone()]
+}
+
+/// …and what the privileged removal is handed: the folder whose two text files are read.
+pub fn unicon_arguments(volume: &Volume) -> Vec<String> {
+    vec![root_of(volume).map(|root| root.display().to_string()).unwrap_or_default()]
+}
+
+/// The folder the four files go into: where the volume is mounted, or on this machine the root of the letter
+/// it is named by — which is what a volume is right after it was formatted, before its record is read again.
+fn root_of(volume: &Volume) -> Option<PathBuf> {
+    if let Some(mount) = volume.mount_point() { return Some(mount.clone()); }
+    #[cfg(windows)]
+    if let Some(target) = Target::of(volume) { return Some(PathBuf::from(format!("{}:\\", target.letter.to_uppercase()))); }
+    None
+}
+
+/// The size the picture prints: the device's own, which is what the packaging states, and the volume's where
+/// the machine names no device of its own.
+fn device_size(volume: &Volume) -> u64 {
+    if volume.drive_size > 0 { volume.drive_size } else { volume.size }
+}
+
+/// The name the two text files carry, settled by the same rule the rename follows. Where the file system is
+/// one this program names no limit for, the name is carried as it stands, because nothing shortens it; where
+/// the name is one no file system would hold, nothing is pinned rather than a name that would be lost.
+fn name_words(fs: &str, name: &str) -> NamePlan {
+    match FileSystem::parse(fs).and_then(|fs| name_plan(fs, name).ok()) {
+        Some(plan) => plan,
+        None => NamePlan { label: String::new(), called: String::new(), pinned: false },
+    }
+}
+
+/// The words a finished create answers with: the folder and the files that stand there.
+fn creation_words(written: &icon::Written, root: &Path) -> String {
+    format!("The device icon stands on {}: {}.", root.display(), written.files.join(", "))
+}
+
+/// The words a finished removal answers with, naming what was kept and why.
+fn removal_words(gone: &icon::Removed, root: &Path) -> String {
+    let taken = if gone.deleted.is_empty() { "Nothing".into() } else { gone.deleted.join(", ") };
+    let kept = if gone.kept.is_empty() { "nothing of ours was there".into() } else { format!("{} kept, because nothing of ours marks them", gone.kept.join(", ")) };
+    format!("{taken} taken away from {}; {kept}.", root.display())
+}
+
+/// The four files as the administrator: the folder, the shape by its asset name, the model, the size, the
+/// name and the file system's word. The name is settled here by the same rule as in the window, so the child
+/// writes the files the window showed.
+fn run_icon(arguments: &[String]) -> Result<String, String> {
+    let (Some(root), Some(asset), Some(model), Some(bytes), Some(name), Some(fs)) = (arguments.first(), arguments.get(1), arguments.get(2), arguments.get(3), arguments.get(4), arguments.get(5)) else {
+        return Err("A folder, a shape, a model, a size, a name and a file system are needed to write a device icon.".into());
+    };
+    let Some(shape) = Shape::parse(asset) else { return Err(format!("{asset:?} names no device shape.")) };
+    let Ok(bytes) = bytes.parse::<u64>() else { return Err(format!("{bytes:?} is no size in bytes.")) };
+    icon::create(Path::new(root), shape, model, bytes, &name_words(fs, name)).map(|written| creation_words(&written, Path::new(root))).map_err(|why| why.text)
+}
+
+/// The removal as the administrator, reading the same marker and deleting by nothing else.
+fn run_unicon(arguments: &[String]) -> Result<String, String> {
+    let Some(root) = arguments.first() else { return Err("The folder of a device icon is needed.".into()) };
+    icon::remove(Path::new(root)).map(|gone| removal_words(&gone, Path::new(root))).map_err(|why| why.text)
+}
+
 /// The file one act of one instance answers into: named for the act and for this process, so two windows
 /// cannot answer into each other's file.
 pub fn outcome_path(act: &str) -> PathBuf {
@@ -136,6 +248,8 @@ pub fn execute(args: &[String]) -> i32 {
     let answer = match rest.first().map(String::as_str) {
         Some(RENAME) => write_label_as_admin(&rest[1..]),
         Some(FORMAT) => run_format(&rest[1..]),
+        Some(ICON) => run_icon(&rest[1..]),
+        Some(UNICON) => run_unicon(&rest[1..]),
         other => Err(format!("Nothing to answer for {:?}.", other.unwrap_or_default())),
     };
     let (ok, text) = match answer {
@@ -446,5 +560,98 @@ mod tests {
         assert!(!is_drive_letter("F:\\"), "the format command names its volume by the letter alone");
         assert!(is_drive_letter("f:"));
         assert!(!is_drive_letter("/dev/sdb1"));
+    }
+
+    /// Both icon verbs write files into a folder. A volume naming no mount point and no drive letter names
+    /// nothing to write into, so the act refuses it before one byte exists (README: *Device icons*).
+    #[test]
+    fn a_volume_naming_no_folder_is_refused_both_icon_acts() {
+        let v = Volume { device: "/dev/fake-Photos".into(), fs_type: "NTFS".into(), ..Default::default() };
+        for (act, answer) in [("create", create_icon(&v, Shape::UsbStick, "Photos")), ("remove", remove_icon(&v))] {
+            let why = answer.err().unwrap_or_else(|| panic!("the {act} icon act wrote into a folder that does not exist"));
+            assert!(why.contains("no folder"), "the {act} act refused a nameless volume with other words: {why}");
+        }
+    }
+
+    /// A read-only volume gets no device icon: the verbs write files, and this volume refuses writes.
+    #[test]
+    fn a_read_only_volume_is_refused_both_icon_acts() {
+        let v = Volume { device: "/dev/fake-Photos".into(), mount_points: vec![PathBuf::from("/media/photos")], read_only: true, ..Default::default() };
+        for act in ["create", "remove"] {
+            let why = if act == "create" { create_icon(&v, Shape::SdCard, "Photos") } else { remove_icon(&v) }.err().unwrap_or_else(|| panic!("the {act} icon act wrote onto a read-only volume"));
+            assert!(why.contains("read-only"), "the {act} act refused a read-only volume with other words: {why}");
+        }
+    }
+
+    /// What the privileged run is handed: the folder, the shape by the name its picture carries, the words
+    /// the machine reported, the size, the name to pin and the file system that bounds it — everything the
+    /// child needs to draw the same picture without asking the window again.
+    #[test]
+    fn the_icon_arguments_name_the_folder_the_shape_and_the_words() {
+        let v = Volume { device: "/dev/fake-stick".into(), mount_points: vec![PathBuf::from("/media/stick")], fs_type: "FAT32".into(), drive_name: "SanDisk Ultra".into(), drive_size: 64_160_400_896, size: 64_143_622_144, ..Default::default() };
+        assert_eq!(icon_arguments(&v, Shape::MicroSd, "Samsung 64 GB"), ["/media/stick", "msd", "SanDisk Ultra", "64160400896", "Samsung 64 GB", "FAT32"], "the drive size is the size the picture prints, not the partition's");
+        assert_eq!(unicon_arguments(&v), ["/media/stick"]);
+    }
+
+    /// A volume this machine names by letter but has not mounted — which is exactly what a volume is right
+    /// after it was formatted, before its record is read again — still names the folder its four files go
+    /// into: the root of that letter.
+    #[test]
+    #[cfg(windows)]
+    fn a_volume_this_machine_names_by_letter_names_the_root_of_that_letter() {
+        let v = Volume { device: "F:".into(), ..Default::default() };
+        assert_eq!(root_of(&v).map(|p| p.display().to_string()), Some("F:\\".into()));
+    }
+
+    /// The privileged half writes what it was asked for: the four files stand in the folder it was given,
+    /// and the outcome file says so. This is the child side of the act without any rights being asked for.
+    #[test]
+    fn the_privileged_icon_run_writes_the_four_files_into_the_folder_it_was_given() {
+        let here = tempfile::tempdir().expect("a folder of its own");
+        let (root, outcome) = (here.path().to_path_buf(), outcome_path(ICON));
+        let code = execute(&[ICON.into(), OUTCOME.into(), outcome.display().to_string(), root.display().to_string(), "usbstick".into(), "SanDisk Ultra".into(), "64160400896".into(), "Samsung 64 GB".into(), "FAT32".into()]);
+        assert_eq!(code, 0, "the privileged icon run refused a folder it was given");
+        let (ok, text) = read_outcome(&std::fs::read_to_string(&outcome).expect("the answer of the privileged icon run"));
+        assert!(ok, "the privileged icon run answered no: {text}");
+        for name in [icon::DEVICE_IMAGE, icon::FOLDER_ICON, icon::AUTORUN, icon::DESKTOP] {
+            assert!(root.join(name).is_file(), "{name} was not written by the privileged icon run");
+        }
+        let autorun = icon::decode(&std::fs::read(root.join(icon::AUTORUN)).expect("the file the run wrote"));
+        assert!(icon::marked(&autorun), "the file the privileged run wrote does not carry the marker of ours");
+        assert!(autorun.contains("ModelName=USB stick 64 GB"), "the run drew the wrong shape or the wrong size: {autorun}");
+        assert!(autorun.contains("label=SAMSUNG 64"), "the privileged run did not settle the name by the file system's own rule: {autorun}");
+        crate::osprim::set_attr_bits(&root, 0, crate::osprim::SYSTEM | crate::osprim::HIDDEN);
+        let _ = std::fs::remove_file(&outcome);
+    }
+
+    /// The privileged removal reads the marker and nothing else: a text file of somebody else keeps every
+    /// byte it had, and the words of the refusal name what was kept.
+    #[test]
+    fn the_privileged_removal_takes_only_a_file_the_marker_names() {
+        let here = tempfile::tempdir().expect("a folder of its own");
+        let (root, outcome) = (here.path().to_path_buf(), outcome_path(UNICON));
+        std::fs::write(root.join(icon::AUTORUN), "[autorun]\r\nicon=theirs.ico,0\r\n").expect("an autorun.inf of somebody else");
+        std::fs::write(root.join(icon::DESKTOP), "[.ShellClassInfo]\r\nIconResource=theirs.ico,0\r\n").expect("a desktop.ini of somebody else");
+        let code = execute(&[UNICON.into(), OUTCOME.into(), outcome.display().to_string(), root.display().to_string()]);
+        assert_eq!(code, 0, "the privileged removal refused a folder holding nothing of ours");
+        let (ok, text) = read_outcome(&std::fs::read_to_string(&outcome).expect("the answer of the privileged removal"));
+        assert!(ok, "the privileged removal answered no: {text}");
+        for name in [icon::AUTORUN, icon::DESKTOP] {
+            assert!(root.join(name).is_file(), "{name} of somebody else was taken away");
+        }
+        assert!(text.contains("kept"), "the answer does not say what was kept: {text}");
+        let _ = std::fs::remove_file(&outcome);
+    }
+
+    /// A privileged icon run that was given no folder is refused with the outcome file written, so the window
+    /// never has to tell a refusal apart from a run that never started.
+    #[test]
+    fn a_privileged_icon_run_naming_no_folder_answers_a_refusal() {
+        let outcome = outcome_path(ICON);
+        let _ = std::fs::remove_file(&outcome);
+        assert_eq!(execute(&[ICON.into(), OUTCOME.into(), outcome.display().to_string()]), 1, "a privileged icon run with no folder claimed success");
+        let (ok, text) = read_outcome(&std::fs::read_to_string(&outcome).expect("a refusal is answered into the outcome file too"));
+        assert!(!ok && !text.is_empty(), "the refusal was answered as {ok} with {text:?}");
+        let _ = std::fs::remove_file(&outcome);
     }
 }

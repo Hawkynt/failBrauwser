@@ -40,6 +40,32 @@ pub struct Removed {
     pub unmarked_root: bool,
 }
 
+/// Why the four files did not stand. The words tell what happened, in the file's own name; `denied` says
+/// whether the rights were what was missing, which is the one thing that tells the act whether to ask the
+/// administrator for the same write (README: *Device icons*).
+#[derive(Debug)]
+pub struct Failure {
+    pub text: String,
+    pub denied: bool,
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl From<String> for Failure {
+    fn from(text: String) -> Self {
+        Self { text, denied: false }
+    }
+}
+
+/// The refusal of one named file: this machine's own words, and whether they mean the rights are missing.
+fn refused(name: &str, what: &str, e: std::io::Error) -> Failure {
+    Failure { text: format!("{name} {what}: {e}"), denied: e.kind() == std::io::ErrorKind::PermissionDenied }
+}
+
 /// The words of `autorun.inf` are plain ASCII, because that file is a single-byte one: the shown label of
 /// a µSD card or a 5.25″ floppy holds characters it cannot carry, and the shape's data name is what the
 /// file says instead. A value left with nothing of itself by that rule is left out of the file entirely.
@@ -138,9 +164,9 @@ fn marks_root(root: &Path) -> bool {
     osprim::attrs_of(root) & osprim::SYSTEM == 0
 }
 
-fn put(root: &Path, name: &str, bytes: &[u8], hidden: bool) -> Result<(), String> {
+fn put(root: &Path, name: &str, bytes: &[u8], hidden: bool) -> Result<(), Failure> {
     let path = root.join(name);
-    std::fs::write(&path, bytes).map_err(|e| format!("{name} could not be written: {e}"))?;
+    std::fs::write(&path, bytes).map_err(|e| refused(name, "could not be written", e))?;
     osprim::set_attr_bits(&path, if hidden { osprim::HIDDEN | osprim::SYSTEM } else { osprim::HIDDEN }, 0);
     Ok(())
 }
@@ -153,7 +179,7 @@ fn undo(root: &Path, written: &mut Vec<String>) {
 
 /// The four files of one device icon, in one act: what cannot be written is not written at all, and what
 /// was written before the refusal goes away again.
-pub fn create(root: &Path, shape: Shape, model: &str, bytes: u64, name: &NamePlan) -> Result<Written, String> {
+pub fn create(root: &Path, shape: Shape, model: &str, bytes: u64, name: &NamePlan) -> Result<Written, Failure> {
     let marked_root = marks_root(root);
     let mut pictures = art::images(shape, model, bytes)?;
     let icon = ico::container(&mut pictures)?;
@@ -179,7 +205,7 @@ pub fn create(root: &Path, shape: Shape, model: &str, bytes: u64, name: &NamePla
 /// Taking a device icon away: only a text file carrying the section of ours is deleted, only the icon files
 /// such a file names are deleted beside it, and the root is unmarked only where the marker says the marking
 /// came from here. Nothing is matched by a pattern over the volume.
-pub fn remove(root: &Path) -> Result<Removed, String> {
+pub fn remove(root: &Path) -> Result<Removed, Failure> {
     let mut deleted: Vec<String> = Vec::new();
     let mut marked_files: Vec<String> = Vec::new();
     let mut named: Vec<String> = Vec::new();
@@ -197,12 +223,12 @@ pub fn remove(root: &Path) -> Result<Removed, String> {
     for name in named {
         let path = root.join(&name);
         if path.is_file() {
-            std::fs::remove_file(&path).map_err(|e| format!("{name} could not be taken away: {e}"))?;
+            std::fs::remove_file(&path).map_err(|e| refused(name.as_str(), "could not be taken away", e))?;
             deleted.push(name);
         }
     }
     for name in marked_files {
-        std::fs::remove_file(root.join(&name)).map_err(|e| format!("{name} could not be taken away: {e}"))?;
+        std::fs::remove_file(root.join(&name)).map_err(|e| refused(&name, "could not be taken away", e))?;
         deleted.push(name);
     }
     if unmark { osprim::set_attr_bits(root, 0, osprim::SYSTEM | osprim::HIDDEN); }
@@ -422,5 +448,23 @@ mod tests {
         }
         assert!(here.path().join(AUTORUN).is_dir(), "the name that refused the write was changed by it");
         assert_eq!(osprim::attrs_of(here.path()) & (osprim::SYSTEM | osprim::HIDDEN), 0, "a failed create marked the root");
+    }
+
+    /// Where the rights are what is missing, the refusal says so: that is the one thing the act has to know
+    /// before it asks the administrator for the same write (README: *Device icons*). This machine's own way
+    /// of refusing a write to one of these names is a file of that name carrying the read-only attribute —
+    /// a read-only *folder* refuses nothing, which is what an earlier version of this test measured.
+    #[cfg(windows)]
+    #[test]
+    fn a_name_that_refuses_the_write_says_that_the_rights_are_what_is_missing() {
+        let here = Root::fresh();
+        let held = here.path().join(DEVICE_IMAGE);
+        std::fs::write(&held, b"").expect("a file the create wants to write over");
+        osprim::set_attrs(&held, osprim::READONLY);
+        let Err(why) = create(here.path(), Shape::UsbStick, "SanDisk Ultra", 64_160_400_896, &plan(FileSystem::Fat32, "64GB USB")) else {
+            panic!("a name that refuses the write was written over anyway");
+        };
+        assert!(why.denied, "the refusal does not name the rights as what is missing: {}", why.text);
+        assert!(why.text.contains(DEVICE_IMAGE), "the refusal does not name the file it could not write: {}", why.text);
     }
 }

@@ -659,6 +659,12 @@ impl Shape {
         }
     }
 
+    /// The shape whose tracked picture carries this asset name, which is how a window hands a chosen shape
+    /// back. A word that names no asset answers nothing rather than the closest guess.
+    pub fn parse(asset: &str) -> Option<Shape> {
+        Self::all().iter().copied().find(|s| s.asset() == asset)
+    }
+
     /// What the machine says the device is, or nothing where it says too little. An SD card and a µSD
     /// card cannot be told apart from across a reader, and one floppy from another only by its
     /// capacity: the window shows what was seen either way and lets the shape be changed.
@@ -1006,6 +1012,17 @@ mod tests {
         assert_eq!(Shape::detected(&volume("usb", -1, true, 1_228_800)), Some(Shape::Floppy525));
         assert_eq!(Shape::detected(&volume("", -1, false, 0)), None);
         assert!(Shape::all().iter().all(|s| !s.asset().is_empty() && !s.label().is_empty()));
+    }
+
+    /// A window hands the shape back by the name its picture's file carries, so that name has to name the
+    /// shape again — and a word that is no asset answers nothing rather than a guess.
+    #[test]
+    fn the_asset_name_of_a_shape_names_that_shape_again() {
+        for shape in Shape::all() {
+            assert_eq!(Shape::parse(shape.asset()), Some(*shape), "{} names an asset that answers no shape", shape.label());
+        }
+        assert_eq!(Shape::parse("floppy8"), None, "a word naming no asset answers a shape anyway");
+        assert_eq!(Shape::parse(""), None, "no word at all answers a shape");
     }
 
     #[test]
