@@ -237,6 +237,27 @@ and the new program started. The *build from source* channel is Linux-only there
   therefore refused is not tested here — the authorized format step reformats the stick to NTFS — so the
   disagreement is recorded and UDF stays offered because the tool offers it, with the OS answering in
   its own words if the driver refuses.
+- **A volume's size is the file system's own total, read where the machine answers.** Measured
+  2026-11-18 on an un-elevated instance: `IOCTL_DISK_GET_LENGTH_INFO` on the volume handle `\\.\A:` and
+  on `\\.\F:` answers `ERROR_ACCESS_DENIED` (win32 5), and the same query on `\\.\PhysicalDrive1` answers
+  the same, while `GetDiskFreeSpaceExW` answers a total for every lettered volume here (A:
+  483 183 554 560, C: 482 226 466 816, D: 536 868 814 848, F: 64 143 622 144 and the two mapped shares
+  15 698 757 677 056). So the drives page takes that total as the volume's size — which is what the
+  format page narrows its file systems by — and the *device's* length, which the device icon prints, is
+  read only where the machine allows it; where it is refused the shape's evidence line says which of the
+  two sizes is shown rather than passing a volume's size off as a device's. That stick answers FAT32 with
+  no volume label today, and that is the state the authorized format step reads back before it writes and
+  restores afterwards.
+- **The format gate names the volume Windows runs from from the machine's answer, not from the drives
+  model's `system` flag.** The flag exists to hide the unmount button of an internal fixed volume, and
+  measured here three lettered fixed volumes answer it while only one of them holds Windows (its own
+  directory sits on `C:\Windows`), so refusing on the flag would refuse data volumes the README offers a
+  format for. The gate asks where
+  Windows' own directory sits and refuses that letter; a boot or recovery partition with no letter cannot
+  be reached from the page at all, and where a lettered volume is held by the system it is `format` that
+  answers, in its own words, which the result window quotes. The same reading names what would have to be
+  refused beyond it — `Win32_OperatingSystem` answers `BootDevice=\Device\HarddiskVolume1` beside
+  `SystemDrive=C:` on this machine, and that first volume carries no letter, so the page cannot reach it.
 - **Not measured here yet:** the label ceilings the README names. FAT's 11 characters and NTFS' 32
   are what the drivers and the tools have always taken, exFAT's 15 and UDF's 32 are the file systems'
   own documented fields, and `Format-Volume -WhatIf` validates no label length at all — it took a
