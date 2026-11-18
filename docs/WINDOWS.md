@@ -55,7 +55,10 @@ copy, which a version comparison alone never does. `install.ps1` records the sam
 the package, so a manually installed tree is known to the launcher rather than read as
 unknown. The loader cache is regenerated for the new location, then the program starts and
 its exit code passes through. Nothing is registered in the system, and no DLLs or data ever
-sit next to the file itself.
+sit next to the file itself. The copy is a plain `Copy-Item -Force` over the existing tree and
+`install.ps1` stops nothing: an instance that is running holds its own image, so it has to be
+closed before the install reaches that prefix — otherwise the one file the tree is named after is
+exactly the one that cannot be written.
 
 That unpack is all-or-nothing. The payload is staged in a folder inside the install folder and
 its files are moved into place only once every entry has been read, inflated and CRC-verified,
