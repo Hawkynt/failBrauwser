@@ -124,11 +124,23 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
   five tools of the earlier run were in: **created and never scheduled**. Two of the three fall at
   the end of a test target whose own process builds working copies with `git`/`svn` for fixtures —
   only `src\main.rs` and `src\ui\selftest.rs` reach an ending, so a cargo test process never does.
-  The mechanism that would cover all of it is a job object with kill-on-close that this process joins
-  at startup, since the operating system then ends every child at the last handle, started or not;
-  it was not taken here because that job would also end the file swap of an update, which is
-  deliberately left to run around a replaced image, so that one start would have to be given its
-  breakaway — and the update path is not something these checks can exercise.
+  **The reading clients go into a job of their own.** `run::read_answer` hands each client it starts
+  to a job created with `KILL_ON_JOB_CLOSE`, and that handle lives as long as the process: the
+  operating system then ends those clients when the instance's handles go away, however it ends —
+  including an end that runs no ending code at all, a crash or a `taskkill /F` that does not take the
+  tree. The job holds reading clients only.
+  **This instance never joins that job**, and that is the half that protects the data: joining it
+  would put *every* child under the same rule, and the acts are children too — a commit or push under
+  way in its progress window, the file swap of an update running around a replaced image, the terminal
+  the user asked for, the program a file type opened. Ending any of those where it stands is how work
+  is lost or a window the user opened disappears with the file manager, and no start can be exempted
+  reliably: a launch through `gio::AppInfo` carries no creation flag to give it.
+  What the job therefore does not reach is the limit named above: a client the system created but
+  never handed back to us, which is a client we hold no handle for and cannot put anywhere. Those
+  remain, and they are ended by the census command rather than by this rule.
+  If the assignment fails — this process already inside a job that does not allow a nested one — the
+  id list is the whole rule again, exactly as measured above; the test that checks the job names that
+  as the reason when it skips.
   That covers the reads only, on purpose. An *act* the user
   asked for is left to finish — a commit (`run::with_input` feeds its message over a pipe, and its
   client is deliberately not registered), a push, a merge under its progress window, the installer
@@ -152,6 +164,7 @@ in process); only their own tests start `bsdtar` and friends. `build.rs` starts 
 | `src\win\console.rs` unit test `the_standard_handles_stay_this_programs_own` | the three standard streams of this program end up marked not inheritable |
 | `src\vcs\run.rs` unit test `a_client_still_reading_when_the_instance_ends_is_ended_there` | a client of a read still in flight is gone when `end_our_clients` has run, and the call comes back refusing rather than hanging |
 | `tests\source_rules.rs::no_end_of_the_process_in_the_ui_skips_the_reading_clients` | an instance that ends itself ends its reading clients first: no `std::process::exit` below `src\ui` outside `run::end_and_exit` |
+| `src\vcs\run.rs` unit test `a_reading_client_is_gone_when_the_instance_is_killed_without_ending_anything` | the read job ends the client too, on an end that runs no ending code at all; it names the reason when this machine's own job forbids the assignment |
 
 ## Measured, and what is not
 
