@@ -858,7 +858,10 @@ measured on this build fails for `C:` and `F:` alike, with and without rights on
 nothing about what a volume could be formatted to. `format.exe` on this build names FAT, FAT32, exFAT,
 NTFS, ReFS and UDF, and a volume narrows that list by its size and kind. Choosing one shows only the options that file system has, and
 nothing outside the table below can reach the command — the table also says which switch each option
-contributes, which is what its test compares against:
+contributes, which is what its test compares against. The dropdown opens on the file system the volume
+holds already, wherever this machine offers it for that volume, because formatting a volume back into
+what it already is the common case; where it does not, the dropdown opens on the first of the offer, and
+that offer is in this program's own order rather than the order the machine answered in.
 
 | Option | FAT / FAT32 | exFAT | NTFS | ReFS | UDF |
 |---|---|---|---|---|---|
@@ -912,9 +915,11 @@ this feature never touches — so the NTFS space knob the window offers is the l
 The volume name is pre-filled with the manufacturer and the size the device icon prints, quick is on
 by default because a full format of a big stick runs for hours, and no command exists until the
 confirmation has the drive's **letter typed into it**, which also states how many bytes are in use
-there. Refused before anything is asked for: the system or boot volume, the volume this program's own
-file sits on, a read-only volume, a network share, a volume one of this program's own operations is
-using, and a volume too small for the smallest file system offered. The format runs elevated: the
+there. Where this machine names no letter for that volume, the words to type are the device it does
+name instead, because a wrong device is as fatal as a wrong letter. Refused before anything is asked
+for: the system or boot volume, the volume this program's own file sits on, a read-only volume, a
+network share, a volume one of this program's own operations is using, and a volume too small for the
+smallest file system offered. The format runs elevated: the
 UAC dialog names the command, and a cancelled prompt is a no-op. The tool's own output is shown,
 whether it succeeded or refused.
 
