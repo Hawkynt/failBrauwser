@@ -704,4 +704,9 @@ from the touched source names **no warning**, which is what `winpack\build.ps1` 
 `helper_lifetime` 2, `source_rules` 3 and `win_startup` 2, all green — after one assertion of `helper_lifetime`
 had failed in an earlier such batch and read green in the two runs after it, alone and in the same batch again.
 Why it failed there is not settled here; it is one of the two assertions that wait on a process this machine
-schedules, no scenario of this feature failed with it, and it is recorded rather than hidden.
+schedules, no scenario of this feature failed with it, and it is recorded rather than hidden. The whole UI target of
+that same tree, run serially rather than as four scenarios: **51 passed, 2 failed in 579.51 s**, the two failures
+being `custom_actions` and `encrypted_drive_with_lvm_inside` — both named by this section for as long as it has
+existed — while `archives_as_folders`, which failed in the 2026-11-17 shape, answered green here. A process census
+after every run of that day named no `failbrauwser`, no `fb-archive` and no `format.com`, and the scratch driver
+this section names was deleted with its probe scripts.
