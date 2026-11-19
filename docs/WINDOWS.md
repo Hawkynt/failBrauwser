@@ -143,7 +143,7 @@ and the new program started. The *build from source* channel is Linux-only there
 |---|---|---|
 | System calls under copy/delete/trash | `osprim` errno predicates | same file, Win32 codes through `raw_os_error` |
 | Drives, mount state | UDisks2 / GVfs | `win::storage` (drive types, geometry, SSD/HDD), WNet for shares |
-| Volume name, format, device icon (README: *Drives*) | UDisks2 `Filesystem` and `Format` methods, `mkfs.<type>`, `e2label` and friends | `SetVolumeLabelW`, `format.com` run by an elevated copy of this program, the icon read back through `SHGetFileInfoW` |
+| Volume name, format, device icon (README: *Drives*) | UDisks2 `Filesystem` and `Format` methods, `mkfs.<type>`, `e2label` and friends | `SetVolumeLabelW`, `format.com` run by an elevated copy of this program, the icon read back through `SHGetFileInfoW`, and those four files read back by this program itself for its own drive rows |
 | Trash | freedesktop `$Trashdir` | Recycle Bin through `IFileOperation` (`win::recyclebin`) |
 | Network folders | GVfs `smb://` | real UNC paths via WNet — the whole engine works on them |
 | Servers (SFTP/FTP) | system tools | in-app VFS (`src/remote_fs/`, russh/suppaftp) — browsable like archives, not mapped drives |
@@ -359,7 +359,16 @@ and the new program started. The *build from source* channel is Linux-only there
   only a file carrying the section of ours and the icon names that file points at, so a foreign
   `autorun.inf` keeps every byte it had and an icon file no marked file names stays where it is; a name
   walking out of the root is not obeyed. The display name that pair produces, and the removal taking it back,
-  are the folder measurement above. Those two verbs are reached now: *Create device icon* and *Remove device
+  are the folder measurement above. That module answers what those files **say** as well as what they cost:
+  `icon::shown(root)` reads the two text files, honours only one carrying the section of ours, and answers the
+  long name pinned there and the picture file that marked file names — the same answer the drives page row, the
+  side panel's drive row and the properties window name and draw the volume by, and the reason a foreign
+  `autorun.inf` lends this program neither a name nor a picture. The pinned name wins ahead of the volume's own
+  label, ahead of the mount point's name and ahead of the image file a mounted image is called by, because it is
+  the volume's own statement about itself. The picture's bytes reach the row through the ICO loader this payload
+  ships (`Pixbuf::from_read`), and a file that will not decode leaves the themed drive icon in place. The
+  scenario `device_shown.fbt`, run as `a_device_shows_what_its_own_files_name`, pins that reading over a stand-in
+  stick whose folder holds the four files this module wrote. Those two verbs are reached now: *Create device icon* and *Remove device
   icon* stand on a drive's row menu and on its properties window — shut, with the act's own reason on their
   tooltip, wherever a volume names no folder or is read-only — and the format window carries the *Write a
   device icon* box with the *Device shape* dropdown beside the words this machine reported. The scenario

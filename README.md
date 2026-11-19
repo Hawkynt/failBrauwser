@@ -822,7 +822,8 @@ deleted for good. The status bar shows where a selected item was deleted from.
 
 **Drives:** *Drives* on the left lists every volume; the button at the end of a row (or a
 right-click, or <kbd>Alt</kbd>+<kbd>Enter</kbd>) shows its properties. Its *Volume* section holds
-the volume name, and the page has *Format…*, *Create device icon* and *Remove device icon*.
+the volume name, and the page has *Format…*, *Create device icon* and *Remove device icon*. A volume
+whose own files name it (see *Device icons*) is listed under that name and drawn with that picture.
 
 **Renaming a volume:** the *Label* row of a drive's properties window is an entry you can type
 into; a *Rename* button appears beside it as soon as the text differs from what the volume says, and
@@ -868,7 +869,9 @@ is the one file measured to render a name beyond a single-byte codepage. Where t
 instead of pinning nothing quietly, and where the rights are what is missing, the **one** privileged run of this
 program's own file writes the label and the pin together, so naming a volume never asks for consent twice. What
 that pin is worth on a given system is a measured question, answered for this one under *Device icons*: this
-Windows names the drive by its own label while the pair of files stands on it.
+Windows names the drive by its own label while the pair of files stands on it. What **failBrauwser** makes of
+that pair is its own answer and not the shell's, and it is the reading promise under *Device icons* below: the
+pinned name is the name the program lists that volume by.
 
 The exFAT row reads **11** because that is what this machine honours. Measured on 2026-11-19 on the 64 GB
 stick with the same call this window uses: an eleven-character name was written and read back, and the
@@ -1042,6 +1045,22 @@ volume whose root was written to halfway through a failing act is told about it 
 left at any of the four — and because a held-open name is not a question of rights, that refusal never asks
 for the administrator (an elevated run cannot take a name away from whoever holds it). A staged name of ours
 that some act left behind is taken away by *Remove device icon* along with the four.
+
+**failBrauwser reads those files back for its own listing.** Where a volume's root holds a text file carrying
+the section of ours, the device is shown by what that file says about itself: the name is the long name pinned
+there — ahead of the label the volume carries, ahead of the folder it is mounted on, ahead of the image file a
+mounted image is called by — and the picture is the image file that marked text file names, `DevIcon.fil` where
+our own section names one and `folder.ico` otherwise, scaled to the size the row draws. A picture that will not
+decode leaves the themed drive icon standing, so a damaged file costs a picture and never a row. A pair of
+*somebody else's* — an `autorun.inf` or `desktop.ini` without that section — names no name and lends no picture
+here, exactly as *Remove device icon* keeps every byte of it: a drive renaming itself from a file an archive or
+another program left in its root would be wearing a name this program never earned, so the marker is what makes
+a name readable and not merely present. Three places name and draw a device — the drives page row, the side
+panel's drive row, and a volume's properties window — and all three read one answer, because it is the volume's
+name and picture rather than a widget's. The file tree's folder rows keep their own icons: the picture belongs
+to the row that names the volume, not to every folder below it. The listing redraws when one of this program's
+own acts changes those files — *Create device icon*, *Remove device icon*, and a rename that pins a name or
+takes the pin back — so the row answers the verb without a restart.
 
 Four files go on the volume, because the systems ask for four different ones: `DevIcon.fil`, an icon
 file in the shape Windows describes for a device icon — twelve images, the sizes 16×16, 32×32, 48×48
