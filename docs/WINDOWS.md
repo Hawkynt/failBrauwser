@@ -811,3 +811,70 @@ dependency of this tree having changed since the install above. What was built a
 DLLs staged, `winpack\out\failbrauwser-1.0.0-x86_64-windows.zip` at 57.2 MB and the launcher at 57.7 MB, so one
 closed window is all that stands between that folder and this tree — and no instance the user was running was
 ended to get this far, which is why the install is recorded as pending rather than done.
+
+## Measured on 2026-11-19 for the listing reading those files back (README: *Device icons*, M16.7)
+
+The user's ask was the other half of the verb: having written the four files, failBrauwser itself shows the
+device by what they say. `fsformat::icon::shown(root)` answers that pair — the long name a marked `desktop.ini`
+pins and the image a marked file names, our own `Image=` before the shell's `IconResource=` and `icon=` — and it
+answers nothing at all for a text file without the section of ours. The answer rides on two new `Volume` fields
+(`pinned_name`, `picture_file`), is filled in `ui::drives::gather` off the UI thread beside the fill levels, wins
+`Volume::title()` ahead of the label, the mount point and the image file, and reaches the screen through one
+helper (`ui::icons::volume_picture` / `volume_image`) that the drives page row, the side panel's drive row and a
+volume's properties header all ask.
+
+- **Red first, for the intended reason.** The six reading scenarios did not compile at this baseline —
+  `cannot find function 'shown'`, `cannot find type 'Shown'`, and `missing fields 'picture_file' and
+  'pinned_name'` — because the rule did not exist there. With the rule and the fields in and *nothing filling
+  them*, the new scenario answered its real behavioural red: `device_shown.fbt` stopped at line 19 with
+  `wait-drive Samsung 64 GB Family Pictures: timed out` while its first eighteen lines (both stand-in sticks,
+  the unmounted name, `expect-drive-picture Samsung : none`, the mount, the location) answered green. Filling
+  `gather` is what turned that line green: the scenario then ran in 3.64 s.
+- **On the volume of this machine.** Through a throwaway crate driving the product's own `icon::shown` against
+  `F:\` (created at `A:\wpdscratch\fb17read`, deleted with its probe scripts and run logs afterwards): the four
+  files stand there at 219 and 300 bytes (attributes 6 = hidden|system) and at 408 966 bytes each for
+  `folder.ico` and `DevIcon.fil` (attributes 2 = hidden), both text files marked, and their words are
+  `label=Removable`, `LocalizedResourceName=Removable Disk`, `Image=DevIcon.fil`, `RootMarked=0` — which is the
+  pin contract the user's own acts put there: fourteen characters pinned against the eleven this Windows
+  honours for that exFAT root, whose own label therefore reads `Removable`. The read answers
+  `pinned "Removable Disk"` and `picture "F:\DevIcon.fil"`, and a folder of this run holding none of the four
+  answers empty for both, which is the volume's machine-given name and themed icon left alone.
+- **What the payload's loader answers.** Decoding those two icon files through `Pixbuf::from_read` — the ICO
+  loader this payload ships (`libpixbufloader-ico.dll`, its cache in the installed `loaders.cache` at 105 lines)
+  — gives **256×256** for both: the loader takes the **largest** of the twelve images, and the row scales that
+  down to the pixels its icon size resolves to. The number is pinned in
+  `the_picture_of_a_written_icon_reaches_pixels_through_the_loader_this_payload_ships`, so a payload that ever
+  loses that loader fails a test rather than quietly drawing themed icons.
+- **The gates of this tree.** `cargo test --release --lib` answers **417 passed, 3 failed, 1 ignored** — the same
+  three Linux-only assertions, and seven scenarios more than the 410 of the paragraph above. `fsformat::` alone
+  **106 passed, 0 failed** and `drives::` **12 passed, 0 failed**. `helper_lifetime` 2, `source_rules` 3 and
+  `win_startup` 2 in one batch, all green (no `git_repo` run this step: no repository code was touched).
+  `cargo clippy --release --lib --bins` names **170** warnings — the same count as the two paragraphs above,
+  reached after fixing the one warning this step's refactor of `named_files` introduced (a collapsible `if`) —
+  with **0** of them in `src\fsformat`, and a forced rebuild of `--bin failbrauwser` from the six touched files
+  names **no warning**.
+- **The whole UI target, serial: 46 passed, 8 failed in 334.34 s**, with the discriminator measured again at the
+  end of that run — `Get-Clipboard` answers `ExternalException`, the condition the section above names. The eight
+  are that group and the two long-standing ones, named: `file_operations`, `archives_as_folders`,
+  `checksums_in_properties`, `undo_operations`, `queue.fbt` run as `queued_paused_and_verified_copies`,
+  `share_without_change_notices` (which runs `share_refresh.fbt`), plus `custom_actions` and
+  `encrypted_drive_with_lvm_inside` — the last two fail even with the clipboard answering. `update` answered
+  green this time, which the space-in-the-path paragraph has seen it do before. **The new scenario
+  `a_device_shows_what_its_own_files_name` answered green in that same run**, driving the create's four files
+  into the folder of a stand-in stick: name and picture appear when the stick is mounted and the volume names a
+  folder, `expect-drive-picture … : DevIcon.fil` says the bytes reach pixels, the side panel names the stick by
+  the same pinned name, a second stick whose folder holds nothing of ours answers `none`, and *Remove device
+  icon* through the row menu brings the machine's own name and themed icon back. The run's own check read the
+  fixture folder afterwards: none of the four names, none of the four staged names, and no mark of ours left on
+  the folder.
+- **Not verified here, and said so.** The side panel's picture and the properties header's picture are *not*
+  asserted by any scenario — both call the one helper the drives page row asserts, and no scenario reads a
+  `gtk::Image` of a row. The Linux half of this reading was never run (the reading code is platform-neutral, the
+  fill is reached by both gather paths, and `network` volumes are skipped by that fill on either platform, so a
+  GVfs share is not read). Coverage, mutation and branch gates stay unavailable — no instrumentation in this
+  repository. And the **install of this build is pending**: two instances of the installed image were running
+  when the gates finished (pid 24036 since 15:29:57 and pid 24128 since 11:34:37, both from
+  `%LOCALAPPDATA%\Programs\failbrauwser\bin\failbrauwser.exe`), so `winpack\install.ps1` was not started rather
+  than refused; no instance the user was running was ended, and the prefix still holds the image of the previous
+  install with its own stamp. What the installed image shows for `F:` — whether it names it `Removable` or
+  `Removable Disk` — therefore stays unmeasured until that install happens.
