@@ -238,7 +238,13 @@ and the new program started. The *build from source* channel is Linux-only there
   `Invalid Parameter`; `Format-Volume` refuses FAT for that stick as `Size Not Supported`, refuses
   ReFS for it as *the specified file system is not supported*, offers FAT32/exFAT/NTFS there, and
   names no UDF parameter at all. The window builds the command for `format`, because `format` is the
-  program that runs, and whatever refuses quotes its own words. There is **no per-volume MFT
+  program that runs, and whatever refuses quotes its own words. Measured 2026-11-19, that program's own
+  parameter check settles the disagreement for the window: asked on a letter that holds no volume, `/A:`
+  answers with the drive lookup for 512, 1024, 2048, 4096 and 8192 of FAT, FAT32, exFAT and NTFS alike, and
+  answers `Unzulässiger Parameter` for 12 288, 16 384 and every larger value **before** any drive is opened —
+  the same ceiling for every file system it names, which leaves ReFS with 4096 alone. The window's ladders
+  follow that acceptance rather than the usage text, so no choice in the dropdown can only end in a refusal;
+  reaching 16 KiB and above stays with the machine's own disk tools, which this feature never calls. There is **no per-volume MFT
   reserve** on this Windows: `fsutil fsinfo ntfsinfo d:\` reports an MFT zone (224 MB on this machine)
   that `fsutil behavior set mftzone` sets machine-wide (`MftZone = 0` → 200 MB), and `format` has no
   per-volume switch for it, so the NTFS space knob the window offers is the log size (`/LogSize:`) and

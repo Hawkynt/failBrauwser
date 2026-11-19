@@ -925,6 +925,19 @@ the diskette geometry switches `/F:`, `/T:` and `/N:` — this machine has no fl
 them against, so offering them would be guessing; the 3.5″ and 5.25″ *shapes* stay, since they belong
 to the device icon.
 
+The allocation-unit row follows what the tool **takes**, and on this build that is far less than what its
+usage text lists. Measured on 2026-11-19 by asking `/A:` of the tool on a letter that holds no volume, so the
+answer came from its own parameter check and no volume was reached: 512, 1024, 2048, 4096 and 8192 get as far
+as the drive lookup for FAT, FAT32, exFAT and NTFS alike, while 12 288, 16 384 and everything above are
+answered `Unzulässiger Parameter` (exit 4) in front of any drive being opened — the same for every file
+system the tool names, so ReFS is left with 4096 alone. The usage text's larger numbers (up to 2 MiB for NTFS,
+up to 32 MiB for exFAT, up to 64 KiB for FAT) are therefore not offered here: a dropdown whose choice can only
+end in another program's refusal is not an offer, and the reaching of those larger units belongs to the
+machine's own disk tools rather than to this window. What the tool refuses at run time is still quoted in its
+own words wherever it answers, so nothing is claimed about a value that was never asked.
+
+to the device icon.
+
 A volume the machine names no size for is refused a format outright, in the words *the machine names no
 usable size for this volume, so no file system can be chosen for it*, and its offer comes back empty. That was
 read on purpose on 2026-11-18 on a 64 GB stick left without a recognizable file system: it still enumerated by
