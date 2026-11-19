@@ -1029,11 +1029,14 @@ and 256×256 in 24-bit colour with an 8-bit alpha channel, 8-bit with 1-bit tran
 with 1-bit transparency; on a case-insensitive file system the two spellings `DevIcon.fil` and
 `devicon.fil` are the same one file; `autorun.inf`, naming that icon and describing the device
 (`ModelName`, `Manufacturer`); and `desktop.ini` with `folder.ico` for the folder's own picture, the
-volume's root marked system-and-hidden so the shell honours it.
+volume's root marked system-and-hidden where the file system takes that mark, so the shell honours it.
 
 Each of the two text files carries a section of its own saying so: `[failBrauwser]` with `DeviceIcon=1`,
-with the name of the image file `DevIcon.fil`, and with whether the root's system attribute was already
-there before this feature put it. That section is what *Remove device icon* removes by, and it removes by
+with the name of the image file `DevIcon.fil`, and with whether the root's system attribute stands there
+because this feature put it there — the marker states **what the machine answers afterwards**, never what
+this feature tried to do, so a root that refuses the mark (the root of an exFAT stick answers so on this
+Windows, measured 2026-11-19) is recorded as unmarked and the removal afterwards names no unmarking it did
+not do. That section is what *Remove device icon* removes by, and it removes by
 nothing else: it reads the two files, and only where one of them carries the marker does it delete that
 file and the icon files the marked file names. An `autorun.inf` or `desktop.ini` of somebody else — one
 without that section — keeps every byte and the verb says so; a `folder.ico` no marked file names stays
