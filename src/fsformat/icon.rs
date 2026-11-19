@@ -198,10 +198,18 @@ fn named_files(text: &str) -> Vec<String> {
     out
 }
 
-/// Whether marking the root falls to this feature: the pin shows only under the system attribute, and where
-/// the root carries it already, nobody of ours has to put it there.
-fn marks_root(root: &Path) -> bool {
-    osprim::attrs_of(root) & osprim::SYSTEM == 0
+/// Whether the marking of the root falls to this feature: the pin shows only under the system attribute, and
+/// where the root carries it already nobody of ours has to put it there. The answer is the machine's own answer
+/// to this very write, not a guess from the absence of a mark — the root of this Windows' exFAT stick refuses
+/// the mark outright (measured 2026-11-19, the write itself answered an error) — and the probe is taken back
+/// off again, since the marking itself belongs after the files of the act stand: an act that cannot finish
+/// leaves no mark of its own behind, and a marker never claims a marking the file system refused.
+fn mark_root(root: &Path) -> bool {
+    if osprim::attrs_of(root) & osprim::SYSTEM != 0 { return false; }
+    osprim::set_attr_bits(root, osprim::SYSTEM | osprim::HIDDEN, 0);
+    let stands = osprim::attrs_of(root) & osprim::SYSTEM != 0;
+    if stands { osprim::set_attr_bits(root, 0, osprim::SYSTEM | osprim::HIDDEN); }
+    stands
 }
 
 fn put(root: &Path, name: &str, bytes: &[u8], hidden: bool) -> Result<(), Failure> {
@@ -220,7 +228,7 @@ fn undo(root: &Path, written: &mut Vec<String>) {
 /// The four files of one device icon, in one act: what cannot be written is not written at all, and what
 /// was written before the refusal goes away again.
 pub fn create(root: &Path, shape: Shape, model: &str, bytes: u64, name: &NamePlan) -> Result<Written, Failure> {
-    let marked_root = marks_root(root);
+    let marked_root = mark_root(root);
     let mut pictures = art::images(shape, model, bytes)?;
     let icon = ico::container(&mut pictures)?;
     let autorun = autorun_text(shape, model, bytes, name, marked_root);
@@ -258,7 +266,7 @@ pub fn name_pins(root: &Path, model: &str, name: &NamePlan) -> Result<Pins, Fail
     let ours: Vec<(String, String)> = [AUTORUN, DESKTOP].into_iter().filter_map(|file| std::fs::read(root.join(file)).ok().map(|body| (file, decode(&body)))).filter(|(_, text)| marked(text)).map(|(file, text)| (file.to_string(), text)).collect();
     let picture = ours.iter().flat_map(|(_, text)| named_files(text)).any(|file| file.eq_ignore_ascii_case(FOLDER_ICON) && root.join(file).is_file());
     let said = |section: &str, key: &str| ours.iter().find_map(|(_, text)| value(text, section, key));
-    let marked_root = said(SECTION, ROOT_KEY).map(|said| said == "1").unwrap_or_else(|| marks_root(root));
+    let marked_root = said(SECTION, ROOT_KEY).map(|said| said == "1").unwrap_or_else(|| mark_root(root));
     let pinned = name.pinned && !name.called.trim().is_empty();
     if !pinned && !picture {
         if ours.is_empty() { return Ok(Pins::Nothing); }
@@ -277,6 +285,8 @@ pub fn name_pins(root: &Path, model: &str, name: &NamePlan) -> Result<Pins, Fail
         }
         written.push(file.to_string());
     }
+    // Where the marker of a file that stood says the marking came from here, the mark goes back on a root
+    // somebody has taken it off since; where this act marked the root itself it stands already.
     if marked_root { osprim::set_attr_bits(root, osprim::SYSTEM | osprim::HIDDEN, 0); }
     Ok(Pins::Stood { files: written, marked_root })
 }
@@ -465,6 +475,22 @@ mod tests {
         assert_eq!(osprim::attrs_of(there.path()) & bits, bits, "a plain root was left unmarked");
         remove(there.path()).expect("the removal takes the mark back where it put it");
         assert_eq!(osprim::attrs_of(there.path()) & bits, 0, "the mark the create set stands after the removal");
+    }
+
+    /// The marker states what the machine answers about the root, not what this feature attempted: the root of
+    /// this Windows' exFAT stick refuses the system-and-hidden mark outright (measured 2026-11-19, the write
+    /// itself answered an error), and a pair written there has to say the mark did not come from here rather
+    /// than claim one that never stood.
+    #[test]
+    fn a_root_that_refuses_the_mark_is_recorded_as_never_marked() {
+        let here = Root::fresh();
+        assert!(!mark_root(&here.path().join("no folder of anybody here")), "a root the machine refuses to mark is recorded as marked by this feature");
+        #[cfg(windows)]
+        {
+            let bits = osprim::SYSTEM | osprim::HIDDEN;
+            assert!(mark_root(here.path()), "a plain folder takes the mark, and the marker has to name it");
+            assert_eq!(osprim::attrs_of(here.path()) & bits, 0, "asking the machine left a mark of its own behind, which a failed act could never take back");
+        }
     }
 
     #[test]
