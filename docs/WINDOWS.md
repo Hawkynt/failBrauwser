@@ -653,6 +653,14 @@ script answered green, and the run's own *Remove device icon* step left the moun
 ours; the process census after that run named no `failbrauwser`, no `fb-archive` and no `format.com` left
 behind.
 
+The install was put again after the marker was fixed, so the image the user starts is the image every gate above
+ran on: the stamp `1.0.0 20261119T104314` beside the same id in `payload-id.txt`, `bin\failbrauwser.exe` 15 047 680
+bytes with **the same SHA-256 as `target\release\failbrauwser.exe` of this tree** — the byte-identical claim rather
+than a rebuilt-and-hoped-for-one — `bin\fb-archive.exe` likewise identical to the built helper, 47 DLLs beside them,
+the loader cache of 105 lines naming that installed folder and no path of the build machine, and the shortcut's
+target and icon both naming that image. No instance was running when the folder was written, and none was left
+after it.
+
 Measured on that same volume on 2026-11-19 for **the pin of a name the label cannot hold** (README: *Renaming a
 volume*), after the user had formatted the stick again. The rename went through the feature's own act — the same
 scratch driver outside the repository, calling `fsformat::act::rename` against the real `F:` — and the volume was
