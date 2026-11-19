@@ -42,9 +42,6 @@ const FS_WORDS: [(FileSystem, &str); 6] = [
 /// that small, and the tool's own refusal stays the authority for anything near the line.
 pub const SMALLEST_VOLUME: u64 = 1_000_000;
 
-const KB: u32 = 1024;
-const MB: u32 = 1024 * KB;
-
 impl FileSystem {
     /// Every file system the tool names, in the order its usage text lists them.
     pub fn all() -> &'static [FileSystem] {
@@ -743,6 +740,11 @@ mod tests {
     use super::*;
     use FormatOption::*;
     use Value::*;
+
+    // The tests spell an allocation unit the way a person reads one; the table, the switch and the
+    // machine's answer all carry plain byte counts.
+    const KB: u32 = 1024;
+    const MB: u32 = 1024 * KB;
 
     /// The README's option table: row → one cell per file system, in `FileSystem::all` order.
     fn readme_table() -> Vec<(String, Vec<String>)> {
