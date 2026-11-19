@@ -695,6 +695,60 @@ put back by a second rename, so no format was needed for this step.
   `Removable Disk` — the name Windows shows — where `Get-Volume` answers empty, so a claim of *back to the name it
   had* has to say which of those two answers it means.
 
+Measured on that same stick on that same day for **the four files arriving with the bytes they carry** (README:
+*Device icons*), which is what the user's report asked for: *create device icon* had left `DevIcon.fil` there
+alone and **0 bytes**, with `folder.ico`, `autorun.inf` and `desktop.ini` absent. The act under test was the
+product's own again — the scratch driver outside the repository calling `fsformat::act::create_icon` and
+`act::remove_icon` against the real `F:` — and every number below is the volume's own answer read back, not the
+act's words.
+
+- What the failed act had left: one name, `DevIcon.fil`, **0 bytes**, carrying nothing but `Archive`, and no other
+  of the four standing. The volume was healthy and quick in the same minute — `fsutil dirty query F:` answers
+  *F: ist NICHT fehlerhaft*, a 5-byte write to another name took **12 ms** and a 408 966-byte write **25 ms**,
+  both taken back afterwards — so that file was an act of ours that had opened the name and never filled it: that
+  act's run had blocked in that write past 300 s and had to be ended. Whether a handle stood at the name while it
+  blocked is **not** settled here; a later probe answered that the name opens exclusively, so whatever had stood
+  was gone with the ended act.
+- The taking back of a whole set: `unicon` answered *folder.ico, DevIcon.fil, autorun.inf, desktop.ini taken away
+  from F:\; nothing of ours was there.*, the root reading `System Volume Information` afterwards. Before that run
+  the four stood again with real bytes (408 966, 408 966, 220 and 298), which is what an act that completes
+  writes; the 0-byte state above was the interrupted one.
+- A staged name of ours goes with the four although no marked text file names it: `autorun.inf.fbtmp` with 19
+  bytes standing answered *autorun.inf.fbtmp taken away from F:\; nothing of ours was there.*, root clean
+  afterwards. The staged name is the file's own name with `.fbtmp` — **with its dot** — behind it: the first
+  attempt of this probe left `autorun.inffbtmp` and the verb answered *Nothing taken away*, which is right, that
+  name being nobody's of ours.
+- The name another program holds: `F:\desktop.ini` was made a fixture of 25 bytes and held with **no sharing at
+  all** while the create act ran. It answered `desktop.ini could not be put in place: Zugriff verweigert (os error
+  5) (another program holds that name open)`. `DevIcon.fil`, `folder.ico` and `autorun.inf` read **absent**
+  afterwards — the two pictures that had already arrived were taken back — no staged name stood, the fixture kept
+  its 25 bytes, no consent prompt appeared and no elevation was asked for, and the whole act with the handle open
+  took **362 ms**. The fixture was taken back and the root read `System Volume Information` only.
+- Why that refusal cannot read its own code, measured on this machine: the **move** of a staged file onto a name
+  held with no sharing answers **os error 5**, the very code a write to a read-only name answers and whose
+  `ErrorKind` is `PermissionDenied` — trusting the code would send a held name to the administrator for a write
+  no elevation can win. Writing straight to the name, which is what the baseline did, answers **os error 32**
+  there (*Der Prozess kann nicht auf die Datei zugreifen, da sie von einem anderen Prozess verwendet wird*), and
+  this toolchain maps that to **no** `denied` answer at all, so the baseline quoted the machine's words and named
+  no reason. The refusal asks the machine instead: an open that permits no sharing answers the sharing conflict
+  for as long as any handle of another program holds the name. Two assertions of the lib pin that pair of
+  answers, and one of them pins it as a measurement — the same code for a held name and for a read-only name, and
+  the open that sees the handle where the read-only name has none.
+- The red of the held-name scenario at the baseline: `git archive HEAD` built into `C:\fbhead16` with only that
+  scenario appended answers **FAILED** — *the refusal does not say what stood in the way: DevIcon.fil could not be
+  written: … (os error 32)* — the report's second half. The other scenarios of this step cannot be built at that
+  baseline at all, a staged name being no name that baseline knows, and one of them measures an answer code; they
+  pin what this step added rather than a defect it fixes, and that is said here rather than dressed up as a red.
+- The create of the fixed build on the real volume: *The device icon stands on F:\: DevIcon.fil, folder.ico,
+  autorun.inf, desktop.ini.* — `DevIcon.fil` and `folder.ico` **408 966** bytes each with the container's own
+  header answering **12** images and the marks `Hidden, Archive`, `autorun.inf` 220 bytes and `desktop.ini` 298
+  bytes both `Hidden, System, Archive`, carrying `label=Samsung 64` beside `LocalizedResourceName=Samsung 64 GB`
+  (the pin the pair is for: that name is 13 characters and the label of this exFAT volume takes 11, measured
+  above), beside `ModelName=USB stick 64 GB`, `Manufacturer=Samsung`, `icon=folder.ico,0`,
+  `IconResource=folder.ico,0`, `Image=DevIcon.fil` and `RootMarked=0`. Those four stand on the stick now, leaving
+  them being what the verb was asked to do; one more run of *Remove device icon* takes them back. A census after
+  every run of this step named no `failbrauwser`, no `fb-archive` and no driver of mine.
+
 The gate of the same day, after the marker was fixed. `cargo test --release --lib` answers **406 passed, 3
 failed, 1 ignored** — the three same Linux-only assertions named above. `fsformat::` alone answers **96 passed,
 0 failed**. The four drives scenarios serial read **4 passed in 75.96 s**. `cargo clippy --release --lib --bins`
@@ -710,3 +764,41 @@ being `custom_actions` and `encrypted_drive_with_lvm_inside` — both named by t
 existed — while `archives_as_folders`, which failed in the 2026-11-17 shape, answered green here. A process census
 after every run of that day named no `failbrauwser`, no `fb-archive` and no `format.com`, and the scratch driver
 this section names was deleted with its probe scripts.
+
+The gate of the same day again, after the four files began arriving in two moves. `cargo test --release --lib`
+answers **410 passed, 3 failed, 1 ignored** — the three same Linux-only assertions named above — and
+`fsformat::` alone **100 passed, 0 failed**, four scenarios more than the paragraph above. The four guard targets
+in one batch with `--no-fail-fast`, each count read beside its own `Running tests\<name>.rs` line: `git_repo` 7,
+`helper_lifetime` 2, `source_rules` 3 and `win_startup` 2, all green. `cargo clippy --release --lib --bins` names
+**170** warnings, the same count the paragraph above records, with `src\fsformat` carrying **0** of them, and a
+forced rebuild of `--bin failbrauwser` from the touched source names **no warning**.
+
+The whole UI target of that tree, serial again: **44 passed, 9 failed in 369.06 s**. The nine are not this step's,
+and the discriminator was measured on that same run: `Get-Clipboard` answers *ExternalException: Der angeforderte
+Clipboard-Vorgang war nicht erfolgreich*, the condition this section already names for the clipboard/job group of
+2026-11-17, where the same group read 44/8 and answered **0 green** re-run alone. Three of them re-run alone here
+— `file_operations`, `archives_as_folders`, `checksums_in_properties`, the Release helper named — answered **0
+passed, 3 failed in 67.59 s**, each stopping at a copy or a job: `wait-exists …\dest\a.txt` and `wait-row
+new.txt` and `wait-properties-text ✔ Matches — the SHA-256 checksum`, each of them with `jobs busy false` where
+the scenario expected work. None of the nine reaches the format, rename or icon path this step touched, and the
+M16 scenario `drive_format` is not among the named failures, so it stands among the 44 that answered green. With
+the clipboard answering, the same target of the same tree read **51 passed, 2 failed in 579.51 s** earlier that
+same day, and those two — `custom_actions` and `encrypted_drive_with_lvm_inside` — are two of these nine. So the
+seven extra belong to this host's clipboard state rather than to any tree, and the honest statement of the UI gate
+here is that it rides on the clipboard answering: a run that reads 44/9 while `Get-Clipboard` refuses is that
+condition, and it is recorded as one instead of being waited out. The driver and the probe scripts of this step
+were deleted with it, and the baseline snapshot `C:\fbhead16` with them.
+
+The **install of this build could not be put**, and the reason is this machine's answer rather than the package's:
+`winpack\install.ps1` refused with *Der Prozess kann nicht auf die Datei …`bin\failbrauwser.exe` zugreifen, da sie
+von einem anderen Prozess verwendet wird*, an instance of the installed image running at the time (pid 24128,
+started 11:34:37, its own path the installed `bin\failbrauwser.exe`). Nothing there was left mixed by that
+refusal, read back afterwards: the installed program is still the one the previous install wrote — 15 047 680
+bytes, the first 16 hex digits of its SHA-256 `69CB5952A5B91B64`, written 10:35:38 — where this tree's fresh build
+is 15 057 920 bytes beginning `0C32EE4D3FF04886`; the installed helper stands at its 68 039 168 bytes of 2026-11-18
+untouched, the stamp there reads `1.0.0 20261119T104314`, which is that older image's own, and `bin` holds its 50
+files with the loader cache at its 105 lines. The DLLs beside them are the same bytes either way, no native
+dependency of this tree having changed since the install above. What was built and packed is `BUILD OK` with 47
+DLLs staged, `winpack\out\failbrauwser-1.0.0-x86_64-windows.zip` at 57.2 MB and the launcher at 57.7 MB, so one
+closed window is all that stands between that folder and this tree — and no instance the user was running was
+ended to get this far, which is why the install is recorded as pending rather than done.
