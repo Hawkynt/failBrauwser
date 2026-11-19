@@ -1200,7 +1200,9 @@ fn name_row(v: &Volume, fs: failbrauwser::fsformat::FileSystem, win: Weak<Window
 
 /// Writes a volume's name off the UI thread (README: *Renaming a volume*), the volume marked busy while the
 /// act runs. What comes back is the name the volume now carries — the short variant, where the typed name
-/// was longer than the file system holds — and a refusal is the act's own words.
+/// was longer than the file system holds — and a refusal is the act's own words. What became of the longer
+/// name is told in a window of its own, like the two device-icon verbs tell theirs: whether it stands pinned
+/// in the two text files, was taken back, or could not be pinned at all.
 fn rename_volume(win: Weak<Window>, v: &Volume, name: &str, on_answer: impl Fn(Result<String, String>) + 'static) {
     let (key, vol, name) = (busy_key(v), v.clone(), name.to_string());
     set_busy(&key, true);
@@ -1208,7 +1210,10 @@ fn rename_volume(win: Weak<Window>, v: &Volume, name: &str, on_answer: impl Fn(R
         let answer = gio::spawn_blocking(move || failbrauwser::fsformat::act::rename(&vol, &name)).await.map_err(|_| "the rename run ended".to_string()).and_then(|r| r);
         set_busy(&key, false);
         match answer {
-            Ok(plan) => on_answer(Ok(plan.label)),
+            Ok(named) => {
+                on_answer(Ok(named.label.clone()));
+                if !named.words.is_empty() { notice(&win, "The volume's name", &named.words); }
+            }
             Err(e) => {
                 error(&win, "Cannot rename the volume", &e);
                 on_answer(Err(e));

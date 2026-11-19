@@ -32,15 +32,71 @@ pub const OUTCOME: &str = "--outcome";
 /// scenario never asks for rights and never shows a consent dialog.
 pub const SEAM: &str = "FAILBRAUWSER_ELEVATE";
 
-/// The volume's name, and the plan that says where a name too long for the file system survives it. What
-/// the machine answers for this volume's file system bounds the name, and the short variant the volume
-/// itself carries is shown beside the entry before anything is written. The plan is what the caller needs
-/// afterwards: only where it says `pinned` do `autorun.inf` and `desktop.ini` have anything to pin.
-pub fn rename(volume: &Volume, name: &str) -> Result<NamePlan, String> {
+/// What naming a volume answers: the name the volume's own label carries from then on, and the words the act
+/// tells — which say whether the longer name the volume is *called* stands pinned in the two text files.
+#[derive(Debug)]
+pub struct Named {
+    pub label: String,
+    pub words: String,
+}
+
+/// The name of one volume: the gate first, then the plan that settles what the file system can hold, then the
+/// label, then the pair of text files that carries a name the label cannot hold. The plan is what the caller
+/// needs afterwards, because the window shows the short variant beside the entry before anything is written.
+pub fn rename(volume: &Volume, name: &str) -> Result<Named, String> {
     if let Some(why) = refusal(volume) { return Err(format!("This volume cannot be renamed: {why}.")); }
     let fs = FileSystem::parse(&volume.fs_type).ok_or_else(|| format!("failBrauwser names no volume label for the file system {} of “{}”.", volume.fs_type, volume.title()))?;
     let plan = name_plan(fs, name)?;
-    write_label(volume, fs, &plan.label).map(|()| plan)
+    // The label first, then the pair that carries the name the label is too short for. Where the rights are
+    // what is missing, the one privileged run is handed both halves, so naming a volume answers one consent
+    // dialog and not two (docs\TOOL-STARTS.md).
+    #[cfg(windows)]
+    let words = match crate::win::storage::set_label(&volume.device, &plan.label) {
+        Ok(()) => named_words(&plan.label, &name_pins_at(volume, &plan)),
+        Err(5) => elevated(RENAME, &admin_rename_arguments(volume, fs, name, &plan.label))?,
+        Err(code) => return Err(format!("Windows refused the new name (win32 {code}).")),
+    };
+    #[cfg(not(windows))]
+    let words = elevated(RENAME, &admin_rename_arguments(volume, fs, name, &plan.label))?;
+    Ok(Named { label: plan.label, words })
+}
+
+/// The words one naming act answers with: the name the volume carries, and what became of the pair that
+/// carries the longer one. Nothing is appended where there was nothing to say.
+fn named_words(label: &str, pin: &str) -> String {
+    if pin.is_empty() { return format!("The volume's name is now {label}."); }
+    format!("The volume's name is now {label}. {pin}.")
+}
+
+/// The pair of text files a name needs, at the folder this volume names: written, refreshed, taken back, or
+/// named as impossible where the volume names no folder at all (README: *Renaming a volume*).
+fn name_pins_at(volume: &Volume, plan: &NamePlan) -> String {
+    pin_sentence(root_of(volume).map(|root| root.display().to_string()).unwrap_or_default().as_str(), &volume.drive_name, plan)
+}
+
+/// The same sentence from the words a privileged run was handed, so both halves of one rename tell it the
+/// same way: the folder it may write into (empty where the volume names none), the model the device
+/// description is drawn from, and the plan the name settled to.
+fn pin_sentence(folder: &str, model: &str, plan: &NamePlan) -> String {
+    if plan.called.trim().is_empty() { return String::new(); }
+    if folder.trim().is_empty() {
+        return if plan.pinned { "The volume names no folder to write the pin into, so nothing carries the longer name".into() } else { String::new() };
+    }
+    let both = format!("{} and {}", icon::AUTORUN, icon::DESKTOP);
+    match icon::name_pins(Path::new(folder), model, plan) {
+        Ok(icon::Pins::Stood { .. }) if plan.pinned => format!("The longer name it is called stands pinned in {both}"),
+        Ok(icon::Pins::Stood { .. }) => format!("{both} were refreshed to the name the volume carries"),
+        Ok(icon::Pins::Taken { .. }) => format!("{both} of ours were taken back, since this name fits the file system"),
+        Ok(icon::Pins::Nothing) => String::new(),
+        Err(why) => format!("The name it is called could not be pinned: {why}"),
+    }
+}
+
+/// What the privileged rename is handed: the target the label is written at, the label the plan settled on,
+/// the file system's word, the folder the pin goes into (empty where the volume names none), the name as it
+/// was typed, and the model the device description names. One run, both halves.
+fn admin_rename_arguments(volume: &Volume, fs: FileSystem, typed: &str, label: &str) -> Vec<String> {
+    vec![volume.device.clone(), label.into(), fs.word().into(), root_of(volume).map(|root| root.display().to_string()).unwrap_or_default(), typed.into(), volume.drive_name.clone()]
 }
 
 /// The format of one volume: the gate first, then the closed command, then the privileged run of this
@@ -75,10 +131,15 @@ pub fn format(volume: &Volume, fs: FileSystem, chosen: &[(FormatOption, Value)])
 /// page had its box ticked. That box is a second act on the volume that now holds the new file system, so it
 /// runs after the format worked, against the name typed on the page and the file system just written — the
 /// record of the volume still names what it was before. A failure of the icon is told beside a format that did
-/// work instead of hiding it, and an unticked box leaves the tool's words exactly as they were.
+/// work instead of hiding it. An unticked box leaves the tool's words at the head of the answer and writes the
+/// pair of text files that carries a name the label the tool wrote is too short for — pinning is the naming
+/// act's work, not the icon's (README: *Formatting a volume*, *Renaming a volume*).
 fn format_words(volume: &Volume, fs: &str, chosen: &[(FormatOption, Value)], tool: &str) -> String {
-    let Some(shape) = chosen.iter().find(|(option, _)| *option == FormatOption::DeviceIcon).and_then(|(_, value)| match value { Value::Text(asset) => Shape::parse(asset), _ => None }) else { return tool.into() };
     let typed = chosen.iter().find(|(option, _)| *option == FormatOption::VolumeName).map(|(_, value)| match value { Value::Text(name) => name.as_str(), _ => "" }).unwrap_or("");
+    let Some(shape) = chosen.iter().find(|(option, _)| *option == FormatOption::DeviceIcon).and_then(|(_, value)| match value { Value::Text(asset) => Shape::parse(asset), _ => None }) else {
+        let pin = name_pins_at(volume, &name_words(fs, typed));
+        return if pin.is_empty() { tool.into() } else { format!("{tool}\n{pin}") };
+    };
     match create_icon(volume, fs, shape, typed) {
         Ok(words) => format!("{tool}\n{words}"),
         Err(why) => format!("{tool}\nThe volume was formatted; its device icon was not written: {why}"),
@@ -303,17 +364,24 @@ pub fn execute(args: &[String]) -> i32 {
     if ok { 0 } else { 1 }
 }
 
-/// The name as the administrator: the volume root and the label the plan settled on, or over there the
-/// device, the label and the name of the file system whose tool writes it.
+/// The name as the administrator: the target the label is written at, the label, the file system's word, the
+/// folder the pin of a long name goes into (empty where the volume names none), the name as it was typed, and
+/// the model the device description is drawn from. The label and the pin are one run, so a naming act never
+/// asks for consent twice (README: *Renaming a volume*).
 fn write_label_as_admin(arguments: &[String]) -> Result<String, String> {
     let (Some(target), Some(label)) = (arguments.first(), arguments.get(1)) else { return Err("A volume and its new name are needed.".into()) };
+    let (folder, typed, model) = (arguments.get(3).map(String::as_str).unwrap_or_default(), arguments.get(4).map(String::as_str).unwrap_or_default(), arguments.get(5).map(String::as_str).unwrap_or_default());
+    let pin = |fs: FileSystem| pin_sentence(folder, model, &name_words(fs.word(), typed));
     #[cfg(windows)]
-    return crate::win::storage::set_label(target, label).map(|()| format!("The volume's name is now {label}.")).map_err(|code| format!("Windows refused the new name (win32 {code})."));
+    {
+        let fs = FileSystem::parse(arguments.get(2).map(String::as_str).unwrap_or_default()).ok_or_else(|| "The file system whose label limit bounds the name was not named.".to_string())?;
+        crate::win::storage::set_label(target, label).map(|()| named_words(label, &pin(fs))).map_err(|code| format!("Windows refused the new name (win32 {code})."))
+    }
     #[cfg(not(windows))]
     {
         let fs = FileSystem::parse(arguments.get(2).map(String::as_str).unwrap_or_default()).ok_or_else(|| "The file system whose name tool to use was not named.".to_string())?;
         let tool = label_arguments(fs, target, label).ok_or_else(|| format!("no program is named that writes the name of a {} volume there.", fs.word()))?;
-        run_tool_as_read(&tool)
+        run_tool_as_read(&tool).map(|words| format!("{words}\n{}", named_words(label, &pin(fs))))
     }
 }
 
@@ -424,26 +492,6 @@ fn joined(out: &[u8], err: &[u8]) -> String {
     let mut text = String::from_utf8_lossy(out).to_string();
     if !text.is_empty() && !text.ends_with('\n') && !err.is_empty() { text.push('\n'); }
     text + &String::from_utf8_lossy(err)
-}
-
-/// The volume's label, written in this instance where the machine allows it, and through the privileged
-/// run where the rights are what is missing.
-fn write_label(volume: &Volume, fs: FileSystem, label: &str) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        let root = volume.device.clone();
-        match crate::win::storage::set_label(&root, label) {
-            Ok(()) => Ok(()),
-            // The rights are what is missing for an internal volume; a stick answers for itself. Every
-            // other refusal is the machine's own and is told as it stands.
-            // The command carries the file system's word on both sides, so the privileged run is started
-            // with one shape of arguments whoever answers it.
-            Err(5) => elevated(RENAME, &[root, label.into(), fs.word().into()]).map(|_| ()),
-            Err(code) => Err(format!("Windows refused the new name (win32 {code}).")),
-        }
-    }
-    #[cfg(not(windows))]
-    elevated(RENAME, &[volume.device.clone(), label.into(), fs.word().into()]).map(|_| ())
 }
 
 /// The act as the administrator: this program's own file started again, its answer read back from the
@@ -773,7 +821,9 @@ mod tests {
         let v = Volume { device: "E:".into(), mount_points: vec![root.clone()], fs_type: "FAT32".into(), drive_name: "SanDisk Ultra".into(), drive_size: 64_160_400_896, ..Default::default() };
         let tool = "The volume was formatted.\nEverything on it is gone.";
         let named = [(VolumeName, Text("Samsung 64 GB".into()))];
-        assert_eq!(format_words(&v, "FAT32", &named, tool), tool, "a format whose box is unticked answers with the tool's words alone");
+        let unticked = format_words(&v, "FAT32", &named, tool);
+        assert!(unticked.starts_with(tool), "the tool's own words are no longer the head of an unticked format: {unticked}");
+        assert!(unticked.contains("pinned"), "the unticked box leaves the name it was given unpinned: {unticked}");
         assert!(!root.join(icon::DEVICE_IMAGE).exists(), "an unticked box wrote a picture anyway");
         let mut ticked = named.to_vec();
         ticked.push((DeviceIcon, Text("usbstick".into())));
@@ -786,6 +836,79 @@ mod tests {
         let nameless = Volume { device: "/dev/fake-Photos".into(), ..Default::default() };
         let answer = format_words(&nameless, "NTFS", &ticked, tool);
         assert!(answer.starts_with(tool) && answer.contains("was not written"), "a format that worked is hidden by an icon that failed: {answer}");
+    }
+
+    /// The pair of text files a name needs is the naming act's own work: a volume naming a folder gets them,
+    /// a volume naming none is told as such instead of being left quietly unpinned, and a name the file system
+    /// holds writes nothing of its own (README: *Renaming a volume*).
+    #[test]
+    fn the_pin_of_a_name_is_written_where_a_folder_stands_and_told_where_none_does() {
+        let here = tempfile::tempdir().expect("a folder of its own");
+        let v = Volume { device: "E:".into(), mount_points: vec![here.path().to_path_buf()], fs_type: "FAT32".into(), drive_name: "Samsung Flash Drive".into(), ..Default::default() };
+        let plan = name_plan(FileSystem::Fat32, "Samsung 64 GB").expect("a name FAT32 is given");
+        let words = name_pins_at(&v, &plan);
+        assert!(words.contains("pinned"), "the act does not say the name stands pinned: {words}");
+        for name in [icon::AUTORUN, icon::DESKTOP] {
+            assert!(here.path().join(name).is_file(), "{name} of the pin did not stand");
+        }
+        assert!(!here.path().join(icon::DEVICE_IMAGE).is_file(), "a naming act drew a picture of its own");
+        crate::osprim::set_attr_bits(here.path(), 0, crate::osprim::SYSTEM | crate::osprim::HIDDEN);
+
+        let nameless = Volume { device: "/dev/fake-Photos".into(), fs_type: "FAT32".into(), ..Default::default() };
+        let words = name_pins_at(&nameless, &plan);
+        assert!(words.contains("no folder"), "a volume naming no folder is left quietly unpinned: {words}");
+
+        let there = tempfile::tempdir().expect("a folder of its own");
+        let holds = Volume { device: "E:".into(), mount_points: vec![there.path().to_path_buf()], fs_type: "NTFS".into(), drive_name: "Samsung Flash Drive".into(), ..Default::default() };
+        let plan = name_plan(FileSystem::Ntfs, "Samsung 64 GB").expect("a name NTFS holds outright");
+        assert!(name_pins_at(&holds, &plan).is_empty(), "a name NTFS holds wrote words of its own: {}", name_pins_at(&holds, &plan));
+        for name in [icon::AUTORUN, icon::DESKTOP, icon::DEVICE_IMAGE, icon::FOLDER_ICON] {
+            assert!(!there.path().join(name).exists(), "{name} stands where the name needed no pin at all");
+        }
+    }
+
+    /// A format whose device-icon box stayed unticked still carries the name it was given, because the label
+    /// the tool wrote is the short variant of it (README: *Formatting a volume*, *Renaming a volume*).
+    #[test]
+    fn a_format_with_an_unticked_box_still_pins_the_name_it_was_given() {
+        let here = tempfile::tempdir().expect("a folder of its own");
+        let root = here.path().to_path_buf();
+        let v = Volume { device: "E:".into(), mount_points: vec![root.clone()], fs_type: "FAT32".into(), drive_name: "SanDisk Ultra".into(), drive_size: 64_160_400_896, ..Default::default() };
+        let tool = "The volume was formatted.\nEverything on it is gone.";
+        let answer = format_words(&v, "FAT32", &[(VolumeName, Text("Samsung 64 GB".into()))], tool);
+        assert!(answer.starts_with(tool), "the tool's own words are no longer the head of the answer: {answer}");
+        assert!(answer.contains("pinned"), "the name the tool cannot carry is left unpinned: {answer}");
+        for name in [icon::AUTORUN, icon::DESKTOP] {
+            assert!(root.join(name).is_file(), "{name} of the pin did not stand after the format");
+        }
+        assert!(!root.join(icon::DEVICE_IMAGE).is_file(), "an unticked box drew a picture anyway");
+        crate::osprim::set_attr_bits(&root, 0, crate::osprim::SYSTEM | crate::osprim::HIDDEN);
+    }
+
+    /// The privileged rename is handed the folder, the name as it was typed and the model, so the one run that
+    /// takes the label writes the pin too and naming a volume answers one consent dialog (README: *Renaming a
+    /// volume*).
+    #[test]
+    fn the_privileged_rename_carries_what_the_pin_of_the_name_needs() {
+        let v = Volume { device: "F:\\".into(), fs_type: "exFAT".into(), drive_name: "Samsung Flash Drive".into(), drive_size: 64_157_253_632, ..Default::default() };
+        assert_eq!(admin_rename_arguments(&v, FileSystem::ExFat, "Samsung 64 GB", "Samsung 64"), ["F:\\", "Samsung 64", "exFAT", "F:\\", "Samsung 64 GB", "Samsung Flash Drive"]);
+        let nameless = Volume { device: "/dev/fake-Photos".into(), fs_type: "FAT32".into(), ..Default::default() };
+        assert_eq!(admin_rename_arguments(&nameless, FileSystem::Fat32, "Samsung 64 GB", "SAMSUNG 64"), ["/dev/fake-Photos", "SAMSUNG 64", "FAT32", "", "Samsung 64 GB", ""], "a volume naming no folder says so with an empty folder");
+    }
+
+    /// A privileged rename run whose target the machine refuses answers the refusal into the outcome file, and
+    /// writes no pin it was not allowed to name a volume for.
+    #[test]
+    #[cfg(windows)]
+    fn the_privileged_rename_refuses_a_target_the_machine_does_not_answer() {
+        let (here, outcome) = (tempfile::tempdir().expect("a folder of its own"), outcome_path(RENAME));
+        let root = here.path().join("nothing");
+        let code = execute(&[RENAME.into(), OUTCOME.into(), outcome.display().to_string(), "Q:\\".into(), "Label".into(), "NTFS".into(), root.display().to_string(), "Label".into(), "Samsung Flash Drive".into()]);
+        assert_eq!(code, 1, "a privileged rename of a letter this machine has no answered as success");
+        let (ok, text) = read_outcome(&std::fs::read_to_string(&outcome).expect("a refusal is answered into the outcome file too"));
+        assert!(!ok && text.contains("win32"), "the machine's own refusal is not in the answer: {text}");
+        assert!(!root.exists(), "the refused run left a pin of its own behind: {}", root.display());
+        let _ = std::fs::remove_file(&outcome);
     }
 
     /// A privileged icon run that was given no folder is refused with the outcome file written, so the window

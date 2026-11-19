@@ -40,6 +40,20 @@ pub struct Removed {
     pub unmarked_root: bool,
 }
 
+/// How the two text files that carry a name came out (README: *Renaming a volume*): standing, taken back, or
+/// never needed. The naming act tells its answer by these three, because a volume whose name fits its file
+/// system outright has nothing to pin.
+#[derive(Debug)]
+pub enum Pins {
+    /// The two text files stand — written now, or refreshed where a device icon already wrote them — naming
+    /// which, and whether marking the root came from here.
+    Stood { files: Vec<String>, marked_root: bool },
+    /// The marked text files of ours were taken back, naming which, and whether the root's mark came off.
+    Taken { files: Vec<String>, unmarked_root: bool },
+    /// Nothing of ours stands there, and the name needs no pin.
+    Nothing,
+}
+
 /// Why the four files did not stand. The words tell what happened, in the file's own name; `denied` says
 /// whether the rights were what was missing, which is the one thing that tells the act whether to ask the
 /// administrator for the same write (README: *Device icons*).
@@ -74,32 +88,58 @@ fn ascii(value: &str) -> String {
 }
 
 /// The section of our own, which says that the file is this feature's, which image file belongs to it, and
-/// whether the root's system attribute was already there before this feature put it there.
-fn section(marked_root: bool) -> Vec<String> {
-    vec![String::new(), format!("[{SECTION}]"), format!("{}=1", "DeviceIcon"), format!("Image={DEVICE_IMAGE}"), format!("RootMarked={}", usize::from(marked_root))]
+/// whether the root's system attribute was already there before this feature put it there. The image key
+/// stands only where a picture of ours stands with the file: a naming act that wrote no picture names none,
+/// so removal never takes a file it did not write (README: *Renaming a volume*).
+fn section(marked_root: bool, picture: bool) -> Vec<String> {
+    let mut lines = vec![String::new(), format!("[{SECTION}]"), "DeviceIcon=1".to_string()];
+    if picture { lines.push(format!("Image={DEVICE_IMAGE}")); }
+    lines.push(format!("RootMarked={}", usize::from(marked_root)));
+    lines
+}
+
+/// The brand the machine reported, in the single-byte words that file holds.
+fn brand(model: &str) -> Option<String> {
+    let token = ascii(&vendor_token(model));
+    (!token.is_empty()).then_some(token)
+}
+
+/// The body of `autorun.inf`: the drive's picture where one stands, the label the volume carries itself
+/// where a single-byte file can hold it, and the two sections that describe the device.
+fn autorun_body(name: &NamePlan, device: &str, maker: Option<&str>, picture: bool, marked_root: bool) -> String {
+    let mut lines = vec!["[autorun]".to_string()];
+    if picture { lines.push(format!("icon={FOLDER_ICON},0")); }
+    if !name.label.is_empty() && name.label.is_ascii() { lines.push(format!("label={}", ascii(&name.label))); }
+    if !device.is_empty() {
+        lines.extend(["".to_string(), "[DeviceDescription]".to_string(), format!("ModelName={device}")]);
+        if let Some(maker) = maker.filter(|maker| !maker.is_empty()) {
+            lines.extend(["".to_string(), "[DeviceManufacturerInformation]".to_string(), format!("Manufacturer={maker}")]);
+        }
+    }
+    lines.extend(section(marked_root, picture));
+    lines.join("\r\n") + "\r\n"
+}
+
+/// The body of `desktop.ini`: the folder's picture where one stands, and the name the volume is called
+/// where it is worth pinning.
+fn desktop_body(pin: Option<&str>, picture: bool, marked_root: bool) -> String {
+    let mut lines = vec!["[.ShellClassInfo]".to_string()];
+    if picture { lines.push(format!("IconResource={FOLDER_ICON},0")); }
+    if let Some(pin) = pin.filter(|pin| !pin.trim().is_empty()) { lines.push(format!("LocalizedResourceName={}", pin.trim())); }
+    lines.extend(section(marked_root, picture));
+    lines.join("\r\n") + "\r\n"
 }
 
 /// The drive's own `autorun.inf`: the icon for the drive, the device as the machine described it, and the
 /// label the volume carries itself where a single-byte file can hold it.
 pub fn autorun_text(shape: Shape, model: &str, bytes: u64, name: &NamePlan, marked_root: bool) -> String {
-    let brand = ascii(&vendor_token(model));
-    let mut lines = vec!["[autorun]".to_string(), format!("icon={FOLDER_ICON},0")];
-    if !name.label.is_empty() && name.label.is_ascii() { lines.push(format!("label={}", ascii(&name.label))); }
-    lines.extend(["".to_string(), "[DeviceDescription]".to_string(), format!("ModelName={} {}", ascii(shape.data_label()), ascii(&decimal_size(bytes)))]);
-    if !brand.is_empty() {
-        lines.extend(["".to_string(), "[DeviceManufacturerInformation]".to_string(), format!("Manufacturer={brand}")]);
-    }
-    lines.extend(section(marked_root));
-    lines.join("\r\n") + "\r\n"
+    autorun_body(name, &format!("{} {}", ascii(shape.data_label()), ascii(&decimal_size(bytes))), brand(model).as_deref(), true, marked_root)
 }
 
 /// The folder's own `desktop.ini`: its picture, and the long name the volume's own label may be too short
 /// for.
 pub fn desktop_text(name: &NamePlan, marked_root: bool) -> String {
-    let mut lines = vec!["[.ShellClassInfo]".to_string(), format!("IconResource={FOLDER_ICON},0")];
-    if !name.called.is_empty() { lines.push(format!("LocalizedResourceName={}", name.called.trim())); }
-    lines.extend(section(marked_root));
-    lines.join("\r\n") + "\r\n"
+    desktop_body(Some(&name.called), true, marked_root)
 }
 
 /// The bytes of `desktop.ini`: UTF-16 with its mark, which is what this machine renders rather than mangles
@@ -200,6 +240,45 @@ pub fn create(root: &Path, shape: Shape, model: &str, bytes: u64, name: &NamePla
     }
     if marked_root { osprim::set_attr_bits(root, osprim::SYSTEM | osprim::HIDDEN, 0); }
     Ok(Written { files: written, marked_root })
+}
+
+/// The value one key of one section carries, as the file stands; the section and the key are read the way
+/// the shell's own readers spell them.
+fn value(text: &str, section: &str, key: &str) -> Option<String> {
+    keys(text, section).into_iter().find(|(found, _)| found == key).map(|(_, value)| value)
+}
+
+/// The two text files that carry a name the volume's own label is too short for: written where nothing of
+/// ours stands, refreshed where it does, and taken back again when a later name needs no pin (README:
+/// *Renaming a volume*). Where no picture was asked for they say nothing about one, since a reference the
+/// shell cannot resolve is worse than none; the words of a device description an icon wrote keep their own
+/// value, because those words describe the device and not the volume's name. Removal of a pair that names no
+/// picture goes through [`remove`], which obeys nothing but the section of ours.
+pub fn name_pins(root: &Path, model: &str, name: &NamePlan) -> Result<Pins, Failure> {
+    let ours: Vec<(String, String)> = [AUTORUN, DESKTOP].into_iter().filter_map(|file| std::fs::read(root.join(file)).ok().map(|body| (file, decode(&body)))).filter(|(_, text)| marked(text)).map(|(file, text)| (file.to_string(), text)).collect();
+    let picture = ours.iter().flat_map(|(_, text)| named_files(text)).any(|file| file.eq_ignore_ascii_case(FOLDER_ICON) && root.join(file).is_file());
+    let said = |section: &str, key: &str| ours.iter().find_map(|(_, text)| value(text, section, key));
+    let marked_root = said(SECTION, ROOT_KEY).map(|said| said == "1").unwrap_or_else(|| marks_root(root));
+    let pinned = name.pinned && !name.called.trim().is_empty();
+    if !pinned && !picture {
+        if ours.is_empty() { return Ok(Pins::Nothing); }
+        let gone = remove(root)?;
+        return Ok(Pins::Taken { files: gone.deleted, unmarked_root: gone.unmarked_root });
+    }
+    let device = said("devicedescription", "modelname").unwrap_or_else(|| if pinned { ascii(&name.called) } else { String::new() });
+    let maker = said("devicemanufacturerinformation", "manufacturer").or_else(|| brand(model));
+    let pin = pinned.then_some(name.called.as_str());
+    let bodies = [(AUTORUN, autorun_body(name, &device, maker.as_deref(), picture, marked_root).into_bytes()), (DESKTOP, desktop_bytes(&desktop_body(pin, picture, marked_root)))];
+    let mut written: Vec<String> = Vec::new();
+    for (file, body) in bodies {
+        if let Err(why) = put(root, file, &body, true) {
+            undo(root, &mut written);
+            return Err(why);
+        }
+        written.push(file.to_string());
+    }
+    if marked_root { osprim::set_attr_bits(root, osprim::SYSTEM | osprim::HIDDEN, 0); }
+    Ok(Pins::Stood { files: written, marked_root })
 }
 
 /// Taking a device icon away: only a text file carrying the section of ours is deleted, only the icon files
@@ -466,5 +545,80 @@ mod tests {
         };
         assert!(why.denied, "the refusal does not name the rights as what is missing: {}", why.text);
         assert!(why.text.contains(DEVICE_IMAGE), "the refusal does not name the file it could not write: {}", why.text);
+    }
+
+    /// The naming act's own pair: a name the file system cannot hold is pinned without a picture being
+    /// asked for, and those two files say nothing about a picture (README: *Renaming a volume*).
+    #[test]
+    fn a_name_a_naming_act_pins_stands_without_any_word_about_a_picture() {
+        let here = Root::fresh();
+        let pins = name_pins(here.path(), "Samsung Flash Drive", &plan(FileSystem::Fat32, "Samsung 64 GB")).expect("the two files of the pin");
+        let Pins::Stood { files, .. } = &pins else { panic!("the pin of a name came out as {pins:?}") };
+        assert_eq!(files.len(), 2, "the pin stands as {} files instead of two", files.len());
+        for name in [AUTORUN, DESKTOP] {
+            assert!(here.path().join(name).is_file(), "{name} is not there after the pin");
+        }
+        for name in [DEVICE_IMAGE, FOLDER_ICON] {
+            assert!(!here.path().join(name).is_file(), "a pin of a name drew a picture of its own: {name} stands");
+        }
+        let autorun = text(here.path(), AUTORUN);
+        assert!(autorun.contains("ModelName=Samsung 64 GB"), "the name the volume is called is not what the pin says about it: {autorun}");
+        assert!(autorun.contains("Manufacturer=Samsung"), "the brand the machine reported is missing: {autorun}");
+        assert!(autorun.contains("label=SAMSUNG 64"), "the short label the file system carries is unnamed: {autorun}");
+        assert!(!autorun.contains("icon="), "the pin names a picture that was never asked for: {autorun}");
+        assert!(!autorun.contains(DEVICE_IMAGE) && !autorun.contains(FOLDER_ICON), "the pin names an icon file that does not stand: {autorun}");
+        let desktop = text(here.path(), DESKTOP);
+        assert!(desktop.contains(&format!("LocalizedResourceName={}", plan(FileSystem::Fat32, "Samsung 64 GB").called)), "the long name is not pinned: {desktop}");
+        assert!(!desktop.contains("IconResource"), "the folder is pointed at a picture that was never asked for: {desktop}");
+        assert!(marked(&autorun) && marked(&desktop), "neither file of the pin carries the section removal reads");
+    }
+
+    /// A volume that already carries a device icon keeps its picture and its device words under a rename;
+    /// only the name changes.
+    #[test]
+    fn pinning_a_volume_that_carries_an_icon_keeps_every_word_of_that_icon() {
+        let here = Root::fresh();
+        create_stick(here.path());
+        let Pins::Stood { files, .. } = &name_pins(here.path(), "SanDisk Ultra", &plan(FileSystem::Fat32, "Family Pictures of the summer holidays")).expect("the pair refreshed under the icon") else {
+            panic!("the pair under a standing icon was not refreshed");
+        };
+        assert_eq!(files.len(), 2, "the icon's pair came back as {} files", files.len());
+        for name in [DEVICE_IMAGE, FOLDER_ICON] {
+            assert!(here.path().join(name).is_file(), "the picture of an icon that stands was taken away by a name: {name}");
+        }
+        let autorun = text(here.path(), AUTORUN);
+        assert!(autorun.contains("icon=folder.ico,0"), "the drive's own picture lost its name under the rename: {autorun}");
+        assert!(autorun.contains("ModelName=USB stick 64 GB") && autorun.contains("Manufacturer=SanDisk"), "the device the icon described was rewritten as a volume name: {autorun}");
+        assert!(autorun.contains("label=FAMILY"), "the label the volume now carries is unnamed: {autorun}");
+        let desktop = text(here.path(), DESKTOP);
+        assert!(desktop.contains("IconResource=folder.ico,0"), "the folder's own picture lost its name under the rename: {desktop}");
+        assert!(desktop.contains("LocalizedResourceName=Family Pictures of the summer"), "the new name is not pinned: {desktop}");
+    }
+
+    /// A later name the file system holds outright leaves no stale pin of ours behind; the two files go and
+    /// the root's mark comes back off where it came from us.
+    #[test]
+    fn a_name_the_file_system_holds_itself_takes_the_pin_of_our_own_pair_back() {
+        let here = Root::fresh();
+        name_pins(here.path(), "Samsung Flash Drive", &plan(FileSystem::Fat32, "Samsung 64 GB")).expect("the pair of the pin");
+        let pins = name_pins(here.path(), "Samsung Flash Drive", &plan(FileSystem::Fat32, "HOLIDAY")).expect("the pair taken back");
+        let Pins::Taken { files, .. } = &pins else { panic!("a name that needs no pin left the pair standing: {pins:?}") };
+        assert_eq!(files.len(), 2, "the pair came back as {} files instead of two", files.len());
+        for name in [AUTORUN, DESKTOP] {
+            assert!(!here.path().join(name).is_file(), "{name} still pins a name the volume no longer carries");
+        }
+        #[cfg(windows)]
+        assert_eq!(osprim::attrs_of(here.path()) & osprim::SYSTEM, 0, "the root is left marked by a pin that is gone");
+    }
+
+    /// Where no name needs a pin and nothing of ours stands, the naming act writes nothing at all.
+    #[test]
+    fn a_name_the_file_system_holds_writes_no_pair_of_its_own() {
+        let here = Root::fresh();
+        let pins = name_pins(here.path(), "Samsung Flash Drive", &plan(FileSystem::Ntfs, "Samsung 64 GB")).expect("nothing to do");
+        assert!(matches!(pins, Pins::Nothing), "a name NTFS holds outright still wrote something: {pins:?}");
+        for name in [AUTORUN, DESKTOP, FOLDER_ICON, DEVICE_IMAGE] {
+            assert!(!here.path().join(name).exists(), "{name} stands where the act had nothing to write");
+        }
     }
 }
