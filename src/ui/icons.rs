@@ -60,6 +60,29 @@ pub fn row_image(model: &gtk::TreeModel, iter: &gtk::TreeIter, size: i32) -> Opt
     Some(if link == 0 { pb } else { super::linkicons::with_overlay(&pb, link, Some(&format!("{key}|{git}"))) })
 }
 
+/// The picture a volume names for itself: the image file its own marked files point at, decoded and scaled to
+/// the pixels `size` draws at (README: *Device icons*). Nothing where it names none, where the file cannot be
+/// read, or where its bytes do not decode — and then the themed icon of its kind stands, so a damaged file
+/// costs a row its picture and never its place in the listing.
+pub fn volume_picture(v: &failbrauwser::drives::Volume, size: gtk::IconSize) -> Option<Pixbuf> {
+    let bytes = std::fs::read(v.picture_file.as_ref()? ).ok()?;
+    let picture = Pixbuf::from_read(std::io::Cursor::new(bytes)).ok()?;
+    // The surface names its icon size; the pixels behind that name are the theme's answer, which is what keeps
+    // this picture the same height as the drive icons drawn beside it.
+    Some(super::thumbnails::fit(&picture, size.lookup().map_or(48, |(w, _)| w)))
+}
+
+/// The image a drive row shows: the volume's own picture where its files name one that decodes, else the
+/// themed icon of its kind. One answer for the drives page, the side panel and a properties window.
+pub fn volume_image(v: &failbrauwser::drives::Volume, size: gtk::IconSize) -> gtk::Image {
+    let image = gtk::Image::new();
+    match volume_picture(v, size) {
+        Some(pb) => image.set_from_pixbuf(Some(&pb)),
+        None => image.set_from_gicon(&gio::ThemedIcon::from_names(&v.icon_names()), size),
+    }
+    image
+}
+
 /// Makes `renderer` draw the row image at the size `size` holds.
 pub fn bind(layout: &impl IsA<gtk::CellLayout>, renderer: &gtk::CellRendererPixbuf, size: Rc<Cell<i32>>) {
     let r2 = renderer.clone();

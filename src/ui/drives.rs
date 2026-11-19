@@ -306,7 +306,25 @@ async fn gather_local() -> Vec<(Volume, Option<Usage>)> {
             }));
         }
     });
-    with_usage
+    // What a volume's own files say about it — the long name pinned there and the picture named there — is read
+    // of its folder, off the UI thread like the fill levels: a root that does not answer is left to answer for
+    // itself (README: *Device icons*). A share is not asked at all, because a dead one hangs a read of its root
+    // and the picture of a share belongs to the machine that serves it.
+    gio::spawn_blocking(move || {
+        with_usage
+            .into_iter()
+            .map(|(mut v, u)| {
+                if let (false, Some(root)) = (v.network, v.mount_point().cloned()) {
+                    let said = failbrauwser::fsformat::icon::shown(&root);
+                    v.pinned_name = said.pinned;
+                    v.picture_file = said.picture;
+                }
+                (v, u)
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_else(|_| Vec::new())
 }
 
 fn page_for(pane: &Rc<Pane>) -> Option<Rc<DrivesPage>> {
@@ -606,7 +624,7 @@ impl DrivesPage {
         grid.set_margin_top(8);
         grid.set_margin_bottom(8);
 
-        let icon = gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&v.icon_names()), gtk::IconSize::Dialog);
+        let icon = super::icons::volume_image(v, gtk::IconSize::Dialog);
         icon.set_valign(gtk::Align::Center);
         grid.attach(&icon, 0, 0, 1, 4);
 
@@ -873,7 +891,7 @@ pub fn show_properties(w: &Rc<Window>, pane: &Rc<Pane>, v: &Volume, usage: Optio
     area.set_spacing(12);
 
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    header.pack_start(&gtk::Image::from_gicon(&gio::ThemedIcon::from_names(&v.icon_names()), gtk::IconSize::Dialog), false, false, 0);
+    header.pack_start(&super::icons::volume_image(v, gtk::IconSize::Dialog), false, false, 0);
     let titles = gtk::Box::new(gtk::Orientation::Vertical, 2);
     let title = gtk::Label::new(None);
     title.set_markup(&format!("<big><b>{}</b></big>", glib::markup_escape_text(&v.title())));

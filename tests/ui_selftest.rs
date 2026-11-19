@@ -669,6 +669,34 @@ fn renaming_and_formatting_a_volume() {
 }
 
 #[test]
+fn a_device_shows_what_its_own_files_name() {
+    // The four files of one device icon are staged by this program's own writer, into the folder the stand-in
+    // stick mounts on, before the scenario starts: what the listing reads is the bytes a create actually
+    // leaves, pinned against a file system whose own label holds eleven characters.
+    run_checked(
+        "device_shown.fbt",
+        &[],
+        |t| {
+            let stick = t.join("stick");
+            std::fs::create_dir_all(&stick).unwrap();
+            std::fs::create_dir_all(t.join("plain")).unwrap();
+            let plan = failbrauwser::fsformat::name_plan(failbrauwser::fsformat::FileSystem::ExFat, "Samsung 64 GB Family Pictures").expect("a name exFAT is given");
+            failbrauwser::fsformat::icon::create(&stick, failbrauwser::fsformat::Shape::UsbStick, "Samsung Flash Drive", 64_160_400_896, &plan).expect("the four files of one device icon");
+        },
+        |t| {
+            // The scenario's own removal took them away again: no file of the four, no staged name of ours, and
+            // the mark of ours off the folder itself (README: *Device icons*).
+            let stick = t.join("stick");
+            for name in ["autorun.inf", "desktop.ini", "folder.ico", "DevIcon.fil", "autorun.inf.fbtmp", "desktop.ini.fbtmp", "folder.ico.fbtmp", "DevIcon.fil.fbtmp"] {
+                assert!(!stick.join(name).exists(), "{name} is left in the folder whose device icon was taken away");
+            }
+            #[cfg(windows)]
+            assert_eq!(failbrauwser::osprim::attrs_of(&stick) & failbrauwser::osprim::SYSTEM, 0, "the mark of ours stands on a folder its icon was taken off");
+        },
+    );
+}
+
+#[test]
 fn light_and_dark_follow_the_desktop() {
     run("appearance.fbt", |_| {});
 }

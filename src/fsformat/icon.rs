@@ -5,14 +5,17 @@
 //! the text files are written here, in the encodings this machine was measured to read (UTF-16 with a
 //! byte-order mark for `desktop.ini`, plain ASCII for `autorun.inf`) and with a section of our own that
 //! *Remove device icon* removes by. Removal never sweeps: it reads the two text files, and only what a
-//! marked file names is deleted, which is what keeps somebody else's `autorun.inf` intact.
+//! marked file names is deleted, which is what keeps somebody else's `autorun.inf` intact. The same reading
+//! answers what those files *say* — [`shown`] names the volume by the long name a marked file pins and gives
+//! it the picture that file names — so a volume is listed as its own files describe it (README: *Device
+//! icons*), and a file without the section of ours still says nothing at all.
 //!
 //! The attributes — the two bits a file is hidden and system by, and the root's own mark that makes the
 //! shell read `desktop.ini` at all — belong to this machine, so the tests that speak of them speak of it.
 
 use super::{NamePlan, Shape, art, ico, decimal_size, vendor_token};
 use crate::osprim;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The four files one device icon consists of.
 pub const AUTORUN: &str = "autorun.inf";
@@ -218,16 +221,21 @@ pub fn marked(text: &str) -> bool {
     keys(text, SECTION).iter().any(|(key, value)| key == MARK_KEY && value == "1")
 }
 
-/// The plain file names one marked text file points at. A name that walks out of the root is no name this
-/// removal obeys, whatever a damaged file says about it.
+/// The plain file name one key points at, read the way the shell's own readers spell it: without the index
+/// suffix behind a comma and without quotes around it. A name that is empty, walks out of the root, or hides
+/// behind a dot is no name this module obeys, whatever a damaged file says about it.
+fn named_here(value: &str) -> Option<String> {
+    let name = value.split(',').next().unwrap_or_default().trim().trim_matches('"').to_string();
+    (!name.is_empty() && !name.contains(['/', '\\']) && !name.starts_with('.')).then_some(name)
+}
+
+/// The plain file names one marked text file points at, in the order its keys name them.
 fn named_files(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for (section, key) in [("autorun", "icon"), (".shellclassinfo", "iconresource"), (SECTION, IMAGE_KEY)] {
         for (found, value) in keys(text, section) {
             if found != key { continue; }
-            let name = value.split(',').next().unwrap_or_default().trim().trim_matches('"').to_string();
-            if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') { continue; }
-            if !out.contains(&name) { out.push(name); }
+            if let Some(name) = named_here(&value).filter(|name| !out.contains(name)) { out.push(name); }
         }
     }
     out
@@ -392,6 +400,48 @@ pub fn remove(root: &Path) -> Result<Removed, Failure> {
     if unmark { osprim::set_attr_bits(root, 0, osprim::SYSTEM | osprim::HIDDEN); }
     let kept = [AUTORUN, DESKTOP, FOLDER_ICON, DEVICE_IMAGE].iter().filter(|n| !deleted.iter().any(|d| d == *n) && root.join(n).exists()).map(|n| (*n).to_string()).collect();
     Ok(Removed { deleted, kept, unmarked_root: unmark })
+}
+
+/// What the files of ours say a volume is called and shown as, read back from the root it is mounted on
+/// (README: *Device icons*). Both say nothing where the root holds no text file of ours: the volume is then
+/// named by what the machine calls it and drawn with the themed picture of its kind.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Shown {
+    /// The long name a marked `desktop.ini` pins, empty where no marked file pins one.
+    pub pinned: String,
+    /// The picture a marked file names, as a path under this root; nothing where none is named or the picture
+    /// named does not stand.
+    pub picture: Option<PathBuf>,
+}
+
+/// The picture one marked text file names, in the order worth asking: the image our own section names, which
+/// is the one this module wrote, then the folder's own picture the shell's key names. A picture that does not
+/// stand names nothing, so a file somebody took away costs a picture and not the listing.
+fn picture_named(text: &str, root: &Path) -> Option<PathBuf> {
+    for (section, key) in [(SECTION, IMAGE_KEY), (".shellclassinfo", "iconresource"), ("autorun", "icon")] {
+        let Some(name) = value(text, section, key).as_deref().and_then(named_here) else { continue };
+        let path = root.join(name);
+        if path.is_file() { return Some(path); }
+    }
+    None
+}
+
+/// What a volume's own files say about it. Only a text file carrying the section of ours is read at all: an
+/// `autorun.inf` or `desktop.ini` of somebody else keeps its bytes for *Remove device icon* to keep and lends
+/// this listing neither a name nor a picture, so a drive cannot rename itself into something it was never
+/// named by a file an archive or another program left in its root. The name pinned is asked of the file the
+/// shell renders a pinned name from, `desktop.ini`; the picture of the file named above.
+pub fn shown(root: &Path) -> Shown {
+    let mut out = Shown::default();
+    for name in [DESKTOP, AUTORUN] {
+        let Ok(text) = std::fs::read(root.join(name)).map(|bytes| decode(&bytes)) else { continue };
+        if !marked(&text) { continue; }
+        if out.pinned.is_empty() {
+            out.pinned = value(&text, ".shellclassinfo", "localizedresourcename").map(|pin| pin.trim().trim_matches('"').to_string()).unwrap_or_default();
+        }
+        if out.picture.is_none() { out.picture = picture_named(&text, root); }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -803,6 +853,77 @@ mod tests {
         assert!(matches!(pins, Pins::Nothing), "a name NTFS holds outright still wrote something: {pins:?}");
         for name in [AUTORUN, DESKTOP, FOLDER_ICON, DEVICE_IMAGE] {
             assert!(!here.path().join(name).exists(), "{name} stands where the act had nothing to write");
+        }
+    }
+
+    /// The listing is told its name and its picture by the pair of ours: the long name that pair pins, and the
+    /// image our own section names ahead of the one the shell's keys name (README: *Device icons*).
+    #[test]
+    fn the_pinned_name_and_the_picture_our_own_section_names_are_read_back_from_that_pair() {
+        let here = Root::fresh();
+        let long = "Samsung 64 GB Family Pictures";
+        create(here.path(), Shape::UsbStick, "Samsung Flash Drive", 64_160_400_896, &plan(FileSystem::ExFat, long)).expect("the four files");
+        let said = shown(here.path());
+        assert_eq!(said.pinned, long, "the listing is not told the long name the pair pins");
+        assert_eq!(said.picture, Some(here.path().join(DEVICE_IMAGE)), "the image our own section names is not the one read");
+    }
+
+    /// A pair of somebody else's — the same keys, none of them carrying the section of ours — names this
+    /// listing no name and lends it no picture, exactly as removal keeps every byte of such a file.
+    #[test]
+    fn a_pair_of_somebody_elses_names_no_name_and_lends_no_picture() {
+        let here = Root::fresh();
+        std::fs::write(here.path().join(DESKTOP), "[.ShellClassInfo]\r\nLocalizedResourceName=A name nobody earned\r\nIconResource=folder.ico,0\r\n").expect("a foreign desktop.ini");
+        std::fs::write(here.path().join(AUTORUN), "[autorun]\r\nicon=folder.ico\r\nlabel=EVIL\r\n").expect("a foreign autorun.inf");
+        std::fs::write(here.path().join(FOLDER_ICON), "whatever an archive left there").expect("a foreign picture");
+        let said = shown(here.path());
+        assert!(said.pinned.is_empty(), "a name out of a file without the section of ours would be shown: {:?}", said.pinned);
+        assert_eq!(said.picture, None, "a picture out of a file without the section of ours would be lent: {:?}", said.picture);
+    }
+
+    /// Of the pictures one marked file names, the one our own section names comes first; when somebody takes
+    /// that one away, the picture the shell's key of the same file names is what the listing draws.
+    #[test]
+    fn a_picture_somebody_took_away_leaves_the_other_one_that_marked_file_names() {
+        let here = Root::fresh();
+        create_stick(here.path());
+        assert_eq!(shown(here.path()).picture, Some(here.path().join(DEVICE_IMAGE)), "the create named no picture of ours");
+        std::fs::remove_file(here.path().join(DEVICE_IMAGE)).expect("the picture of ours taken away");
+        assert_eq!(shown(here.path()).picture, Some(here.path().join(FOLDER_ICON)), "the folder's own picture is not drawn once ours is gone");
+    }
+
+    /// A picture standing in the root is not drawn just because it stands: only a marked file naming it makes
+    /// it the volume's picture, which is what a naming act's pair — carrying no picture keys — leaves unset.
+    #[test]
+    fn a_picture_no_marked_file_names_is_not_lent_to_the_listing() {
+        let here = Root::fresh();
+        name_pins(here.path(), "Samsung Flash Drive", &plan(FileSystem::ExFat, "Samsung 64 GB Family Pictures")).expect("the pair of the pin");
+        std::fs::write(here.path().join(FOLDER_ICON), "a picture of somebody else's").expect("a picture that stands unclaimed");
+        let said = shown(here.path());
+        assert_eq!(said.pinned, "Samsung 64 GB Family Pictures", "the pin of a naming act is not read back");
+        assert_eq!(said.picture, None, "a picture no marked file named was drawn anyway");
+    }
+
+    /// The name and picture read back say nothing at all where the root holds nothing of ours, so the volume
+    /// keeps the name the machine gave it and the themed picture of its kind.
+    #[test]
+    fn a_root_holding_nothing_of_ours_is_read_as_saying_nothing() {
+        let here = Root::fresh();
+        assert_eq!(shown(here.path()), Shown::default(), "an empty root was read as naming something");
+    }
+
+    /// The picture this writer puts on a volume reaches pixels through the ICO loader this payload ships,
+    /// which is what lets a row draw it at all. Measured 2026-11-19 on both icon files of a real create: the
+    /// loader answers the **largest** of the twelve images, 256×256, and a row scales that down to the size it
+    /// draws at — so the picture a row gets is the sharpest one the file holds.
+    #[test]
+    fn the_picture_of_a_written_icon_reaches_pixels_through_the_loader_this_payload_ships() {
+        let here = Root::fresh();
+        create_stick(here.path());
+        for name in [DEVICE_IMAGE, FOLDER_ICON] {
+            let bytes = read(here.path(), name);
+            let picture = gtk::gdk_pixbuf::Pixbuf::from_read(std::io::Cursor::new(bytes)).unwrap_or_else(|e| panic!("{name} is not a picture the payload's loader reads: {e}"));
+            assert_eq!((picture.width(), picture.height()), (256, 256), "{name} was decoded to {}×{} instead of the largest of the twelve", picture.width(), picture.height());
         }
     }
 }

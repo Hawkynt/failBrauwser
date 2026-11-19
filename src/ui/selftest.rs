@@ -17,7 +17,7 @@
 //! `shortcut-menu <entry> : <item>` (`Show Hidden Entry/<name>` for the submenu),
 //! `shortcut-drag <entry> > <before entry>`, `shortcut-drop <folder> > <before entry>`,
 //! `window-snapshot <png>`, `wait-error <text>`, `wait-dialog <text>`,
-//! `dialog-button <dialog text> : <button>`, `dialog-entry <dialog text> = <text>`, `expect-dialog-entry <dialog text> = <text>`, `wait-no-dialog <text>`, `properties-choose-app <desktop id>`, `clipboard-text <text>`, `batch-set <field> = <value>`, `dialog-set <dialog> : <field> = <value>`, `expect-dialog-label <dialog> : <text>`, `network-add-server`, `expect-batch-preview <a -> b | …>`, `expect-batch-status <text>`, `properties-button <label>`, `wait-properties-text <text>`, `properties-set <field> = <value>`, `expect-properties-button <label> = none|off|on`, `expect-format-button = none|off|on`, `format-set <field> = <value>`, `format-accept`, `expect-format-text <text>`, `expect-no-format-text <text>`, `icon-set <field> = <value>`, `expect-icon-text <text>`, `expect-icon-button = none|off|on`, `icon-accept`,
+//! `dialog-button <dialog text> : <button>`, `dialog-entry <dialog text> = <text>`, `expect-dialog-entry <dialog text> = <text>`, `wait-no-dialog <text>`, `properties-choose-app <desktop id>`, `clipboard-text <text>`, `batch-set <field> = <value>`, `dialog-set <dialog> : <field> = <value>`, `expect-dialog-label <dialog> : <text>`, `network-add-server`, `expect-batch-preview <a -> b | …>`, `expect-batch-status <text>`, `properties-button <label>`, `wait-properties-text <text>`, `properties-set <field> = <value>`, `expect-properties-button <label> = none|off|on`, `expect-format-button = none|off|on`, `format-set <field> = <value>`, `format-accept`, `expect-format-text <text>`, `expect-no-format-text <text>`, `icon-set <field> = <value>`, `expect-icon-text <text>`, `expect-icon-button = none|off|on`, `icon-accept`, `expect-drive-picture <title> : <file name>|none`,
 //! `expect-default-app <content type> = <desktop id>`, `fake-phone <name> = <folder>`,
 //! `wait-drive-text <title> : <text>`, `wait-no-drive-text <title> : <text>`,
 //! `drive-button <title> : <row text> : <button>`, `drives-menu <title> : <item>`, `expect-no-format-text <text>`, `expect-tabs <a | b>`, `expect-title <text>`,
@@ -1481,6 +1481,28 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             let (title, text) = arg.split_once(" : ").ok_or("usage: wait-no-drive-text <title> : <text>")?;
             let (title, text) = (title.trim().to_string(), text.trim().to_string());
             wait(r, move |r| Ok(!super::drives::row_texts(&r.window.current_pane(), &title).iter().any(|t| t.contains(&text))));
+        }
+        "expect-drive-picture" => {
+            // expect-drive-picture <title> : <file name>|none — the picture this volume names for itself: the
+            // image its own marked files point at, and whether those bytes reach pixels at all (README:
+            // *Device icons*). `none` is the answer for a volume that names none, which draws the themed icon.
+            let (title, want) = arg.split_once(" : ").ok_or("usage: expect-drive-picture <title> : <file name>|none")?;
+            let title = title.trim();
+            let v = super::drives::shown_volumes(&w.current_pane()).into_iter().find(|v| v.title() == title).ok_or(format!("no drive {title:?}"))?;
+            match want.trim() {
+                "none" => if super::icons::volume_picture(&v, gtk::IconSize::Dialog).is_some() {
+                    return Err(format!("{title} draws a picture of its own where its files name none"));
+                },
+                file => {
+                    let named = v.picture_file.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    if named != file {
+                        return Err(format!("{title} names {named:?} as its picture, not {file:?}"));
+                    }
+                    if super::icons::volume_picture(&v, gtk::IconSize::Dialog).is_none() {
+                        return Err(format!("the picture {file:?} of {title} does not reach pixels"));
+                    }
+                }
+            }
         }
         "drive-button" => {
             // drive-button <title> : <text in the row> : <button>

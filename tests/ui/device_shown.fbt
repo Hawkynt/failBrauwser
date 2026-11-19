@@ -1,0 +1,34 @@
+# A device is shown by what its own files name (README: *Device icons*): the four files this program writes
+# into a volume's root carry a long name that the file system there cannot hold, and the picture of the shape
+# the icon was drawn for. The listing reads both back — and reads neither out of a file that carries no
+# marker of ours.
+# The stick of this run's own: its folder already holds those four files, written by this program's own writer
+# before the scenario starts, pinned against a file system whose own label holds eleven characters.
+fake-stick Samsung = $T/stick
+fake-stick Plain = $T/plain
+action win.drives
+# Where the volume names no folder — an unmounted stick has none — the machine's own answer stands: the label
+# it carries and the themed icon of its kind, and no reading of a folder that is not there.
+wait-drive Samsung
+expect-drive-picture Samsung : none
+# Mounting is what gives the volume a folder to read. From there the name pinned in the two text files is the
+# name the volume is listed by, ahead of its label, and the picture the marked file names is what the row draws.
+side-drive-click Samsung : Not mounted — click to mount
+wait-location $T/stick
+action win.drives
+wait-drive Samsung 64 GB Family Pictures
+expect-drive-picture Samsung 64 GB Family Pictures : DevIcon.fil
+# The side panel's own name for it is the same answer, because it is the volume's name and not a widget's.
+wait-side-drive Samsung 64 GB Family Pictures : $T/stick
+# A stick of the same run whose folder holds nothing of ours keeps the name the machine gave it and the themed
+# picture of its kind: nothing is read into it.
+wait-drive Plain
+expect-drive-picture Plain : none
+# *Remove device icon* takes the four away through the row menu, and the listing answers the volume's own label
+# and the themed icon again — and leaves the folder holding nothing of ours, the mark of ours on it included.
+drives-menu Samsung 64 GB Family Pictures : Remove device icon
+wait-dialog taken away from
+dialog-button taken away from : Close
+wait-drive Samsung
+expect-drive-picture Samsung : none
+wait-side-drive Samsung : $T/stick

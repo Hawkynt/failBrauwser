@@ -193,7 +193,7 @@ fn add_dirs(dirs: Vec<PathBuf>, at: usize) -> bool {
 fn drive_row(v: &Volume, usage: Option<&Usage>) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    let image = gtk::Image::from_gicon(&themed(&v.icon_names()), gtk::IconSize::LargeToolbar);
+    let image = super::icons::volume_image(v, gtk::IconSize::LargeToolbar);
     image.style_context().add_class("sidebar-icon");
     image.set_valign(gtk::Align::Center);
     let lines = gtk::Box::new(gtk::Orientation::Vertical, 1);

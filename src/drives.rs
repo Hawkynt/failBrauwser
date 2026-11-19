@@ -10,6 +10,9 @@ pub struct Volume {
     /// `/dev/sda1`
     pub device: String,
     pub label: String,
+    /// The long name this volume's own files pin (README: *Device icons*): empty where they pin none, and the
+    /// name this volume is listed by where they do. `src\fsformat::icon::shown` reads it back.
+    pub pinned_name: String,
     /// ext4, vfat, ntfs, crypto_LUKS, …
     pub fs_type: String,
     pub size: u64,
@@ -71,6 +74,9 @@ pub struct Volume {
     /// (`src\fsformat`), narrowed by what this machine answers and by the volume's own size and kind.
     /// Empty where a volume is refused outright or where the machine says nothing about its formats.
     pub supported_file_systems: Vec<String>,
+    /// The picture this volume names for itself: the image file its own marked files point at, in its root
+    /// (README: *Device icons*). Nothing where they name none, so the themed picture of its kind is drawn.
+    pub picture_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -87,9 +93,14 @@ impl Usage {
 }
 
 impl Volume {
-    /// What to call it: label, else the folder it is mounted on (unless that is just a
-    /// stand-in under `/run/media`), else drive model plus size, else device.
+    /// What to call it: the long name its own files pin, else the label, else the folder it is mounted on
+    /// (unless that is just a stand-in under `/run/media`), else drive model plus size, else device.
     pub fn title(&self) -> String {
+        // The volume's own statement about its name comes before anything the machine or a mount point calls
+        // it, which is the whole point of pinning one (README: *Device icons*).
+        if !self.pinned_name.is_empty() {
+            return self.pinned_name.clone();
+        }
         if self.is_device() {
             return if self.drive_name.is_empty() { "Phone".into() } else { self.drive_name.clone() };
         }
@@ -460,6 +471,10 @@ pub fn parse_udisks(reply: &glib::Variant) -> Vec<Volume> {
             // *Formatting a volume*, recorded as unverified in docs\TOOL-STARTS.md).
             supported_file_systems: Vec::new(),
             network: false,
+            // What a volume's own files say about it is read of the mounted folder, not of UDisks2, so it is
+            // filled in where the listing gathers the volumes (README: *Device icons*).
+            pinned_name: String::new(),
+            picture_file: None,
         });
     }
     sort_volumes(&mut out);
@@ -824,5 +839,22 @@ mod tests {
         assert!(u.total > 0 && u.used <= u.total);
         assert!((0.0..=1.0).contains(&u.fraction()));
         assert!(usage(Path::new("/definitely/not/mounted")).is_none());
+    }
+
+    /// A volume whose own files pin a long name is listed by that name, ahead of the label the file system
+    /// carries, the folder it is mounted on and the image file a mounted image is called by (README:
+    /// *Device icons*).
+    #[test]
+    fn a_pinned_name_is_the_name_a_volume_is_listed_by() {
+        let pin = "Samsung 64 GB Family Pictures";
+        for (what, mut v) in [
+            ("the label it carries", Volume { label: "Samsung 64".into(), ..Default::default() }),
+            ("the folder it is mounted on", Volume { mount_points: vec![PathBuf::from("/mnt/samsung-stick")], ..Default::default() }),
+            ("the image file it is called by", Volume { backing_file: Some(PathBuf::from("/images/stick.img")), ..Default::default() }),
+        ] {
+            assert_ne!(v.title(), pin, "{what} alone already reads as the pinned name, so the test would say nothing");
+            v.pinned_name = pin.into();
+            assert_eq!(v.title(), pin, "the volume is still named by {what} and not by the name its own files pin");
+        }
     }
 }
