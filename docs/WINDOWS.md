@@ -207,7 +207,10 @@ and the new program started. The *build from source* channel is Linux-only there
   four files of a device icon where the volume refuses the write, all run this program's own file again
   with the verb `runas` (`ShellExecuteExW`) and the parameters `--rename-volume …` / `--format …` /
   `--device-icon …` / `--remove-device-icon …`, each told by `--outcome <path>` which file to write its
-  answer into; the window waits for that run and reads the file back. The two device-icon verbs ask only
+  answer into; the window waits for that run and reads the file back. A format whose volume name holds a
+  space names that name to the privileged run as `--volume-name <name>` instead of as the tool's `/V:`
+  switch, which this build's tool refuses (measured, README), and the run writes it once the format has
+  worked — one prompt either way, and the format command itself keeps to switches. The two device-icon verbs ask only
   once the write itself answers that the rights are what is missing, so a volume this user may write to is
   settled with no prompt at all. Cancelling the consent dialog is a no-op and leaves nothing running, and
   the run is started hidden, since it has nothing to show beyond the consent dialog itself. The Linux twin

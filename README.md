@@ -837,7 +837,7 @@ things shortly, and the difference is bridged rather than lost:
 | File system | What its own label holds | Where a longer name still survives |
 |---|---|---|
 | FAT, FAT32 | 11 characters, upper case, without `+ , ; = [ ] " * ? \ / : < > |` | pinned in `autorun.inf` and in `desktop.ini` |
-| exFAT | 15 characters | pinned in `autorun.inf` and in `desktop.ini` |
+| exFAT | 11 characters, though its own field would hold 15 | pinned in `autorun.inf` and in `desktop.ini` |
 | NTFS, ReFS, UDF | 32 characters | pinned in `autorun.inf` and in `desktop.ini` |
 
 The volume's own label is a **short variant** of the name: the characters that file system forbids are
@@ -848,6 +848,13 @@ files — and the volume is still *called* `Samsung 64 GB` wherever the shell re
 that nothing can carry (only forbidden characters, or nothing left after shortening) is refused with
 the reason, and where the machine answers differently from this table its own words are shown. Only
 the files this feature wrote itself are ever rewritten or removed.
+
+The exFAT row reads **11** because that is what this machine honours. Measured on 2026-11-19 on the 64 GB
+stick with the same call this window uses: an eleven-character name was written and read back, and the
+twelfth character of a name was refused by Windows itself with win32 154, *the entered volume label exceeds
+the limit of the target file system* — while the volume was in fact exFAT, whose own label field would hold
+fifteen. The promise follows the machine, so a `Samsung 64 GB` on exFAT is seen to write `Samsung 64` and to
+pin the name it was given.
 
 **Formatting a volume:** *Format…* on the drive's row menu and on its properties window. The
 dropdown lists the file systems this machine offers for *that* volume, and on Windows the machine
@@ -865,7 +872,7 @@ that offer is in this program's own order rather than the order the machine answ
 
 | Option | FAT / FAT32 | exFAT | NTFS | ReFS | UDF |
 |---|---|---|---|---|---|
-| volume name | `/V:` | `/V:` | `/V:` | `/V:` | `/V:` |
+| volume name | `/V:` † | `/V:` † | `/V:` † | `/V:` † | `/V:` † |
 | allocation unit (cluster size) | `/A:` | `/A:` | `/A:` | `/A:` | — |
 | quick instead of full | `/Q` | `/Q` | `/Q` | `/Q` | `/Q` |
 | overwrite the whole volume first | `/P:` | `/P:` | `/P:` | `/P:` | `/P:` |
@@ -883,6 +890,19 @@ that offer is in this program's own order rather than the order the machine answ
 | UDF revision | — | — | — | — | `/R:` |
 | duplicate UDF metadata | — | — | — | — | `/D` |
 | device icon (see *Device icons*) | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+The † on the name row says that the tool's switch carries the name **only where the tool can take it**,
+which was measured on 2026-11-19 by handing `format` a name on a letter that holds no volume, so the answer
+came from its own parameter check and no volume was reached: a `/V:` value holding a space is refused
+outright — `Unzulässiger Parameter`, exit 4, one space or several, leading or trailing — while a value
+without one gets as far as the drive lookup. A `/` inside the value is refused as a switch of its own
+(`/V:A/B` answers *invalid parameter* for `/B`), and a `"` is refused outright; both are characters the name
+plan above already forbids, so what is left over is the space, and a name holding one is never handed to the
+tool. The format command then carries no `/V:` at all, and the same privileged run writes that name with the
+machine's own label call once the format has worked, so the one elevation still covers both halves and the
+answer names them separately: the tool's own words, and *the volume's name is now …*. Over there the same
+shape holds — `mkfs.<type>` is asked alone and the file system's own label program writes the name after it —
+named here and never run on this machine.
 
 Every switch, every value list and every "only for this file system" above is measured from that
 tool's own usage text on this build (2026-11-18, German locale — the switch names and numbers are the
