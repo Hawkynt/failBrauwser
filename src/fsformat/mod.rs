@@ -85,14 +85,18 @@ impl FileSystem {
         }
     }
 
-    /// How many characters a label of this file system may hold. FAT's 11 and NTFS' 32 are what the
-    /// drivers have always taken; exFAT's 15 and UDF's 32 are the file systems' own documented
-    /// fields. None of them was answered back here (`docs\WINDOWS.md` says so), which is why a name
-    /// over the limit is shortened by `name_plan` instead of being refused outright.
+    /// How many characters a label of this file system may hold. FAT's 11 is what its drivers have always
+    /// taken and exFAT's 11 is what this Windows answers for it (see the row below); NTFS' 32, ReFS' 32 and
+    /// UDF's 32 are the file systems' own documented fields, of which only NTFS' has been answered back on
+    /// this machine (`docs\WINDOWS.md` names which). A name over the limit is shortened by `name_plan`
+    /// rather than refused, and where the machine itself answers, its words are shown.
     pub fn label_limit(self) -> usize {
         match self {
             FileSystem::Fat | FileSystem::Fat32 => 11,
-            FileSystem::ExFat => 15,
+            // Measured here, not read off the file system: eleven characters are written and a twelfth is
+            // refused by Windows (win32 154, “the entered volume label exceeds the limit of the target file
+            // system”), although exFAT's own field would hold fifteen. README carries both facts.
+            FileSystem::ExFat => 11,
             FileSystem::Ntfs | FileSystem::ReFs | FileSystem::Udf => 32,
         }
     }
@@ -482,6 +486,30 @@ pub fn name_plan(fs: FileSystem, name: &str) -> Result<NamePlan, String> {
     Ok(NamePlan { label: label.clone(), called: called.to_string(), pinned: label != called })
 }
 
+/// Whether this machine's format tool takes this label on its `/V:` switch. Measured on 2026-11-19 by
+/// handing the tool a name on a letter that holds no volume, so the answer came from its own parameter
+/// check: a value holding a space is refused (`invalid parameter`, exit 4) whether the space is leading,
+/// trailing, single or several, while a value without one reaches the drive lookup. A `/` inside the value
+/// is answered as a switch of its own and a `"` is refused outright — both are characters `name_plan`
+/// forbids already, so the space is the whole of what is left to settle here.
+pub fn tool_takes_name(label: &str) -> bool {
+    !label.contains(' ')
+}
+
+/// The name of the chosen set, settled by the plan exactly as the command would have carried it, and
+/// refused by the same `name_plan` for a name no file system can hold.
+fn chosen_plan(fs: FileSystem, chosen: &[(FormatOption, Value)]) -> Result<Option<NamePlan>, String> {
+    let Some(Value::Text(name)) = chosen.iter().find(|(option, _)| *option == FormatOption::VolumeName).map(|(_, value)| value) else { return Ok(None) };
+    name_plan(fs, name).map(Some)
+}
+
+/// The label the privileged run has to write itself, because the tool's switch cannot carry it. `None` for
+/// a name the switch does take, so nothing is ever named twice: the command carries a name or the run is
+/// told it, never both.
+pub fn carried_name(fs: FileSystem, chosen: &[(FormatOption, Value)]) -> Result<Option<String>, String> {
+    Ok(chosen_plan(fs, chosen)?.filter(|plan| !plan.label.is_empty() && !tool_takes_name(&plan.label)).map(|plan| plan.label))
+}
+
 /// Cut a name down to what the file system holds, pulling a cut that would land inside a word back to
 /// the word in front of it. A single word longer than the limit keeps its own head, which is the last
 /// answer rather than the first one: it is still the same brand or the same word, cut short.
@@ -531,7 +559,10 @@ pub fn format_argv(target: Target, fs: FileSystem, chosen: &[(FormatOption, Valu
             (Values::Toggle | Values::InvertedToggle, Value::On | Value::Off) => {}
             (Values::Label, Value::Text(text)) => {
                 let plan = name_plan(fs, text)?;
-                if !plan.label.is_empty() { argv.push(format!("{switch}{}", plan.label)); }
+                // The plan is settled here even for a label the switch cannot carry, so a name nothing can
+                // hold is refused before a command exists; the label itself then goes over as the act's own
+                // argument (`carried_name`) and the tool is started with switches and nothing else.
+                if !plan.label.is_empty() && tool_takes_name(&plan.label) { argv.push(format!("{switch}{}", plan.label)); }
             }
             (Values::Sizes(list), Value::Bytes(unit)) if list.contains(unit) => argv.push(format!("{switch}{unit}")),
             (Values::Count(lo, hi), Value::Count(count)) if *count >= lo && *count <= hi => argv.push(format!("{switch}{count}")),
@@ -806,7 +837,9 @@ mod tests {
         assert!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::ReFs, &[(AllocationUnit, Bytes(512))]).unwrap_err().contains("512"));
     }
 
-    /// The command of the authorized verification step, in full.
+    /// The command of the authorized verification step, in full. The name is missing from it on purpose: this
+    /// name holds a space, which the tool's `/V:` refuses, so the command stays with switches and the run
+    /// writes that name itself once the format worked.
     #[test]
     fn the_command_names_the_volume_the_file_system_then_the_options_in_order() {
         let argv = format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::Ntfs, &[
@@ -817,7 +850,7 @@ mod tests {
             (ShortNames, State("disable")),
             (RepairLogs, Off),
         ]).unwrap();
-        assert_eq!(argv, vec!["F:", "/FS:NTFS", "/V:Samsung 64 GB", "/A:8192", "/Q", "/LogSize:0", "/S:disable", "/NoRepairLogs", "/Y"]);
+        assert_eq!(argv, vec!["F:", "/FS:NTFS", "/A:8192", "/Q", "/LogSize:0", "/S:disable", "/NoRepairLogs", "/Y"]);
     }
 
     /// Both directions of the two switches that ask for the off state.
@@ -908,7 +941,7 @@ mod tests {
     fn the_label_limits_are_the_file_systems_own() {
         assert_eq!(FileSystem::Fat.label_limit(), 11);
         assert_eq!(FileSystem::Fat32.label_limit(), 11);
-        assert_eq!(FileSystem::ExFat.label_limit(), 15);
+        assert_eq!(FileSystem::ExFat.label_limit(), 11, "this Windows writes eleven and refuses a twelfth (win32 154), whatever exFAT's own field could hold");
         assert_eq!([FileSystem::Ntfs.label_limit(), FileSystem::ReFs.label_limit(), FileSystem::Udf.label_limit()], [32, 32, 32]);
     }
 
@@ -918,7 +951,7 @@ mod tests {
         let fat = name_plan(FileSystem::Fat, "Samsung 64 GB").unwrap();
         assert_eq!((fat.label.as_str(), fat.called.as_str(), fat.pinned), ("SAMSUNG 64", "Samsung 64 GB", true));
         let exfat = name_plan(FileSystem::ExFat, "Samsung 64 GB").unwrap();
-        assert_eq!((exfat.label.as_str(), exfat.called.as_str(), exfat.pinned), ("Samsung 64 GB", "Samsung 64 GB", false));
+        assert_eq!((exfat.label.as_str(), exfat.called.as_str(), exfat.pinned), ("Samsung 64", "Samsung 64 GB", true), "eleven is what this Windows honours on exFAT, so the long name is pinned");
         let ntfs = name_plan(FileSystem::Ntfs, "Samsung Flash Drive 64 GB stick here").unwrap();
         assert_eq!((ntfs.label.as_str(), ntfs.pinned), ("Samsung Flash Drive 64 GB stick", true), "31 of the 32 characters, cut between words");
         assert_eq!(name_plan(FileSystem::Ntfs, "").unwrap(), NamePlan { label: String::new(), called: String::new(), pinned: false });
@@ -929,7 +962,7 @@ mod tests {
     fn the_short_label_is_cut_at_a_word_boundary() {
         assert_eq!(name_plan(FileSystem::Fat, "SanDisk Ultra USB 3.0").unwrap().label, "SANDISK");
         assert_eq!(name_plan(FileSystem::Fat, "ABCDEFGHIJKLMNOP").unwrap().label, "ABCDEFGHIJK", "one word longer than the limit keeps its head");
-        assert_eq!(name_plan(FileSystem::ExFat, "NVMe PC811 SK hynix 1024GB").unwrap().label, "NVMe PC811 SK", "15 characters of NTFS-limited names break between words");
+        assert_eq!(name_plan(FileSystem::ExFat, "NVMe PC811 SK hynix 1024GB").unwrap().label, "NVMe PC811", "the eleven characters this Windows honours break between words");
         assert_eq!(name_plan(FileSystem::Ntfs, "  spaced    out  ").unwrap().label, "spaced out");
         assert!(!name_plan(FileSystem::Fat, "SAMSUNG 64").unwrap().pinned, "what already fits is typed as it stands");
     }
@@ -946,11 +979,25 @@ mod tests {
     }
 
     /// The command carries the plan's label, so the volume's own name can never exceed what the file
-    /// system holds while the window believes it wrote the long one.
+    /// system holds while the window believes it wrote the long one — and it carries it only where the
+    /// tool's own switch can take it, which the measured refusal settles for a name holding a space.
     #[test]
-    fn the_command_carries_the_plans_label_not_the_name_as_typed() {
-        assert_eq!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::Fat, &[(VolumeName, Text("Samsung 64 GB".into()))]).unwrap(), vec!["F:", "/FS:FAT", "/V:SAMSUNG 64", "/Y"]);
+    fn the_command_carries_the_plans_label_only_where_the_tool_takes_it() {
+        assert_eq!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::Fat, &[(VolumeName, Text("64gb-usb".into()))]).unwrap(), vec!["F:", "/FS:FAT", "/V:64GB-USB", "/Y"], "a label the plan settles without a space still rides the tool's switch");
+        assert_eq!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::Fat, &[(VolumeName, Text("Samsung 64 GB".into()))]).unwrap(), vec!["F:", "/FS:FAT", "/Y"], "the plan's SAMSUNG 64 holds a space, which this build's tool refuses as a parameter");
         assert_eq!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::ExFat, &[(VolumeName, Text("   ".into()))]).unwrap(), vec!["F:", "/FS:exFAT", "/Y"]);
+    }
+
+    /// The name the tool's switch cannot take is carried to the privileged run instead, settled by the plan
+    /// exactly as the command would have carried it, and a name the switch does take is never carried too.
+    #[test]
+    fn a_name_the_tool_refuses_is_carried_to_the_privileged_run() {
+        let spaced = [(VolumeName, Text("Samsung 64 GB".into()))];
+        assert_eq!(carried_name(FileSystem::Ntfs, &spaced).unwrap().as_deref(), Some("Samsung 64 GB"), "NTFS holds 32 characters, so the name goes over as typed");
+        assert_eq!(carried_name(FileSystem::Fat, &spaced).unwrap().as_deref(), Some("SAMSUNG 64"), "the plan's short variant names the volume while the long one is pinned by the icon files");
+        assert_eq!(carried_name(FileSystem::Ntfs, &[(VolumeName, Text("Samsung-64-GB".into()))]).unwrap(), None, "a name the switch takes is not carried as well");
+        assert_eq!(carried_name(FileSystem::Ntfs, &[]).unwrap(), None);
+        assert!(carried_name(FileSystem::Ntfs, &[(VolumeName, Text("a/b".into()))]).unwrap_err().contains('/'), "a name no plan can carry is refused before anything is asked for");
     }
 
     #[test]
@@ -996,7 +1043,8 @@ mod tests {
     fn the_proposed_name_is_the_brand_and_the_size() {
         assert_eq!(proposed_name("Samsung Flash Drive", 64_160_400_896), "Samsung 64 GB");
         assert_eq!(proposed_name("", 64_160_400_896), "64 GB");
-        assert!(!name_plan(FileSystem::ExFat, &proposed_name("Samsung Flash Drive", 64_160_400_896)).unwrap().pinned, "the name the window proposes is one exFAT holds as it stands");
+        let proposed = name_plan(FileSystem::ExFat, &proposed_name("Samsung Flash Drive", 64_160_400_896)).unwrap();
+        assert_eq!((proposed.label.as_str(), proposed.pinned), ("Samsung 64", true), "this Windows holds eleven on exFAT, so the proposed name is shortened and pinned");
     }
 
     #[test]

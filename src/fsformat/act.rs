@@ -10,7 +10,7 @@
 //! was half-written must not be cut short because some window of ours closed (docs\TOOL-STARTS.md), so
 //! that one start goes through no funnel at all — only through the hidden-window rule.
 
-use super::{FormatOption, FileSystem, NamePlan, Shape, Target, Value, accepted, format_argv, holds_our_own_image, icon, name_plan, refusal, tool_file_systems};
+use super::{FormatOption, FileSystem, NamePlan, Shape, Target, Value, accepted, carried_name, format_argv, holds_our_own_image, icon, name_plan, refusal, tool_file_systems};
 use crate::drives::Volume;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +22,10 @@ pub const FORMAT: &str = "--format";
 pub const ICON: &str = "--device-icon";
 /// …and to take them away again.
 pub const UNICON: &str = "--remove-device-icon";
+/// The flag that names, to a format run, the volume name its tool's own switch refuses to take — the one
+/// argument of the format act that is no switch, because `/V:` answers *invalid parameter* for a value
+/// holding a space (measured; README). The run writes that name itself once the format has worked.
+pub const NAME: &str = "--volume-name";
 /// The flag naming the file the privileged run writes its answer into.
 pub const OUTCOME: &str = "--outcome";
 /// The seam `src\links\helper.rs` already uses: it names another program to start this one through, so a
@@ -51,7 +55,7 @@ pub fn format(volume: &Volume, fs: FileSystem, chosen: &[(FormatOption, Value)])
     #[cfg(windows)]
     let arguments = {
         let Some(target) = Target::of(volume) else { return Err("This volume has no drive letter to format.".into()) };
-        format_argv(target, fs, chosen)?
+        carry_name(format_argv(target, fs, chosen)?, fs, chosen)?
     };
     #[cfg(not(windows))]
     let arguments = {
@@ -61,7 +65,7 @@ pub fn format(volume: &Volume, fs: FileSystem, chosen: &[(FormatOption, Value)])
             // option that would need one is refused rather than quietly dropped.
             return Err("the options of the format table belong to this system's format tool; only the file system itself is carried over there".into());
         }
-        linux_format_arguments(volume, fs)?
+        carry_name(linux_format_arguments(volume, fs)?, fs, chosen)?
     };
     let answer = elevated(FORMAT, &arguments)?;
     Ok(format_words(volume, fs.word(), chosen, &answer))
@@ -79,6 +83,16 @@ fn format_words(volume: &Volume, fs: &str, chosen: &[(FormatOption, Value)], too
         Ok(words) => format!("{tool}\n{words}"),
         Err(why) => format!("{tool}\nThe volume was formatted; its device icon was not written: {why}"),
     }
+}
+
+/// The command of a format with the one name its tool's own switch cannot carry. The switches of the table
+/// stay as they were built, and a name the tool would refuse is handed over as [`NAME`] instead, so the tool
+/// is never started with an argument it rejects and the same privileged run writes that name afterwards.
+fn carry_name(arguments: Vec<String>, fs: FileSystem, chosen: &[(FormatOption, Value)]) -> Result<Vec<String>, String> {
+    let Some(label) = carried_name(fs, chosen)? else { return Ok(arguments) };
+    let mut carried = arguments;
+    carried.extend([NAME.into(), label]);
+    Ok(carried)
 }
 
 /// The command the Linux half runs: the `mkfs.<type>` program of the chosen file system and the volume it
@@ -308,24 +322,65 @@ fn write_label_as_admin(arguments: &[String]) -> Result<String, String> {
 /// arguments travelled through the machine's command line: a list naming no drive letter, or carrying
 /// anything that is no switch, never reaches the tool.
 fn run_format(arguments: &[String]) -> Result<String, String> {
+    let (command, named) = take_carried_name(arguments)?;
     #[cfg(windows)]
     {
-        if arguments.first().map(String::as_str).filter(|target| is_drive_letter(target)).is_none() {
-            return Err(format!("The format command must name the volume by its drive letter, and not {:?}.", arguments.first().map(String::as_str).unwrap_or_default()));
+        if command.first().map(String::as_str).filter(|target| is_drive_letter(target)).is_none() {
+            return Err(format!("The format command must name the volume by its drive letter, and not {:?}.", command.first().map(String::as_str).unwrap_or_default()));
         }
-        for switch in arguments.iter().skip(1) {
+        for switch in command.iter().skip(1) {
             if !switch.starts_with('/') || switch.contains('"') || switch.chars().any(char::is_control) { return Err(format!("{switch:?} is not a switch of the format table.")); }
         }
         // Asked by its own file name: a start without an extension gets `.exe` appended, and the tool on
         // this build is `format.com` (measured; docs\TOOL-STARTS.md).
-        format_tool("format.com", arguments)
+        let words = format_tool("format.com", &command)?;
+        let root = format!("{}:\\", command[0][..1].to_uppercase());
+        name_written_after(words, named.as_deref(), |label| crate::win::storage::set_label(&root, label).map(|()| format!("The volume's name is now {label}.")).map_err(|code| format!("Windows refused the new name (win32 {code}).")))
     }
     #[cfg(not(windows))]
     {
-        let Some(program) = arguments.first() else { return Err("No format command was given.".into()) };
-        if !program.starts_with("mkfs.") || arguments.iter().skip(1).any(|argument| argument.starts_with('-')) { return Err(format!("{program:?} is not a format program this feature names.")); }
-        run_tool_as_read(arguments)
+        let Some(program) = command.first() else { return Err("No format command was given.".into()) };
+        if !program.starts_with("mkfs.") || command.iter().skip(1).any(|argument| argument.starts_with('-')) { return Err(format!("{program:?} is not a format program this feature names.")); }
+        let words = run_tool_as_read(&command)?;
+        let device = command.get(1).map(String::as_str).unwrap_or_default();
+        name_written_after(words, named.as_deref(), |label| {
+            let fs = fs_of_mkfs(program).ok_or_else(|| format!("{program:?} names no file system whose name tool this feature knows."))?;
+            label_arguments(fs, device, label).ok_or_else(|| format!("no program is named that writes the name of a {} volume there.", fs.word())).and_then(|tool| run_tool_as_read(&tool))
+        })
     }
+}
+
+/// The list the privileged run was handed, split into the command the tool is started with and the name it
+/// writes itself. `--volume-name` is the one argument of a format that names no switch, and it is checked
+/// here again because the arguments travelled through the machine's command line: no name after the flag, a
+/// name that reads as a switch, one holding a control character, or the flag more than once, and the whole
+/// list is refused before the tool exists.
+fn take_carried_name(arguments: &[String]) -> Result<(Vec<String>, Option<String>), String> {
+    let Some(at) = arguments.iter().position(|argument| argument == NAME) else { return Ok((arguments.to_vec(), None)) };
+    let label = arguments.get(at + 1).ok_or_else(|| format!("{NAME} was named without a name after it."))?;
+    if label.is_empty() { return Err(format!("{NAME} was named without a name after it.")); }
+    if label.starts_with(['-', '/']) { return Err(format!("what {NAME} names reads as a switch: {label:?}.")); }
+    if label.chars().any(char::is_control) { return Err(format!("the name {NAME} carries holds a control character: {label:?}.")); }
+    if arguments.iter().skip(at + 1).any(|argument| argument == NAME) { return Err(format!("{NAME} was named more than once.")); }
+    Ok((arguments.iter().enumerate().filter(|(n, _)| *n != at && *n != at + 1).map(|(_, argument)| argument.clone()).collect(), Some(label.clone())))
+}
+
+/// The name the run writes for itself, once the format answered success: this machine's own label call here,
+/// the file system's own label program over there. A volume that was formatted and then refused its name is
+/// told as the half-act it is, since the format itself did happen and the name is the smaller of the two.
+fn name_written_after(words: String, named: Option<&str>, write: impl FnOnce(&str) -> Result<String, String>) -> Result<String, String> {
+    let Some(label) = named else { return Ok(words) };
+    match write(label) {
+        Ok(answer) => Ok(format!("{words}\n{answer}")),
+        Err(why) => Ok(format!("{words}\nThe volume was formatted; its name was not written: {why}")),
+    }
+}
+
+/// The file system whose `mkfs` program this is, which is the only trace of it in the command over there.
+/// Never read on this machine.
+#[cfg_attr(windows, allow(dead_code))]
+fn fs_of_mkfs(program: &str) -> Option<FileSystem> {
+    FileSystem::all().iter().copied().find(|fs| mkfs_program(*fs) == Some(program))
 }
 
 /// Whether the text is a bare drive letter with its colon and nothing else, as the format command names
@@ -515,6 +570,33 @@ mod tests {
         // is the only place a format of this feature is measured, on the stick it names.
         #[cfg(not(windows))]
         assert!(run_format(&["mkfs.exfat".into(), "-f".into()]).unwrap_err().contains("is not a format program"), "an option over there is refused, not run");
+    }
+
+    /// A name the tool's own switch refuses (measured: any name holding a space) travels to the privileged
+    /// run as the act's own argument, so the command the tool is started with keeps to switches.
+    #[test]
+    fn a_name_the_tool_refuses_travels_as_the_runs_own_argument() {
+        let target = Target { letter: 'f', size: 64_160_400_896 };
+        let spaced = [(VolumeName, Text("Samsung 64 GB".into())), (AllocationUnit, Bytes(2048)), (Quick, On)];
+        assert_eq!(carry_name(format_argv(target, FileSystem::Ntfs, &spaced).unwrap(), FileSystem::Ntfs, &spaced).unwrap(), vec!["F:", "/FS:NTFS", "/A:2048", "/Q", "/Y", NAME, "Samsung 64 GB"]);
+        let plain = [(VolumeName, Text("Samsung-64-GB".into()))];
+        assert_eq!(carry_name(format_argv(target, FileSystem::Ntfs, &plain).unwrap(), FileSystem::Ntfs, &plain).unwrap(), vec!["F:", "/FS:NTFS", "/V:Samsung-64-GB", "/Y"], "a name the switch takes is never carried as well");
+    }
+
+    /// The privileged run takes that name out of the list before the tool is started and hands it back by
+    /// itself: the list it runs is only ever the table's switches, and a name that cannot travel as an
+    /// argument — nothing there, a switch, another flag, a control character, the flag twice — is refused.
+    #[test]
+    fn the_privileged_run_splits_the_carried_name_from_the_command() {
+        let (command, named) = take_carried_name(&["F:".into(), "/FS:NTFS".into(), "/Q".into(), NAME.into(), "Samsung 64 GB".into()]).unwrap();
+        assert_eq!(command, vec!["F:", "/FS:NTFS", "/Q"], "the list the tool is started with holds switches only");
+        assert_eq!(named.as_deref(), Some("Samsung 64 GB"));
+        let (alone, none) = take_carried_name(&["F:".into(), "/Y".into()]).unwrap();
+        assert_eq!(alone, vec!["F:", "/Y"]);
+        assert_eq!(none.as_deref(), None, "a command of switches alone carries nothing");
+        for bad in [vec!["F:".into(), NAME.into()], vec!["F:".into(), NAME.into(), "/FS:NTFS".into()], vec!["F:".into(), NAME.into(), "-x".into()], vec!["F:".into(), NAME.into(), "a\u{7}b".into()], vec!["F:".into(), NAME.into(), "one".into(), NAME.into(), "two".into()]] {
+            assert!(take_carried_name(&bad).is_err(), "{bad:?} is no name to carry");
+        }
     }
 
     #[test]
