@@ -399,9 +399,9 @@ impl Window {
         // A right click on the files while the menu is open (it has the pointer then) opens
         // the menu of the folder there, as on Windows: with no empty space left to click,
         // that is how Show Hidden Files, Paste or Create Folder are reached.
-        let (weak, pw) = (self.weak.borrow().clone(), Rc::downgrade(pane));
+        let pw = Rc::downgrade(pane);
         menu.connect_button_press_event(move |menu, ev| {
-            let (Some(w), Some(p)) = (weak.upgrade(), pw.upgrade()) else { return glib::Propagation::Proceed };
+            let Some(p) = pw.upgrade() else { return glib::Propagation::Proceed };
             if ev.event_type() != gdk::EventType::ButtonPress || ev.button() != 3 {
                 return glib::Propagation::Proceed;
             }
@@ -420,9 +420,12 @@ impl Window {
             if !on_files {
                 return glib::Propagation::Proceed;
             }
+            // The folder's menu opens on the release, as every right-click menu of the files
+            // does: opened on the press, GTK would take the button for held and keep the
+            // pointer until it had been over the new menu.
             menu.popdown();
-            let ev = ev.clone();
-            glib::idle_add_local_once(move || w.show_folder_menu(&p, Some(&ev)));
+            p.unselect_all();
+            p.open_menu_on_release(ev);
             glib::Propagation::Stop
         });
         let weak = self.weak.borrow().clone();
@@ -447,13 +450,6 @@ impl Window {
                 menu.popup_at_widget(&anchor, gdk::Gravity::Center, gdk::Gravity::NorthWest, None);
             }
         }
-    }
-
-    /// The right-click menu of the folder shown (nothing selected any more, as after a click
-    /// into empty space).
-    pub fn show_folder_menu(&self, pane: &Rc<Pane>, ev: Option<&gdk::EventButton>) {
-        pane.unselect_all();
-        self.show_context_menu(pane, ev);
     }
 
     /// The right-click menu of the files while it is open, and whether it is the folder's

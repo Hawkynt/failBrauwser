@@ -1723,6 +1723,12 @@ impl Pane {
         self.right_press.borrow().as_ref().map(|e| e.position())
     }
 
+    /// A right press that reached the files past an open menu: its menu opens on the release,
+    /// like that of a right press on the files themselves.
+    pub fn open_menu_on_release(&self, press: &gdk::EventButton) {
+        *self.right_press.borrow_mut() = Some(press.clone());
+    }
+
     /// The right button let go: the menu of a press that did not become a drag opens.
     fn right_released(&self, ev: &gdk::EventButton) -> glib::Propagation {
         if ev.button() != 3 {
