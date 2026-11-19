@@ -619,3 +619,29 @@ consent dialogs were answered, one per privileged run; nothing ran as a service 
   **the shell's environment, not the parent's `PATH`**, so the scratch driver needed the GTK DLLs beside its
   own file before the elevated half could load. That is a fact about a scratch tree next to a sysroot; the
   installed image always sits next to its DLLs, which is why the product never meets it.
+
+The same day's gate, and the install this feature had to reach. `cargo test --release --lib` answers **396
+passed, 3 failed, 1 ignored** — the three failures are the Linux-only assertions named above and were the
+same three before this feature began. The guard targets, run on their own because `--lib` failing stops cargo
+before the targets behind it: `source_rules` 7, `win_startup` 2, `helper_lifetime` 3, `git_repo` 2, all green.
+The four drives scenarios serial — `drives_page`, `drives_in_the_side_panel`, `unmounted_drives_in_the_side_panel`,
+`renaming_and_formatting_a_volume` — **4 passed in 72.87 s**. `cargo clippy --release --lib --bins` names
+**170** warnings; the two `constant is never used` warnings this feature's own module had left are gone, and
+`src\fsformat` now answers none at all: the eleven standing in `src\ui\drives.rs` and `src\ui\selftest.rs` are
+blamed by `git blame` to commits of 2026-09-29 through 2026-11-14, none of them to this feature.
+
+`winpack\package.ps1 -SkipBuild` and `winpack\install.ps1` put that build where the user actually starts the
+program: the per-user prefix, which the Start Menu entry names. Read back after the install — the stamp
+`1.0.0 20261119T083900` beside the same id in `payload-id.txt`, `bin\failbrauwser.exe` 15 069 184 bytes, 47 DLLs
+beside it, a loader cache of 105 lines rewritten for that folder, and the shortcut's target and icon both naming
+that image. The proof it carries the feature is the scenario of the feature driven against **that installed
+image** rather than against a build folder: `tests\ui\drive_format.fbt` through `tests\ui\harness.ps1` answers
+**SELFTEST OK** — the typed Label row and its Rename button, the cut-at-a-word name and the refused one, the
+format window's file-system dropdown and per-system option rows, the typed-letter gate, the device-icon box,
+the act's own answer for a stand-in naming no drive, and the two device-icon verbs writing the four files into
+a mounted image and taking them back out. The first such run failed at its 97th line — `select backup.ntfs:
+selected 0 of 1` — and the reason was mine, not the image's: `harness.ps1` builds no fixture, and the cargo
+wrapper creates `$T/inside` and `$T/backup.ntfs` before the scenario starts; with the fixture in place the same
+script answered green, and the run's own *Remove device icon* step left the mounted folder holding nothing of
+ours; the process census after that run named no `failbrauwser`, no `fb-archive` and no `format.com` left
+behind.
