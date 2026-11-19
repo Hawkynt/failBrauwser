@@ -64,8 +64,8 @@ pub fn rename(volume: &Volume, name: &str) -> Result<Named, String> {
 /// The words one naming act answers with: the name the volume carries, and what became of the pair that
 /// carries the longer one. Nothing is appended where there was nothing to say.
 fn named_words(label: &str, pin: &str) -> String {
-    if pin.is_empty() { return format!("The volume's name is now {label}."); }
-    format!("The volume's name is now {label}. {pin}.")
+    let head = if label.trim().is_empty() { "The volume carries no name of its own".to_string() } else { format!("The volume's name is now {label}") };
+    if pin.is_empty() { format!("{head}.") } else { format!("{head}. {pin}.") }
 }
 
 /// The pair of text files a name needs, at the folder this volume names: written, refreshed, taken back, or
@@ -78,7 +78,6 @@ fn name_pins_at(volume: &Volume, plan: &NamePlan) -> String {
 /// same way: the folder it may write into (empty where the volume names none), the model the device
 /// description is drawn from, and the plan the name settled to.
 fn pin_sentence(folder: &str, model: &str, plan: &NamePlan) -> String {
-    if plan.called.trim().is_empty() { return String::new(); }
     if folder.trim().is_empty() {
         return if plan.pinned { "The volume names no folder to write the pin into, so nothing carries the longer name".into() } else { String::new() };
     }
@@ -86,7 +85,7 @@ fn pin_sentence(folder: &str, model: &str, plan: &NamePlan) -> String {
     match icon::name_pins(Path::new(folder), model, plan) {
         Ok(icon::Pins::Stood { .. }) if plan.pinned => format!("The longer name it is called stands pinned in {both}"),
         Ok(icon::Pins::Stood { .. }) => format!("{both} were refreshed to the name the volume carries"),
-        Ok(icon::Pins::Taken { .. }) => format!("{both} of ours were taken back, since this name fits the file system"),
+        Ok(icon::Pins::Taken { .. }) => format!("{both} of ours were taken back, since nothing of ours pins a longer name any more"),
         Ok(icon::Pins::Nothing) => String::new(),
         Err(why) => format!("The name it is called could not be pinned: {why}"),
     }
@@ -852,6 +851,15 @@ mod tests {
             assert!(here.path().join(name).is_file(), "{name} of the pin did not stand");
         }
         assert!(!here.path().join(icon::DEVICE_IMAGE).is_file(), "a naming act drew a picture of its own");
+
+        // The same volume named to nothing: the pair goes with the name it carried, and the root's mark comes
+        // back off with it (README: *Renaming a volume*).
+        let cleared = name_plan(FileSystem::Fat32, "").expect("an empty name settles to a plan of nothing");
+        let words = name_pins_at(&v, &cleared);
+        assert!(words.contains("taken back"), "the pair of a name that went away stands on: {words}");
+        for name in [icon::AUTORUN, icon::DESKTOP] {
+            assert!(!here.path().join(name).is_file(), "{name} outlived the name it pinned");
+        }
         crate::osprim::set_attr_bits(here.path(), 0, crate::osprim::SYSTEM | crate::osprim::HIDDEN);
 
         let nameless = Volume { device: "/dev/fake-Photos".into(), fs_type: "FAT32".into(), ..Default::default() };
@@ -909,6 +917,15 @@ mod tests {
         assert!(!ok && text.contains("win32"), "the machine's own refusal is not in the answer: {text}");
         assert!(!root.exists(), "the refused run left a pin of its own behind: {}", root.display());
         let _ = std::fs::remove_file(&outcome);
+    }
+
+    /// The words a naming act answers with: the name the volume carries, and nothing invented for a volume
+    /// named to nothing.
+    #[test]
+    fn the_words_of_a_naming_act_name_the_volume_s_own_or_none() {
+        assert_eq!(named_words("FAMILY", ""), "The volume's name is now FAMILY.");
+        assert_eq!(named_words("FAMILY", "The longer name it is called stands pinned in autorun.inf and desktop.ini"), "The volume's name is now FAMILY. The longer name it is called stands pinned in autorun.inf and desktop.ini.");
+        assert_eq!(named_words("", ""), "The volume carries no name of its own.");
     }
 
     /// A privileged icon run that was given no folder is refused with the outcome file written, so the window
