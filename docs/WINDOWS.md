@@ -627,7 +627,10 @@ consent dialogs were answered, one per privileged run; nothing ran as a service 
 The same day's gate, and the install this feature had to reach. `cargo test --release --lib` answers **396
 passed, 3 failed, 1 ignored** — the three failures are the Linux-only assertions named above and were the
 same three before this feature began. The guard targets, run on their own because `--lib` failing stops cargo
-before the targets behind it: `source_rules` 7, `win_startup` 2, `helper_lifetime` 3, `git_repo` 2, all green.
+before the targets behind it: `git_repo` 7, `helper_lifetime` 2, `source_rules` 3 and `win_startup` 2, all
+green — the counts first written there in the order the targets were named belonged to other targets, cargo's
+output having been read without naming which binary answered what, and the same four read green again in the
+run named below, where each count is named with its target.
 The four drives scenarios serial — `drives_page`, `drives_in_the_side_panel`, `unmounted_drives_in_the_side_panel`,
 `renaming_and_formatting_a_volume` — **4 passed in 72.87 s**. `cargo clippy --release --lib --bins` names
 **170** warnings; the two `constant is never used` warnings this feature's own module had left are gone, and
@@ -649,3 +652,48 @@ wrapper creates `$T/inside` and `$T/backup.ntfs` before the scenario starts; wit
 script answered green, and the run's own *Remove device icon* step left the mounted folder holding nothing of
 ours; the process census after that run named no `failbrauwser`, no `fb-archive` and no `format.com` left
 behind.
+
+Measured on that same volume on 2026-11-19 for **the pin of a name the label cannot hold** (README: *Renaming a
+volume*), after the user had formatted the stick again. The rename went through the feature's own act — the same
+scratch driver outside the repository, calling `fsformat::act::rename` against the real `F:` — and the volume was
+put back by a second rename, so no format was needed for this step.
+
+- A rename to the typed `Samsung 64 GB`: the act answered *the volume's name is now Samsung 64. The longer name it
+  is called stands pinned in autorun.inf and desktop.ini.*, `Get-Volume` read the label back as `Samsung 64`, and
+  the root held exactly two entries more than before — `autorun.inf` 180 bytes and `desktop.ini` 206 bytes, both
+  `Hidden, System`. No `folder.ico` and no `DevIcon.fil` were written, and neither file names an image: the
+  `icon=` line, the `IconResource=` key and the `Image=` key of the marker appear in no file this act wrote,
+  exactly as the rule states. `autorun.inf` carries `label=Samsung 64` beside `ModelName=Samsung 64 GB` and
+  `Manufacturer=Samsung`, the last drawn from the model the machine reports; `desktop.ini` carries
+  `LocalizedResourceName=Samsung 64 GB` in UTF-16 with its mark.
+- What that pair **does for the drive on this Windows is nothing**, and the reason is measured rather than
+  assumed: while the pair stood, this Windows named the item `Samsung 64 (F:)` both in the *this PC* enumeration
+  and as the name of the browsed folder — the volume's own label, which is also what `Get-Volume` answers. The pin
+  needs the root's system attribute, measured 2026-11-18 on a plain folder, and **the root of this exFAT volume
+  takes no such attribute**: `SetFileAttributesW` refuses the write — the .NET wrapper words it *Ungültiger
+  Datei- oder Verzeichnisattributwert* — and `attrib +s +h F:\.` answers *file not found*. Whether a marked volume
+  root would show a pinned name therefore cannot be settled on this machine at all; what is settled is that an
+  unmarked root shows the label, and that the two files are written as the rule names them.
+- The **first such run wrote `RootMarked=1` into both files while the root read as plain `Directory`**, because
+  the code answered *the mark is absent, so the marking falls to us* instead of asking the machine whether the
+  write took. That is a claim about the volume which the volume contradicts, and a later removal of that pair
+  would have reported taking back a mark that never stood. The marker asks the machine now, and the same rename
+  re-run after that fix writes `RootMarked=0` in both files with every other word identical.
+- The taking back: a rename to nothing answered *the volume carries no name of its own. autorun.inf and
+  desktop.ini of ours were taken back, since nothing of ours pins a longer name any more*, and neither file stood
+  on the root afterwards. The volume then read as it had before the step: label empty per `Get-Volume`, exFAT,
+  capacity 64 157 253 632, free 64 156 598 272, its root holding only `System Volume Information`. One wording
+  trap belongs to this record: the enumeration of this feature answers the label of that unnamed volume as
+  `Removable Disk` — the name Windows shows — where `Get-Volume` answers empty, so a claim of *back to the name it
+  had* has to say which of those two answers it means.
+
+The gate of the same day, after the marker was fixed. `cargo test --release --lib` answers **406 passed, 3
+failed, 1 ignored** — the three same Linux-only assertions named above. `fsformat::` alone answers **96 passed,
+0 failed**. The four drives scenarios serial read **4 passed in 75.96 s**. `cargo clippy --release --lib --bins`
+names **170** warnings with `src\fsformat` carrying none of them, and a forced rebuild of `--bin failbrauwser`
+from the touched source names **no warning**, which is what `winpack\build.ps1` needs to get through its own
+`$ErrorActionPreference = 'Stop'`. Of the guard targets, run in one batch with `--no-fail-fast`: `git_repo` 7,
+`helper_lifetime` 2, `source_rules` 3 and `win_startup` 2, all green — after one assertion of `helper_lifetime`
+had failed in an earlier such batch and read green in the two runs after it, alone and in the same batch again.
+Why it failed there is not settled here; it is one of the two assertions that wait on a process this machine
+schedules, no scenario of this feature failed with it, and it is recorded rather than hidden.

@@ -860,7 +860,9 @@ text file an icon already wrote keeps its device description word for word, sinc
 device and not the volume's name; there the name is carried by `LocalizedResourceName=` of `desktop.ini`, which
 is the one file measured to render a name beyond a single-byte codepage. Where the volume names no folder to write into, the act says so
 instead of pinning nothing quietly, and where the rights are what is missing, the **one** privileged run of this
-program's own file writes the label and the pin together, so naming a volume never asks for consent twice.
+program's own file writes the label and the pin together, so naming a volume never asks for consent twice. What
+that pin is worth on a given system is a measured question, answered for this one under *Device icons*: this
+Windows names the drive by its own label while the pair of files stands on it.
 
 The exFAT row reads **11** because that is what this machine honours. Measured on 2026-11-19 on the 64 GB
 stick with the same call this window uses: an eleven-character name was written and read back, and the
@@ -1014,9 +1016,12 @@ on a file system whose own label holds 11 characters. How that second pin behave
 folder itself carries the system attribute** — with that attribute taken off, the folder's own name shows
 again — and of the three encodings tried, UTF-16 with a byte-order mark and the machine's own single-byte
 codepage show the name while UTF-8 shows what a single-byte reader makes of it (`Große` came back as
-`GroÃŸÃ¶e`), so `desktop.ini` is written in UTF-16 with that mark. What the pin does on a mounted volume is
-read back at the authorized format step, and a volume answering differently from a folder is what gets
-recorded there, not a promise. `autorun.inf` is a single-byte file, so every word it carries is plain
+`GroÃŸÃ¶e`), so `desktop.ini` is written in UTF-16 with that mark. What the pin does on a mounted volume was read
+back on one (2026-11-19), and a volume answers differently from a folder: the drive is named by its own label
+there — `Samsung 64 (F:)`, both where the drives are listed and as the browsed folder's name — while the pair of
+files stands, because the root of that exFAT volume takes no system attribute at all (the write itself is
+refused), and an unmarked root shows the label. So the pin holds the long name where the volume's own label
+cannot, and this Windows was measured not to read it for that drive. `autorun.inf` is a single-byte file, so every word it carries is plain
 ASCII: the shape's data name (`micro SD card`, `3.5 inch floppy`) and the brand the machine reported, since
 the shown label of a shape holds a `µ` and a `″` that a single-byte file cannot carry — and its `label=`
 line names the volume only where the short label the file system itself carries is plain ASCII, because a
@@ -1247,8 +1252,9 @@ such a script (see `src/ui/selftest.rs` for the commands).
   run side by side and stop at the one that opens, but the arithmetic belongs to the volume.
 - A device icon's four files are written as the systems ask for them, but this Windows gives the drive itself
   neither its picture nor its name from those files: measured on the stick, the drive answers the shell's own
-  generic drive icon and `ExtractIconExW` names none, and My Computer shows the volume's label. The icon and
-  the localized name are read when the volume is opened as a folder, which was not observed here.
+  generic drive icon and `ExtractIconExW` names none, and My Computer shows the volume's label — as does the
+  browsed folder itself while a pinned name stands there, because the root of that exFAT volume takes no system
+  attribute, and an unmarked root shows the label.
 - Edits to formats without in-place modification rebuild the archive.
 - Hybrid ISO images are read-only; Rock Ridge names longer than about 170 bytes are
   shortened when an ISO is rebuilt.
