@@ -396,36 +396,30 @@ impl Window {
         let menu = gtk::Menu::from_model(&model);
         super::menuicons::submenu_icons(&menu, &|text| super::vcs::icons::submenu_icon(text).or_else(|| super::menuicons::icon_for(text).map(|i| i.upcast())));
         menu.set_attach_widget(Some(&self.win));
-        // A right click on the files while the menu is open (it has the pointer then) opens
-        // the menu of the folder there, as on Windows: with no empty space left to click,
-        // that is how Show Hidden Files, Paste or Create Folder are reached.
-        let pw = Rc::downgrade(pane);
+        // A press while the menu is open closes it where it lands outside the menu, and a right
+        // press on the files opens the menu of the folder there, as on Windows: with no empty
+        // space left to click, that is how Show Hidden Files, Paste or Create Folder are reached.
+        // Where the press really is comes from the pointer (util::press_window): GTK hands this
+        // menu presses on the window below it as its own.
+        let (pw, main) = (Rc::downgrade(pane), self.win.downgrade());
         menu.connect_button_press_event(move |menu, ev| {
-            let Some(p) = pw.upgrade() else { return glib::Propagation::Proceed };
-            if ev.event_type() != gdk::EventType::ButtonPress || ev.button() != 3 {
+            let (Some(p), Some(main)) = (pw.upgrade(), main.upgrade()) else { return glib::Propagation::Proceed };
+            if ev.event_type() != gdk::EventType::ButtonPress {
                 return glib::Propagation::Proceed;
             }
-            // The press is on the files when it is in a window of the list or the icons.
-            let Some(mut at) = ev.window() else { return glib::Propagation::Proceed };
-            let views: Vec<gdk::Window> = [p.tree.upcast_ref::<gtk::Widget>(), p.icons.upcast_ref()].iter().filter_map(|v| v.window()).collect();
-            let on_files = loop {
-                if views.contains(&at) {
-                    break true;
-                }
-                match at.parent() {
-                    Some(parent) => at = parent,
-                    None => break false,
-                }
-            };
-            if !on_files {
+            let Some(at) = util::press_window(ev) else { return glib::Propagation::Proceed };
+            if !util::window_within(&at, &main) {
+                // On the menu itself.
                 return glib::Propagation::Proceed;
             }
-            // The folder's menu opens on the release, as every right-click menu of the files
-            // does: opened on the press, GTK would take the button for held and keep the
-            // pointer until it had been over the new menu.
+            let on_files = [p.tree.upcast_ref::<gtk::Widget>(), p.icons.upcast_ref()].iter().any(|v| v.is_visible() && util::window_within(&at, *v));
             menu.popdown();
-            p.unselect_all();
-            p.open_menu_on_release(ev);
+            if ev.button() == 3 && on_files {
+                // The folder's menu opens on the release, as every right-click menu of the
+                // files does.
+                p.unselect_all();
+                p.open_menu_on_release(ev);
+            }
             glib::Propagation::Stop
         });
         let weak = self.weak.borrow().clone();
@@ -440,6 +434,7 @@ impl Window {
         *self.context_menu.borrow_mut() = Some((menu.clone(), items.is_empty()));
         menu.show_all();
         match ev {
+            Some(ev) if std::env::var_os("FB_EXP").is_some_and(|v| v == "none") && ev.event_type() == gdk::EventType::ButtonRelease => menu.popup_at_pointer(None),
             Some(ev) => menu.popup_at_pointer(Some(ev)),
             None => {
                 let anchor: gtk::Widget = if pane.stack.visible_child_name().as_deref() == Some("icons") {

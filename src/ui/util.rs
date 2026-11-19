@@ -2,7 +2,7 @@
 
 use failbrauwser::fs::{FileEntry, Kind};
 use gtk::prelude::*;
-use gtk::{gio, glib};
+use gtk::{gdk, gio, glib};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -325,6 +325,41 @@ fn no_folder(f: &gio::File) -> bool {
 fn home_of(f: &gio::File) -> Option<PathBuf> {
     let mount = f.find_enclosing_mount(gio::Cancellable::NONE).ok()?;
     mount.default_location().path().filter(|p| Some(p) != mount.root().path().as_ref())
+}
+
+/// The window a press really happened in. A menu that opened while no button was held (the
+/// file menu opens on the right button's release, the drop menu after a drop) is handed by GTK
+/// on Wayland, where a keyboard is present, the presses on the window below it as its own, at
+/// that window's coordinates: a click on the files then looked like one on the menu, and nothing
+/// happened until the pointer had been over the menu. The pointer knows where it is.
+pub fn press_window(ev: &gdk::EventButton) -> Option<gdk::Window> {
+    ev.device().and_then(|d| d.window_at_position().0).or_else(|| ev.window())
+}
+
+/// Whether the window `at` is `widget`'s own or one inside it.
+pub fn window_within(at: &gdk::Window, widget: &impl IsA<gtk::Widget>) -> bool {
+    let Some(own) = widget.as_ref().window() else { return false };
+    let mut w = Some(at.clone());
+    while let Some(x) = w {
+        if x == own {
+            return true;
+        }
+        w = x.parent();
+    }
+    false
+}
+
+/// Closes `menu` on a press that really lands on `main` (see `press_window`).
+pub fn close_menu_on_presses_over(menu: &gtk::Menu, main: &impl IsA<gtk::Widget>) {
+    let main = main.as_ref().downgrade();
+    menu.connect_button_press_event(move |menu, ev| {
+        let over_main = main.upgrade().zip(press_window(ev)).is_some_and(|(m, at)| window_within(&at, &m));
+        if ev.event_type() == gdk::EventType::ButtonPress && over_main {
+            menu.popdown();
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
 }
 
 /// Asks for a line of text (new folder name, rename, …). `select_stem` pre-selects the name

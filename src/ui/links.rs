@@ -196,6 +196,10 @@ pub fn show_drop_menu(w: &Window, view: &gtk::Widget, x: i32, y: i32, sources: V
     let menu = gtk::Menu::from_model(&model);
     menu.insert_action_group("drop", Some(&group));
     menu.set_attach_widget(Some(view));
+    // It opens after the drop, with no button held: see util::press_window.
+    if let Some(top) = view.toplevel() {
+        super::util::close_menu_on_presses_over(&menu, &top);
+    }
     if let Some(win) = view.window() {
         let rect = gtk::gdk::Rectangle::new(x, y, 1, 1);
         menu.popup_at_rect(&win, &rect, gtk::gdk::Gravity::NorthWest, gtk::gdk::Gravity::NorthWest, None);
