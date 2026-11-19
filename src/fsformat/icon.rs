@@ -75,9 +75,44 @@ impl From<String> for Failure {
     }
 }
 
-/// The refusal of one named file: this machine's own words, and whether they mean the rights are missing.
-fn refused(name: &str, what: &str, e: std::io::Error) -> Failure {
-    Failure { text: format!("{name} {what}: {e}"), denied: e.kind() == std::io::ErrorKind::PermissionDenied }
+/// The machine's own answer for a name another program stands on: 32 and 33 on Windows (a sharing conflict,
+/// a lock violation) and 11 elsewhere (a resource that is temporarily unavailable).
+#[cfg(windows)]
+const HELD: [Option<i32>; 2] = [Some(32), Some(33)];
+#[cfg(not(windows))]
+const HELD: [Option<i32>; 1] = [Some(11)];
+
+/// The machine's own answer for a name whose rights refuse the write.
+#[cfg(windows)]
+const OUTSIDE: [Option<i32>; 1] = [Some(5)];
+#[cfg(not(windows))]
+const OUTSIDE: [Option<i32>; 2] = [Some(1), Some(13)];
+
+/// Whether another program stands at that name right now: an open that permits no sharing at all is answered
+/// by the machine's own sharing conflict for as long as any handle of another program holds the name.
+#[cfg(windows)]
+fn stands_held(path: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    matches!(std::fs::OpenOptions::new().read(true).share_mode(0).open(path), Err(e) if HELD.contains(&e.raw_os_error()))
+}
+
+/// Where this host cannot ask, the machine's own code is the only answer there is; recorded, never run here
+/// (docs/WINDOWS.md).
+#[cfg(not(windows))]
+fn stands_held(_: &Path) -> bool { false }
+
+/// The refusal of one named file: this machine's own words, told apart by the code behind them and, where that
+/// code is the one a held name shares with a name that lacks rights, by asking the machine whether a handle
+/// stands at the name. Only the rights answer sends the act to the administrator — a name another program
+/// holds open is no question of rights, and an elevated run cannot take that name away from whoever holds it
+/// (README: *Device icons*). Measured here: the move of a staged file onto a name held with no sharing at all
+/// answers access denied, the same code a read-only name answers, so the code alone would guess.
+fn refused(path: &Path, name: &str, what: &str, e: std::io::Error) -> Failure {
+    let code = e.raw_os_error();
+    let (hint, denied) = if HELD.contains(&code) || stands_held(path) { ("another program holds that name open", false) }
+        else if OUTSIDE.contains(&code) { ("this folder refuses the write", true) }
+        else { ("the machine answered so", false) };
+    Failure { text: format!("{name} {what}: {e} ({hint})"), denied }
 }
 
 /// The words of `autorun.inf` are plain ASCII, because that file is a single-byte one: the shown label of
@@ -212,17 +247,44 @@ fn mark_root(root: &Path) -> bool {
     stands
 }
 
+/// The name one of our files is staged under until its bytes stand: the file's own name with this behind it,
+/// which is also what tells a later removal what an act left half-written (README: *Device icons*).
+const STAGED: &str = ".fbtmp";
+
+/// One file of this feature, arriving in two moves: written under a name of ours, its length read back where it
+/// stands, its attributes put on it, and only then moved into the name the systems read. A slot therefore never
+/// holds a file of ours that was opened but not filled — not while the act runs and not after it was refused —
+/// and a name somebody else holds open is met at the move, where the machine answers instead of waiting.
 fn put(root: &Path, name: &str, bytes: &[u8], hidden: bool) -> Result<(), Failure> {
-    let path = root.join(name);
-    std::fs::write(&path, bytes).map_err(|e| refused(name, "could not be written", e))?;
-    osprim::set_attr_bits(&path, if hidden { osprim::HIDDEN | osprim::SYSTEM } else { osprim::HIDDEN }, 0);
+    let staged = root.join(format!("{name}{STAGED}"));
+    std::fs::write(&staged, bytes).map_err(|e| refused(&staged, name, "could not be staged", e))?;
+    let stood = std::fs::metadata(&staged).map(|meta| meta.len()).unwrap_or_default();
+    if stood != bytes.len() as u64 {
+        let _ = std::fs::remove_file(&staged);
+        return Err(Failure { text: format!("{name} would carry {} bytes and answers {stood} of them where it stands", bytes.len()), denied: false });
+    }
+    osprim::set_attr_bits(&staged, if hidden { osprim::HIDDEN | osprim::SYSTEM } else { osprim::HIDDEN }, 0);
+    if let Err(e) = std::fs::rename(&staged, root.join(name)) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(refused(&root.join(name), name, "could not be put in place", e));
+    }
     Ok(())
 }
 
-fn undo(root: &Path, written: &mut Vec<String>) {
+/// Taking back what an act wrote, newest first, and naming what would not go away: a file still standing after
+/// its own act was refused is told to the person looking at the volume rather than dropped quietly.
+fn undo(root: &Path, written: &mut Vec<String>) -> Vec<String> {
+    let mut left = Vec::new();
     while let Some(name) = written.pop() {
-        let _ = std::fs::remove_file(root.join(name));
+        if let Err(e) = std::fs::remove_file(root.join(&name)) { left.push(format!("{name} ({e})")); }
     }
+    left
+}
+
+/// The words of a refusal that could not undo everything of its own.
+fn with_residue(why: Failure, left: &[String]) -> Failure {
+    if left.is_empty() { return why; }
+    Failure { text: format!("{} — and these of ours stand there still: {}", why.text, left.join(", ")), denied: why.denied }
 }
 
 /// The four files of one device icon, in one act: what cannot be written is not written at all, and what
@@ -240,9 +302,8 @@ pub fn create(root: &Path, shape: Shape, model: &str, bytes: u64, name: &NamePla
         (AUTORUN, autorun.into_bytes(), true),
         (DESKTOP, desktop_bytes(&desktop), true),
     ] {
-        if let Err(e) = put(root, name, &body, hidden) {
-            undo(root, &mut written);
-            return Err(e);
+        if let Err(why) = put(root, name, &body, hidden) {
+            return Err(with_residue(why, &undo(root, &mut written)));
         }
         written.push(name.to_string());
     }
@@ -280,8 +341,7 @@ pub fn name_pins(root: &Path, model: &str, name: &NamePlan) -> Result<Pins, Fail
     let mut written: Vec<String> = Vec::new();
     for (file, body) in bodies {
         if let Err(why) = put(root, file, &body, true) {
-            undo(root, &mut written);
-            return Err(why);
+            return Err(with_residue(why, &undo(root, &mut written)));
         }
         written.push(file.to_string());
     }
@@ -312,13 +372,22 @@ pub fn remove(root: &Path) -> Result<Removed, Failure> {
     for name in named {
         let path = root.join(&name);
         if path.is_file() {
-            std::fs::remove_file(&path).map_err(|e| refused(name.as_str(), "could not be taken away", e))?;
+            std::fs::remove_file(&path).map_err(|e| refused(&path, name.as_str(), "could not be taken away", e))?;
             deleted.push(name);
         }
     }
     for name in marked_files {
-        std::fs::remove_file(root.join(&name)).map_err(|e| refused(&name, "could not be taken away", e))?;
+        let path = root.join(&name);
+        std::fs::remove_file(&path).map_err(|e| refused(&path, &name, "could not be taken away", e))?;
         deleted.push(name);
+    }
+    // A staged name of ours is ours by its name alone, so it goes with the four even where no marked text file
+    // stands to name it: that is what an act interrupted between its two moves leaves behind.
+    for name in [AUTORUN, DESKTOP, FOLDER_ICON, DEVICE_IMAGE] {
+        let staged = root.join(format!("{name}{STAGED}"));
+        if !staged.is_file() { continue; }
+        std::fs::remove_file(&staged).map_err(|e| refused(&staged, &format!("{name}{STAGED}"), "could not be taken away", e))?;
+        deleted.push(format!("{name}{STAGED}"));
     }
     if unmark { osprim::set_attr_bits(root, 0, osprim::SYSTEM | osprim::HIDDEN); }
     let kept = [AUTORUN, DESKTOP, FOLDER_ICON, DEVICE_IMAGE].iter().filter(|n| !deleted.iter().any(|d| d == *n) && root.join(n).exists()).map(|n| (*n).to_string()).collect();
@@ -490,6 +559,95 @@ mod tests {
             let bits = osprim::SYSTEM | osprim::HIDDEN;
             assert!(mark_root(here.path()), "a plain folder takes the mark, and the marker has to name it");
             assert_eq!(osprim::attrs_of(here.path()) & bits, 0, "asking the machine left a mark of its own behind, which a failed act could never take back");
+        }
+    }
+
+    /// A name another program holds open is refused **by that name**: the rights are not what is missing, so the
+    /// act never asks the administrator for a write elevation cannot win, and nothing of ours stands afterwards —
+    /// least of all an opened-but-unfilled file at the name the act could not fill (README: *Device icons*).
+    #[cfg(windows)]
+    #[test]
+    fn a_name_another_program_holds_open_is_refused_by_that_name_and_leaves_nothing_of_ours() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let here = Root::fresh();
+        let theirs: &[u8] = b"a file of another program";
+        let held = here.path().join(DEVICE_IMAGE);
+        std::fs::write(&held, theirs).expect("the name the icon wants is somebody else's already");
+        let guard = std::fs::OpenOptions::new().write(true).share_mode(0).open(&held).expect("a name held with no sharing at all");
+        let Err(why) = create(here.path(), Shape::UsbStick, "SanDisk Ultra", 64_160_400_896, &plan(FileSystem::Fat32, "64 Gigabyte USB")) else {
+            panic!("a name held by another program was written over anyway");
+        };
+        assert!(why.text.contains(DEVICE_IMAGE), "the refusal does not name the name that is held: {why}");
+        assert!(!why.denied, "a held-open name reads as a question of rights, which would send the act to the administrator for nothing: {why}");
+        assert!(why.text.contains("another program holds that name open"), "the refusal does not say what stood in the way: {why}");
+        assert_eq!(guard.metadata().expect("the held name as it stands").len(), theirs.len() as u64, "the act left a file of its own where a held name stood");
+        drop(guard);
+        assert_eq!(std::fs::read(&held).expect("the held name after the refusal").len(), theirs.len(), "the act changed the bytes of the file it could not write");
+        for name in [AUTORUN, DESKTOP, FOLDER_ICON] {
+            assert!(!here.path().join(name).exists(), "{name} stands after an act that could not fill it");
+        }
+        for name in [AUTORUN, DESKTOP, FOLDER_ICON, DEVICE_IMAGE] {
+            assert!(!here.path().join(format!("{name}{STAGED}")).exists(), "{name}{STAGED} is left of an act that was refused");
+        }
+    }
+
+    /// Measured on this Windows: putting a staged file of ours onto a name another program holds with no
+    /// sharing at all is answered by the very code a name whose rights refuse the write answers, and that code's
+    /// kind is the one that says the rights are missing. The code alone would therefore call a held name a
+    /// rights problem and ask the administrator for a write no elevation can win — which is why the refusal
+    /// asks the machine whether a handle stands at the name (README: *Device icons*).
+    #[cfg(windows)]
+    #[test]
+    fn a_held_name_and_a_name_without_rights_are_answered_by_the_same_code_so_the_refusal_has_to_ask() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let here = Root::fresh();
+        let held = here.path().join(DEVICE_IMAGE);
+        std::fs::write(&held, b"a file of another program").expect("the name the icon wants is somebody else's already");
+        let guard = std::fs::OpenOptions::new().write(true).share_mode(0).open(&held).expect("a name held with no sharing at all");
+        let staged = here.path().join(format!("{DEVICE_IMAGE}{STAGED}"));
+        std::fs::write(&staged, b"bytes of ours").expect("the staged file of ours");
+        let moved = std::fs::rename(&staged, &held).expect_err("a held name is not taken over by a move").raw_os_error();
+        assert!(stands_held(&held), "the open that permits no sharing does not see the handle standing at the name");
+        drop(guard);
+        let _ = std::fs::remove_file(&staged);
+        let readonly = here.path().join(FOLDER_ICON);
+        std::fs::write(&readonly, b"").expect("a name that refuses the write by its own attribute");
+        osprim::set_attrs(&readonly, osprim::READONLY);
+        let written = std::fs::write(&readonly, b"bytes of ours").expect_err("a read-only name refuses the write").raw_os_error();
+        assert_eq!(moved, written, "this Windows answers a held name ({moved:?}) and a name without rights ({written:?}) by two different codes, so the refusal could trust the code alone");
+        assert!(!stands_held(&readonly), "the open that permits no sharing calls a name that stands unheld a held one");
+    }
+
+    /// A staged name of ours is ours by its name alone, so *Remove device icon* takes it with the four — that is
+    /// what an act interrupted between its two moves leaves behind.
+    #[test]
+    fn a_staged_name_of_ours_goes_with_the_four_when_the_icon_is_taken_away() {
+        let here = Root::fresh();
+        create_stick(here.path());
+        let staged = format!("{AUTORUN}{STAGED}");
+        std::fs::write(here.path().join(&staged), b"half a file of ours").expect("a staged name left behind");
+        let gone = remove(here.path()).expect("the removal");
+        assert_eq!(gone.deleted.len(), 5, "the removal took {:?} instead of the four files and the staged one", gone.deleted);
+        assert!(gone.deleted.iter().any(|name| *name == staged), "the staged name of ours was left for the next act: {:?}", gone.deleted);
+        assert!(!here.path().join(staged).exists(), "the staged name stands after its own removal");
+    }
+
+    /// The other order of the two conditions (README: *Renaming a volume*, *Device icons*): the pair a naming act
+    /// wrote alone gains the keys of a picture when an icon is written on that volume, so one pair ends up
+    /// naming the picture, the device and the name whoever came first.
+    #[test]
+    fn the_pair_a_naming_act_wrote_gains_the_picture_keys_when_an_icon_is_written_on_it() {
+        let here = Root::fresh();
+        let long = "64 Gigabyte USB";
+        name_pins(here.path(), "SanDisk Ultra", &plan(FileSystem::Fat32, long)).expect("the pair of a naming act");
+        create_stick(here.path());
+        let autorun = text(here.path(), AUTORUN);
+        assert!(autorun.contains("icon=folder.ico,0") && autorun.contains("Image=DevIcon.fil"), "the picture an icon wrote is unnamed in a pair that stood there: {autorun}");
+        assert!(autorun.contains("ModelName=USB stick 64 GB") && autorun.contains("Manufacturer=SanDisk"), "the device description did not arrive with the icon: {autorun}");
+        let desktop = text(here.path(), DESKTOP);
+        assert!(desktop.contains("IconResource=folder.ico,0"), "the folder's own picture went unnamed: {desktop}");
+        for name in [FOLDER_ICON, DEVICE_IMAGE] {
+            assert!(here.path().join(name).is_file(), "{name} is not there after the icon of that shape");
         }
     }
 
