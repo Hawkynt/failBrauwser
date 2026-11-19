@@ -1226,6 +1226,10 @@ such a script (see `src/ui/selftest.rs` for the commands).
   SHA-512 volume, five to thirteen for one written with Whirlpool, BLAKE2s or Streebog, and about
   half a minute to refuse a wrong passphrase, which has to try every candidate first. The candidates
   run side by side and stop at the one that opens, but the arithmetic belongs to the volume.
+- A device icon's four files are written as the systems ask for them, but this Windows gives the drive itself
+  neither its picture nor its name from those files: measured on the stick, the drive answers the shell's own
+  generic drive icon and `ExtractIconExW` names none, and My Computer shows the volume's label. The icon and
+  the localized name are read when the volume is opened as a folder, which was not observed here.
 - Edits to formats without in-place modification rebuild the archive.
 - Hybrid ISO images are read-only; Rock Ridge names longer than about 170 bytes are
   shortened when an ISO is rebuilt.

@@ -267,7 +267,7 @@ and the new program started. The *build from source* channel is Linux-only there
   2026-11-18 on an un-elevated instance: `IOCTL_DISK_GET_LENGTH_INFO` on the volume handle `\\.\A:` and
   on `\\.\F:` answers `ERROR_ACCESS_DENIED` (win32 5), and the same query on `\\.\PhysicalDrive1` answers
   the same, while `GetDiskFreeSpaceExW` answers a total for every lettered volume here (A:
-  483 183 554 560, C: 482 226 466 816, D: 536 868 814 848, F: 64 143 622 144 and the two mapped shares
+  483 183 554 560, C: 482 226 466 816, D: 536 868 814 848, F: 64 157 253 632 and the two mapped shares
   15 698 757 677 056). So the drives page takes that total as the volume's size — which is what the
   format page narrows its file systems by — and the *device's* length, which the device icon prints, is
   read only where the machine allows it; where it is refused the shape's evidence line says which of the
@@ -577,3 +577,45 @@ read 3, 2 and 2. `cargo clippy --release --bins --lib` names
 touched, blamed to commits of 2026-09-29 through 2026-11-14; the two findings that did stand on lines of this
 feature's own code (a collapsible `if` in `src\ui\format.rs`, three needless borrows in
 `src\ui\selftest.rs`) were cleared rather than left, and the older ones were left where they are.
+
+Measured on 2026-11-19 by the **authorized format of the 64 GB stick** (README: *Formatting a volume*,
+*Device icons*), which is the step the plan named and this section had been waiting for. The acts were run
+through the feature's own code — a scratch driver outside the repository, deleted afterwards, calling
+`fsformat::act::format` and routing the privileged half through `act::is_act` exactly as `src\main.rs` does —
+against the real volume Windows names `F:` and enumerates as bus `usb`, model `Samsung Flash Drive`. Three
+consent dialogs were answered, one per privileged run; nothing ran as a service and no instance was left.
+
+- A format to **NTFS with a 2048-byte allocation unit**, quick, and the name `Samsung 64 GB`: the tool's own
+  words came back, then *the volume's name is now Samsung 64 GB.* Read back: `FileSystem NTFS`,
+  `fsutil fsinfo ntfsInfo` answering **2048 bytes per cluster** (so the unit the table settled reached the
+  machine and the machine wrote it), `FileSystemLabel Samsung 64 GB`, capacity 64 160 399 360. The name holds
+  a space, so it travelled as `--volume-name` and the format command held switches alone — which is the route
+  the measured `/V:` refusal forced.
+- A format to **exFAT at 8192 bytes with the name `FBTEST`**, which the tool's own switch can carry: read back
+  `Label FBTEST`, `BlockSize 8192`, capacity 64 127 893 504. So both name routes are proven on a real volume,
+  the tool writing one and this feature writing the other.
+- The **four files of a device icon** on that fresh volume: `autorun.inf` 223 B and `desktop.ini` 298 B both
+  `Hidden, System, Archive`, and `DevIcon.fil` with `folder.ico` at 408 966 B each `Hidden, Archive`. The
+  container answers **twelve images — 256, 48, 32 and 16 px in 32-, 8- and 4-bit** — exactly the rule the
+  README states. `autorun.inf` names `ModelName=USB stick 64 GB` and `Manufacturer=Samsung`, drawn from what
+  the machine says, and `desktop.ini` carries `LocalizedResourceName` and `IconResource`.
+- What **this Windows honours of those four hooks is nothing for the drive itself**: `SHGetFileInfoW` answers
+  the generic drive icon for `F:\` (index 217 in the shell's image list, while the volume's own `folder.ico`
+  holds index 218 in the same list), `ExtractIconExW(F:\)` answers **0** icons, and My Computer names the item
+  `Samsung 64 GB (F:)`, which is the volume's own label rather than either ini file's word. The root already
+  stood `Hidden, System` before anything was written, which is why the marker in both files reads
+  `RootMarked=0`. That the icon and the localized name are read when the volume is browsed as a folder was
+  **not** observed here — no Explorer window was screenshotted — so the honest statement is: the files are
+  written as the rule names them, and on this build the drive's picture and name come from the label and from
+  the shell's own icon.
+- The **label ceilings** of the same volume, asked with the call this feature uses: exFAT takes eleven
+  characters and refuses a twelfth (win32 154), NTFS takes 32 and refuses a 33rd.
+- The restore: **131 072-byte clusters are not reachable through `format`** (its parameter check refuses
+  them, README), so the stick went back through this machine's own `Format-Volume`, which reproduced the
+  state it was in before this step exactly — label empty, exFAT, `BlockSize 131072`, `Capacity
+  64 157 253 632`, `FreeSpace 64 156 598 272`, its root holding only `System Volume Information`. The four
+  icon files were wiped by these formats, and the baseline held none.
+- One fact of the scratch setup is worth keeping, because it cost a step: the privileged start receives
+  **the shell's environment, not the parent's `PATH`**, so the scratch driver needed the GTK DLLs beside its
+  own file before the elevated half could load. That is a fact about a scratch tree next to a sysroot; the
+  installed image always sits next to its DLLs, which is why the product never meets it.
