@@ -872,7 +872,7 @@ that offer is in this program's own order rather than the order the machine answ
 
 | Option | FAT / FAT32 | exFAT | NTFS | ReFS | UDF |
 |---|---|---|---|---|---|
-| volume name | `/V:` † | `/V:` † | `/V:` † | `/V:` † | `/V:` † |
+| volume name | `/V:` | `/V:` | `/V:` | `/V:` | `/V:` |
 | allocation unit (cluster size) | `/A:` | `/A:` | `/A:` | `/A:` | — |
 | quick instead of full | `/Q` | `/Q` | `/Q` | `/Q` | `/Q` |
 | overwrite the whole volume first | `/P:` | `/P:` | `/P:` | `/P:` | `/P:` |
@@ -891,9 +891,9 @@ that offer is in this program's own order rather than the order the machine answ
 | duplicate UDF metadata | — | — | — | — | `/D` |
 | device icon (see *Device icons*) | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-The † on the name row says that the tool's switch carries the name **only where the tool can take it**,
-which was measured on 2026-11-19 by handing `format` a name on a letter that holds no volume, so the answer
-came from its own parameter check and no volume was reached: a `/V:` value holding a space is refused
+The name row holds a word of its own, because the tool's switch carries a name **only where the tool can
+take it**. Measured on 2026-11-19 by naming a value to the tool on a letter that holds no volume, so the
+answer came from its own parameter check and no volume was reached: a `/V:` value holding a space is refused
 outright — `Unzulässiger Parameter`, exit 4, one space or several, leading or trailing — while a value
 without one gets as far as the drive lookup. A `/` inside the value is refused as a switch of its own
 (`/V:A/B` answers *invalid parameter* for `/B`), and a `"` is refused outright; both are characters the name
