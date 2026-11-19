@@ -849,6 +849,19 @@ that nothing can carry (only forbidden characters, or nothing left after shorten
 the reason, and where the machine answers differently from this table its own words are shown. Only
 the files this feature wrote itself are ever rewritten or removed.
 
+Pinning is **the naming act's own work**, not something that only arrives with a device icon: a *Rename* or a
+*Format* that settles on a short label writes those two text files itself, carries the same section of ours in
+them, and takes them back again when a later name needs no pin. Where no picture was asked for, the two files
+**say nothing about one** — no `icon=` line in `autorun.inf`, no `IconResource=` in `desktop.ini` — because a
+reference the shell cannot resolve is worse than none, and those keys appear only where `folder.ico` actually
+stands. In a file no icon wrote, the name the volume is *called* is what `ModelName=` says — that file exists
+to carry the name, and the single-byte rule applies to it as it does to every other word of `autorun.inf`. A
+text file an icon already wrote keeps its device description word for word, since those words describe the
+device and not the volume's name; there the name is carried by `LocalizedResourceName=` of `desktop.ini`, which
+is the one file measured to render a name beyond a single-byte codepage. Where the volume names no folder to write into, the act says so
+instead of pinning nothing quietly, and where the rights are what is missing, the **one** privileged run of this
+program's own file writes the label and the pin together, so naming a volume never asks for consent twice.
+
 The exFAT row reads **11** because that is what this machine honours. Measured on 2026-11-19 on the 64 GB
 stick with the same call this window uses: an eleven-character name was written and read back, and the
 twelfth character of a name was refused by Windows itself with win32 154, *the entered volume label exceeds
@@ -1024,8 +1037,11 @@ there before this feature put it. That section is what *Remove device icon* remo
 nothing else: it reads the two files, and only where one of them carries the marker does it delete that
 file and the icon files the marked file names. An `autorun.inf` or `desktop.ini` of somebody else — one
 without that section — keeps every byte and the verb says so; a `folder.ico` no marked file names stays
-where it is; and the root is unmarked again only where the marker says the marking came from here. Measured
-on this machine, none of that removal needs a trick: an ordinary delete takes a hidden-and-system file, a
+where it is; and the root is unmarked again only where the marker says the marking came from here. The two text
+files can also have come from a naming act (see *Renaming a volume*): such a file carries the section of ours
+and names no image file, and *Remove device icon* takes it away exactly like its own — while a rename that no
+longer needs a pin takes those two back itself, leaving a picture that stands to be taken away by the verb.
+Measured on this machine, none of that removal needs a trick: an ordinary delete takes a hidden-and-system file, a
 system-and-hidden folder still enumerates its own children, and both attributes come back off. *Create
 device icon* writes files and nothing else — it never dismounts, never formats, never touches a file
 system — and the section of our own leaves the shell's own keys working: a folder carrying it and no pinned

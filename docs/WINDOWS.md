@@ -210,7 +210,11 @@ and the new program started. The *build from source* channel is Linux-only there
   answer into; the window waits for that run and reads the file back. A format whose volume name holds a
   space names that name to the privileged run as `--volume-name <name>` instead of as the tool's `/V:`
   switch, which this build's tool refuses (measured, README), and the run writes it once the format has
-  worked — one prompt either way, and the format command itself keeps to switches. The two device-icon verbs ask only
+  worked — one prompt either way, and the format command itself keeps to switches. A rename that has to pin a
+  name longer than the file system holds carries what the privileged run needs for that pin beside the label —
+  the folder to write into, the name as it was typed, the file system's word, the model and the size the
+  description words are drawn from — so the run that takes the label writes the two text files too and naming a
+  volume never answers a consent dialog twice (README: *Renaming a volume*). The two device-icon verbs ask only
   once the write itself answers that the rights are what is missing, so a volume this user may write to is
   settled with no prompt at all. Cancelling the consent dialog is a no-op and leaves nothing running, and
   the run is started hidden, since it has nothing to show beyond the consent dialog itself. The Linux twin
