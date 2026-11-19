@@ -77,10 +77,12 @@ impl FileSystem {
     /// reads — so those two sizes are left out rather than offered on a sector size nobody checked.
     pub fn allocation_units(self) -> &'static [u32] {
         match self {
-            FileSystem::Fat | FileSystem::Fat32 => &[512, 1024, 2048, 4096, 8192, 16 * KB, 32 * KB, 64 * KB],
-            FileSystem::ExFat => &[512, 1024, 2048, 4096, 8192, 16 * KB, 32 * KB, 64 * KB, 128 * KB, 256 * KB, 512 * KB, MB, 2 * MB, 4 * MB, 8 * MB, 16 * MB, 32 * MB],
-            FileSystem::Ntfs => &[512, 1024, 2048, 4096, 8192, 16 * KB, 32 * KB, 64 * KB, 128 * KB, 256 * KB, 512 * KB, MB, 2 * MB],
-            FileSystem::ReFs => &[4096, 64 * KB],
+            // Not the numbers of the usage text but the ones this build's tool takes: asked on a letter
+            // that holds no volume, 512 to 8192 reach its drive lookup while 12 288 and every larger value
+            // are answered as an invalid parameter before a drive is opened — for every file system alike,
+            // which leaves ReFS with the 4096 its text also names. README carries both answers.
+            FileSystem::Fat | FileSystem::Fat32 | FileSystem::ExFat | FileSystem::Ntfs => &[512, 1024, 2048, 4096, 8192],
+            FileSystem::ReFs => &[4096],
             FileSystem::Udf => &[],
         }
     }
@@ -805,20 +807,23 @@ mod tests {
         }
     }
 
-    /// The allocation-unit ladders, measured from the tool's usage text on this build.
+    /// The allocation-unit ladders, measured from what the tool takes on this build rather than from what
+    /// its usage text lists.
     #[test]
-    fn the_allocation_units_are_the_ones_the_tool_lists() {
-        assert_eq!(FileSystem::ReFs.allocation_units(), &[4096, 65536]);
+    fn the_allocation_units_are_the_ones_the_tool_actually_takes() {
+        // The tool's usage text lists more (2 MiB for NTFS, 32 MiB for exFAT, 64 KiB for FAT, 64 KiB for
+        // ReFS), but its own parameter check answers “invalid parameter” for anything above 8192 before it
+        // opens a drive, so the offer stops where the tool accepts — README carries both answers.
         assert_eq!(FileSystem::Fat.allocation_units(), FileSystem::Fat32.allocation_units());
-        assert_eq!(FileSystem::Fat.allocation_units(), &[512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]);
-        assert_eq!(FileSystem::Ntfs.allocation_units().first(), Some(&512));
-        assert_eq!(FileSystem::Ntfs.allocation_units().last(), Some(&(2 * MB)));
-        assert_eq!(FileSystem::ExFat.allocation_units().last(), Some(&(32 * MB)));
+        assert_eq!(FileSystem::Fat.allocation_units(), &[512, 1024, 2048, 4096, 8192]);
+        assert_eq!(FileSystem::ExFat.allocation_units(), FileSystem::Fat.allocation_units(), "the ceiling is the tool's own, not the file system's");
+        assert_eq!(FileSystem::Ntfs.allocation_units(), FileSystem::Fat.allocation_units());
+        assert_eq!(FileSystem::ReFs.allocation_units(), &[4096], "64 KiB is what the text names and the tool refuses");
         assert!(FileSystem::Udf.allocation_units().is_empty());
         for fs in [FileSystem::Fat, FileSystem::ExFat, FileSystem::Ntfs, FileSystem::ReFs] {
             assert!(fs.allocation_units().contains(&4096), "{} offers 4096", fs.word());
         }
-        assert!(!FileSystem::ReFs.allocation_units().contains(&8192), "the tool names 4096 and 64 KB for ReFS alone");
+        assert!(!FileSystem::Ntfs.allocation_units().contains(&16_384), "the tool refuses 16 KiB before it opens a drive");
     }
 
     #[test]
@@ -833,8 +838,10 @@ mod tests {
     fn an_allocation_unit_outside_the_tools_list_is_refused() {
         let error = format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::ExFat, &[(AllocationUnit, Bytes(3 * MB))]).unwrap_err();
         assert!(error.contains("Bytes(3145728)"), "{error}");
-        assert_eq!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::ExFat, &[(AllocationUnit, Bytes(16 * MB))]).unwrap(), vec!["F:", "/FS:exFAT", "/A:16777216", "/Y"]);
+        assert_eq!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::ExFat, &[(AllocationUnit, Bytes(8 * KB))]).unwrap(), vec!["F:", "/FS:exFAT", "/A:8192", "/Y"]);
         assert!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::ReFs, &[(AllocationUnit, Bytes(512))]).unwrap_err().contains("512"));
+        assert!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::Ntfs, &[(AllocationUnit, Bytes(16 * KB))]).unwrap_err().contains("16384"), "the tool refuses 16 KiB, so this window does");
+        assert!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::ExFat, &[(AllocationUnit, Bytes(131_072))]).unwrap_err().contains("131072"), "the 128 KiB cluster this machine's own disk tools wrote is not a choice this tool takes");
     }
 
     /// The command of the authorized verification step, in full. The name is missing from it on purpose: this
@@ -883,7 +890,10 @@ mod tests {
         assert!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::Fat, &[(AllocationUnit, Bytes(512))]).unwrap_err().contains("65526 clusters"));
         assert!(format_argv(Target { letter: 'A', size: 1_474_560 }, FileSystem::Fat, &[(AllocationUnit, Bytes(512))]).unwrap().contains(&"/A:512".to_string()));
         assert!(format_argv(Target { letter: 'A', size: 1_474_560 }, FileSystem::Fat32, &[(AllocationUnit, Bytes(512))]).unwrap_err().contains("65527"));
-        assert!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::Fat32, &[(AllocationUnit, Bytes(32768))]).unwrap().contains(&"/A:32768".to_string()));
+        // The band's other side, asked with the largest unit this tool takes: 64 GB at 8192 bytes would be
+        // 7 831 836 clusters, over FAT32's ceiling, so the window refuses instead of building a doomed
+        // command — which is why no allocation unit this tool accepts can make a volume that size FAT32.
+        assert!(format_argv(Target { letter: 'F', size: 64_160_400_896 }, FileSystem::Fat32, &[(AllocationUnit, Bytes(8 * KB))]).unwrap_err().contains("4177917"));
         assert!(format_argv(Target { letter: 'F', size: 1_000_000_000_000 }, FileSystem::Fat32, &[(AllocationUnit, Bytes(512))]).unwrap_err().contains("4177917"));
     }
 
@@ -1102,7 +1112,7 @@ mod tests {
     fn a_file_system_is_offered_only_where_this_volumes_size_fits_its_cluster_band() {
         let offered: Vec<String> = FileSystem::all().iter().map(|fs| fs.word().to_string()).collect();
         let names: Vec<&str> = accepted(&Volume { drive_size: 64_160_400_896, ..Default::default() }, &offered).iter().map(|fs| fs.word()).collect();
-        assert_eq!(names, ["FAT32", "exFAT", "NTFS", "ReFS", "UDF"], "FAT cannot hold 64 GB inside 65 526 clusters at any allocation unit it offers");
+        assert_eq!(names, ["exFAT", "NTFS", "ReFS", "UDF"], "FAT cannot hold 64 GB inside 65 526 clusters, and at any allocation unit this tool takes FAT32 needs more than its 4 177 917 of them");
         let names: Vec<&str> = accepted(&Volume { drive_size: 1_474_560, ..Default::default() }, &offered).iter().map(|fs| fs.word()).collect();
         assert!(names.contains(&"FAT") && !names.contains(&"FAT32"), "FAT32 needs more clusters than a floppy has: {names:?}");
         assert!(accepted(&Volume { drive_size: 1_000, ..Default::default() }, &offered).is_empty(), "a volume with no usable size offers nothing");

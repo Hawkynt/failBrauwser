@@ -933,7 +933,10 @@ answered `Unzulässiger Parameter` (exit 4) in front of any drive being opened �
 system the tool names, so ReFS is left with 4096 alone. The usage text's larger numbers (up to 2 MiB for NTFS,
 up to 32 MiB for exFAT, up to 64 KiB for FAT) are therefore not offered here: a dropdown whose choice can only
 end in another program's refusal is not an offer, and the reaching of those larger units belongs to the
-machine's own disk tools rather than to this window. What the tool refuses at run time is still quoted in its
+machine's own disk tools rather than to this window. One offer follows from that ceiling: a volume of 64 GB
+is no longer offered as FAT32, because 8192-byte clusters over that size are 7 831 836 clusters and FAT32
+stops at 4 177 917 of them — the cluster-count rule above is what refuses it, in its own words, and no unit
+this tool takes can bring that volume inside the band. What the tool refuses at run time is still quoted in its
 own words wherever it answers, so nothing is claimed about a value that was never asked.
 
 to the device icon.
