@@ -849,6 +849,12 @@ that nothing can carry (only forbidden characters, or nothing left after shorten
 the reason, and where the machine answers differently from this table its own words are shown. Only
 the files this feature wrote itself are ever rewritten or removed.
 
+Two conditions make those two text files present, and either one is enough: **the volume carries a device icon
+of ours**, or **its name is one the file system's own label cannot hold**. Whichever of the two asked for them,
+a file that already stands there is **updated in place** rather than skipped, so the keys of both conditions end
+up in the same pair of files whoever came first — an icon written onto a volume that already carries the pin,
+and a long name written onto a volume that already carries the icon, both leave one pair naming the picture,
+the device and the name.
 Pinning is **the naming act's own work**, not something that only arrives with a device icon: a *Rename* or a
 *Format* that settles on a short label writes those two text files itself, carries the same section of ours in
 them, and takes them back again when a later name needs no pin. Where no picture was asked for, the two files
@@ -1027,6 +1033,15 @@ the shown label of a shape holds a `µ` and a `″` that a single-byte file cann
 line names the volume only where the short label the file system itself carries is plain ASCII, because a
 name reaching past that codepage is not written down in a form that would lose characters, leaving the long
 name to rest on `desktop.ini` alone.
+
+The four files arrive **only with the bytes they carry**: each one is written under a name of ours — the
+file's own name with `.fbtmp` behind it — its length is read back where it stands, and only then is it moved
+into the name the systems read. So a slot never holds a file of ours that was opened but not filled, and a
+volume whose root was written to halfway through a failing act is told about it rather than left holding a
+0-byte `DevIcon.fil`. A name **another program holds open** is refused **by that name** and nothing of ours is
+left at any of the four — and because a held-open name is not a question of rights, that refusal never asks
+for the administrator (an elevated run cannot take a name away from whoever holds it). A staged name of ours
+that some act left behind is taken away by *Remove device icon* along with the four.
 
 Four files go on the volume, because the systems ask for four different ones: `DevIcon.fil`, an icon
 file in the shape Windows describes for a device icon — twelve images, the sizes 16×16, 32×32, 48×48
