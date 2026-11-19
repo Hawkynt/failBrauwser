@@ -1729,8 +1729,11 @@ impl Pane {
             return glib::Propagation::Proceed;
         }
         match self.right_press.take() {
-            Some(press) => {
-                self.emit(PaneEvent::ContextMenu(Some(press)));
+            // The menu opens with the release, not the stored press: handed a press, GTK takes
+            // the button for still held, keeps the pointer grabbed until the pointer has been
+            // over the menu, and no click elsewhere arrives meanwhile.
+            Some(_) => {
+                self.emit(PaneEvent::ContextMenu(Some(ev.clone())));
                 glib::Propagation::Stop
             }
             None => glib::Propagation::Proceed,
