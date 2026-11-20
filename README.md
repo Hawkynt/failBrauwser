@@ -1062,6 +1062,23 @@ to the row that names the volume, not to every folder below it. The listing redr
 own acts changes those files — *Create device icon*, *Remove device icon*, and a rename that pins a name or
 takes the pin back — so the row answers the verb without a restart.
 
+**What that reading is given has a bound**, so that a broken file or a planted one in somebody's volume root
+cannot cost this program anything beyond a row drawn without a picture. The two text files of ours measure 219
+and 300 bytes on a real volume, so a text file past 64 KiB is not read at all: not by the listing, and not by
+*Remove device icon*, which reads those same two names and would otherwise treat a planted file of a hundred
+megabytes as one of ours. The pinned name is shown only where it is a name a row can show — not empty, no
+longer than the 255 characters one component of a path ever is, carrying no control character and no
+directional override, which would make a row read as something its name is not. A picture is drawn only where
+what stands there is an icon container honest about itself: every image of it inside the file, every image's
+own header where its directory entry says it is, and every image within the 256 pixels such a directory can
+name; and only within 8 MiB, the icon files of one written device icon measuring 408 966 bytes each. Reading
+stops at those bounds rather than reading up to them, so **nothing about the size or the shape of a file
+decides how much memory or time this program spends**, and no decoder is ever handed a container whose own
+header names a picture bigger than an icon can be. Where a named picture fails that answer, the next picture
+the marked file names is asked instead; where none answers, the themed icon of the volume's kind stands. Each
+answer falls back on its own: a volume whose pinned name is nonsense keeps the picture its files name, and a
+volume whose picture is nonsense keeps its pinned name.
+
 Four files go on the volume, because the systems ask for four different ones: `DevIcon.fil`, an icon
 file in the shape Windows describes for a device icon — twelve images, the sizes 16×16, 32×32, 48×48
 and 256×256 in 24-bit colour with an 8-bit alpha channel, 8-bit with 1-bit transparency and 4-bit
