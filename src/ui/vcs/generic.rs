@@ -344,7 +344,12 @@ pub fn patch_create(w: &Window, t: Target, wc: Wc) {
         let runs = ops::runs(tool, &Op::PatchCreate { dest: dest.clone() });
         let Some(argv) = runs.first() else { return };
         // A diff that finds differences ends with 1 for CVS: its words are the patch either way.
-        let out = std::process::Command::new(tool.cli()).current_dir(wc.root()).args(argv).env("LC_ALL", "C").output();
+        let mut c = std::process::Command::new(tool.cli());
+        c.current_dir(wc.root()).args(argv).env("LC_ALL", "C");
+        failbrauwser::vcs::run::non_interactive(&mut c);
+        #[cfg(windows)]
+        failbrauwser::win::console::no_window(&mut c);
+        let out = c.output();
         match out {
             Ok(o) if o.status.code().is_some_and(|c| c <= 1) => {
                 if let Err(e) = std::fs::write(&dest, &o.stdout) {

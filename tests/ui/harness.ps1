@@ -1,9 +1,9 @@
 # Runs failBrauwser with a self-test script on the win32 GDK surface (no compositor needed).
-#   harness.ps1 <binary> <script> <workdir>
+#   harness.ps1 <binary> <script> <workdir> [budget-seconds]
 # The script may use $T for <workdir> and $UI for this folder. Config and data live below
 # <workdir>, so the user's settings are never touched; the GTK theme settings are copied over.
 # Windows twin of harness.sh: same contract, same output, same exit codes.
-param([string]$BIN, [string]$SCRIPT, [string]$T)
+param([string]$BIN, [string]$SCRIPT, [string]$T, [int]$BudgetSec = 180)
 $ErrorActionPreference = 'Stop'
 # Parallel runs would pick up each other's private bus: one at a time.
 $lock = $null
@@ -51,8 +51,13 @@ $psi.RedirectStandardError = $true
 $p = [System.Diagnostics.Process]::Start($psi)
 $outRead = $p.StandardOutput.ReadToEndAsync()
 $errRead = $p.StandardError.ReadToEndAsync()
+# The whole script gets $BudgetSec seconds. Each waiting step gives its own condition 20 s
+# (src\ui\selftest.rs), so a long script that has to wait out a wrong expectation spends several of
+# those before it can say so; a run killed at the budget never prints anything, which is why the
+# number is roomy rather than tight. $BudgetSec is the fourth argument, so one slow scenario can be
+# given more without slowing the rest.
 $rc = 124
-if ($p.WaitForExit(60000)) { $rc = $p.ExitCode } else { & taskkill /PID $p.Id /T /F | Out-Null; Start-Sleep -Milliseconds 500 }
+if ($p.WaitForExit($BudgetSec * 1000)) { $rc = $p.ExitCode } else { & taskkill /PID $p.Id /T /F | Out-Null; Start-Sleep -Milliseconds 500 }
 $lock.Close()
 $outText = if ($outRead.Wait(5000)) { $outRead.Result } else { '' }
 $errText = if ($errRead.Wait(5000)) { $errRead.Result } else { '' }

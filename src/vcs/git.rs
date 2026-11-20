@@ -23,7 +23,12 @@ pub struct Repo {
 /// locks taken where only reading.
 pub fn command(dir: &Path) -> Command {
     let mut c = Command::new("git");
-    c.current_dir(dir).env("LC_ALL", "C").env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
+    c.current_dir(dir).env("LC_ALL", "C").stdin(Stdio::null());
+    super::run::non_interactive(&mut c);
+    // Every status, log, blame and diff call goes through here, and git is a console program while
+    // this one is windowed: each of them would bring up its own black window without the flag.
+    #[cfg(windows)]
+    crate::win::console::no_window(&mut c);
     c
 }
 
@@ -41,12 +46,12 @@ pub fn run(dir: &Path, args: &[&str]) -> Result<String, String> {
 /// Whether the git command is there at all (asked once).
 pub fn available() -> bool {
     static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FOUND.get_or_init(|| Command::new("git").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success()))
+    *FOUND.get_or_init(|| command(Path::new(".")).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success()))
 }
 
 /// The version git reports ("2.56.1").
 pub fn version() -> Option<String> {
-    let out = Command::new("git").arg("--version").output().ok()?;
+    let out = command(Path::new(".")).arg("--version").output().ok()?;
     let s = String::from_utf8_lossy(&out.stdout);
     s.trim().strip_prefix("git version ").map(str::to_string)
 }

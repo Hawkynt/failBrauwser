@@ -1,10 +1,15 @@
 #!/bin/bash
 # Runs failBrauwser with a self-test script inside a headless sway session.
-#   harness.sh <binary> <script> <workdir>
+#   harness.sh <binary> <script> <workdir> [budget-seconds]
 # The script may use $T for <workdir> and $UI for this folder. Config, data and trash live below <workdir>, so the
 # user's settings and trash are never touched; the GTK theme settings are copied over.
 set -u
 BIN=$1; SCRIPT=$2; T=$3
+# The whole script gets $BUDGET seconds: each waiting step gives its own condition 20 s
+# (src/ui/selftest.rs), so a long script that has to wait out a wrong expectation spends several of
+# those before it can say so; a run killed at the budget never prints anything, which is why the
+# number is roomy rather than tight. The fourth argument lifts it for one slow script.
+BUDGET=${4:-180}
 # Parallel runs would pick up each other's compositor socket: one at a time.
 exec 9>"${TMPDIR:-/tmp}/failbrauwser-ui-test.lock"
 flock 9
@@ -61,6 +66,10 @@ fi
 # Before the private bus starts: services it activates (Tumbler, …) use the test folders too.
 export XDG_CONFIG_HOME="$T/config" XDG_DATA_HOME="$T/data" XDG_CACHE_HOME="$T/cache" GTK_A11Y=none NO_AT_BRIDGE=1
 export XDG_RUNTIME_DIR=$RUNDIR
+# The scenarios press the buttons of GTK's own message dialogs, by their English labels: the locale is
+# pinned as harness.ps1 pins it, and a tileWin session's GTK3_MODULES, which shows those dialogs as a
+# tilewin-dialog box of its own, is told to keep GTK's for this program (tileWin's per-app switch).
+export LANG=C.UTF-8 LC_ALL=C.UTF-8 LANGUAGE= TILEWIN_NO_GTK_DIALOGS=1
 # The user's own ~/.ssh/config stays out of the scenarios (Add Server lists its hosts).
 export FAILBRAUWSER_SSH_CONFIG="${FAILBRAUWSER_SSH_CONFIG:-$T/ssh_config}"
 exec dbus-run-session -- bash -c '
@@ -74,7 +83,7 @@ exec dbus-run-session -- bash -c '
     [ -n "$new" ] && [ "'"$WM"'" = sway ] && break; new=; sleep 0.05
   done
   export WAYLAND_DISPLAY=$new GDK_BACKEND=wayland FB_SELFTEST="'"$T"'/script.fbt"
-  timeout 60 "'"$BIN"'"
+  timeout '"$BUDGET"' "'"$BIN"'"
   rc=$?
   kill $SP 2>/dev/null; wait $SP 2>/dev/null
   exit $rc

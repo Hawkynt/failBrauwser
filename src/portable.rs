@@ -306,7 +306,17 @@ fn apply_payload(payload: &[u8], prefix: &std::path::Path, planned: &[(Entry, St
 /// scan mode, which needs no cache at all.
 fn refresh_loader_cache(bin: &std::path::Path) {
     let Some(cache) = bin.parent().map(|p| p.join("lib\\gdk-pixbuf-2.0\\2.10.0\\loaders\\loaders.cache")) else { return };
-    let text = match Command::new(bin.join("gdk-pixbuf-query-loaders.exe")).current_dir(bin).output() {
+    let mut query = Command::new(bin.join("gdk-pixbuf-query-loaders.exe"));
+    query.current_dir(bin);
+    // A console tool started by a windowed program is given a console of its own: the black window.
+    // The flag is win::console::CREATE_NO_WINDOW's value, written out here because this file is also
+    // built by the launcher crate (winpack\onefile), which has no win module of its own.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        query.creation_flags(0x0800_0000);
+    }
+    let text = match query.output() {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
         _ => String::new(),
     };

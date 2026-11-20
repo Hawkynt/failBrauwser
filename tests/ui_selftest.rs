@@ -760,6 +760,60 @@ with zipfile.ZipFile("{w}/test.zip", "w", zipfile.ZIP_DEFLATED) as z:
     });
 }
 
+/// Open With on files inside an archive: a real application is started with real files, and its
+/// edits are saved back.
+#[test]
+#[cfg(unix)]
+fn open_with_inside_an_archive() {
+    if !failbrauwser::archive::client::locate_helper().is_file() {
+        eprintln!("fb-archive helper not built, skipping");
+        return;
+    }
+    run("archive_open_with.fbt", |t| {
+        let w = t.join("w");
+        std::fs::create_dir_all(&w).unwrap();
+        let script = format!(
+            r#"
+import zipfile
+with zipfile.ZipFile("{w}/test.zip", "w") as z:
+    z.writestr("a.txt", "alpha")
+    z.writestr("b.txt", "beta")
+    z.writestr("12:30.txt", "noon")
+    z.writestr("sub/c.txt", "gamma")
+"#,
+            w = pysafe(&w)
+        );
+        assert!(Command::new(python()).arg("-c").arg(script).status().unwrap().success());
+        // The application: writes what it was given, whether that is an extracted copy, then
+        // edits it as an editor would.
+        let recorder = t.join("recorder.sh");
+        std::fs::write(
+            &recorder,
+            format!(
+                "#!/bin/sh
+for f; do
+  case \"$f\" in */failbrauwser/open/fb-*/*) where=staged ;; *) where=elsewhere ;; esac
+  [ -f \"$f\" ] || where=missing
+  printf '%s:%s:%s\\n' \"$(basename \"$f\")\" \"$(cat \"$f\")\" \"$where\" >> {got}
+  printf ' edited' >> \"$f\"
+done
+",
+                got = t.join("got").display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&recorder, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        std::fs::create_dir_all(t.join("data/applications")).unwrap();
+        std::fs::write(
+            t.join("data/applications/fbtest-recorder.desktop"),
+            format!("[Desktop Entry]\nType=Application\nName=Recorder\nExec={} %F\nMimeType=text/plain;\n", recorder.display()),
+        )
+        .unwrap();
+        // GIO looks a folder's types up in its index (what update-desktop-database writes).
+        std::fs::write(t.join("data/applications/mimeinfo.cache"), "[MIME Cache]\ntext/plain=fbtest-recorder.desktop;\n").unwrap();
+    });
+}
+
 #[test]
 fn iso_images() {
     let have_xorriso = Command::new("sh").arg("-c").arg("command -v xorriso").output().is_ok_and(|o| o.status.success());

@@ -341,14 +341,23 @@ mod tests {
     }
 
     fn installed(program: &str) -> Option<String> {
-        match std::process::Command::new(program).arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status() {
+        let mut c = std::process::Command::new(program);
+        c.arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        crate::win::console::no_window(&mut c);
+        match c.status() {
             Ok(status) if status.success() => Some(program.to_string()),
             _ => None,
         }
     }
 
     fn ask(program: &str, dir: &Path, args: &[&str]) {
-        let status = std::process::Command::new(program).current_dir(dir).args(args).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().expect("the client could not run");
+        let mut c = std::process::Command::new(program);
+        c.current_dir(dir).args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        super::run::non_interactive(&mut c);
+        #[cfg(windows)]
+        crate::win::console::no_window(&mut c);
+        let status = c.status().expect("the client could not run");
         assert!(status.success(), "{} {args:?} in {} did not answer", program, dir.display());
     }
 

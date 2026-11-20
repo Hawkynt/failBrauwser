@@ -1,0 +1,30 @@
+# Open With inside an archive (README: Archives): the application chosen is handed extracted
+# copies, real files of their own, and what it saves goes back into the archive. Recorder
+# (data/applications/fbtest-recorder.desktop) writes "<name>:<content>:<where>" for every file
+# it is given into $T/got and then edits the file.
+open $T/w/test.zip
+select a.txt
+expect-menu-item Open With
+expect-menu-item Recorder
+expect-menu-item Other Application…
+action win.open-with fbtest-recorder.desktop
+wait-file-text $T/got = a.txt:alpha:staged
+# Recorder's edit is saved into the archive ("alpha edited").
+wait-cell size a.txt = 12 bytes
+
+# Several files at once, one with a colon in its name.
+select b.txt | 12:30.txt
+action win.open-with fbtest-recorder.desktop
+wait-file-text $T/got = b.txt:beta:staged
+wait-file-text $T/got = 12:30.txt:noon:staged
+wait-cell size b.txt = 11 bytes
+wait-cell size 12:30.txt = 11 bytes
+
+# A plain Open of a file with a colon in its name works too.
+select 12:30.txt
+activate
+wait-opened
+
+# A folder has nothing to open with.
+select sub
+expect-no-menu-item Open With

@@ -276,7 +276,7 @@ mod win {
                 .and(GetSecurityDescriptorDacl(sd, &raw mut p1, &raw mut dacl, &raw mut f1))
                 .and(GetSecurityDescriptorSacl(sd, &raw mut p2, &raw mut sacl, &raw mut f2));
             let set = read.map_err(crate::win::err::to_io).and_then(|()| {
-                let r = SetNamedSecurityInfoW(PCWSTR(d.as_ptr()), SE_FILE_OBJECT, info, owner, group, Some(dacl), Some(sacl));
+                let r = SetNamedSecurityInfoW(PCWSTR(d.as_ptr()), SE_FILE_OBJECT, info, Some(owner), Some(group), Some(dacl), Some(sacl));
                 if r == ERROR_SUCCESS { Ok(()) } else { Err(io::Error::from_raw_os_error(r.0 as i32)) }
             });
             let _ = LocalFree(Some(HLOCAL(sd.0)));

@@ -81,7 +81,7 @@ pub fn show(w: &Window, wc: &Wc, path: &str) {
             let first = l.hash != prev;
             prev = l.hash.clone();
             let it = store2.append();
-            let (commit, author, date) = if first { (l.hash[..8].to_string(), l.author.clone(), dialog::when(l.time)) } else { Default::default() };
+            let (commit, author, date) = if first { (l.short().to_string(), l.author.clone(), dialog::when(l.time)) } else { Default::default() };
             store2.set(&it, &[(0, &commit), (1, &author), (2, &date), (3, &l.line.to_string()), (4, &l.text.replace('\t', "    ")), (5, &age_color(l.time, oldest, newest)), (6, &(i as u32))]);
         }
         let commits: std::collections::HashSet<&str> = lines.iter().map(|l| l.hash.as_str()).collect();
@@ -91,7 +91,7 @@ pub fn show(w: &Window, wc: &Wc, path: &str) {
             if let Some((m, it)) = sel.selected() {
                 let i: u32 = m.value(&it, 6).get().unwrap_or(0);
                 if let Some(l) = ls.get(i as usize) {
-                    st.push(0, &format!("{}  {}  {}  {}", &l.hash[..8], l.author, dialog::when(l.time), l.summary));
+                    st.push(0, &format!("{}  {}  {}  {}", l.short(), l.author, dialog::when(l.time), l.summary));
                 }
             }
         });

@@ -1,0 +1,16 @@
+# This tree is checked out, copied and edited on Windows, where core.autocrlf is false. Without a
+# rule here, a copy that arrives with CRLF ends up looking like a modification of every text file it
+# touches (measured: 5359 of 5387) and a reviewable diff is impossible; the shell scripts would stop
+# running, since their interpreter reads a carriage return as part of a name. LF in the repository
+# and LF in the checkout is what the tree already holds, so stating it costs nothing and keeps it so.
+* text=auto eol=lf
+
+# Bytes that must survive untouched: fixtures, images, compiled blobs.
+*.png binary
+*.ico binary
+*.bin binary
+*.dat binary
+*.hc binary
+*.dll binary
+*.exe binary
+*.zip binary

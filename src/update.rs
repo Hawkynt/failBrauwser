@@ -330,11 +330,19 @@ mod tests {
         // files below the temp folder, so the text goes in as a command.
         let zip = d.path().join("package.zip");
         let pack = format!("Compress-Archive -Path '{}\\*' -DestinationPath '{}'", pack_root.display(), zip.display());
-        let mk = std::process::Command::new("powershell").args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &pack]).output().unwrap();
+        let mut mk = std::process::Command::new("powershell");
+        mk.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &pack]);
+        #[cfg(windows)]
+        crate::win::console::no_window(&mut mk);
+        let mk = mk.output().unwrap();
         assert!(mk.status.success(), "{}{}", String::from_utf8_lossy(&mk.stdout), String::from_utf8_lossy(&mk.stderr));
         let url = format!("file:///{}", zip.display().to_string().replace('\\', "/"));
         let swap = script(Some(&url), &target, &[], &d.path().join("cache"));
-        let out = std::process::Command::new("powershell").args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &swap]).output().unwrap();
+        let mut swap_run = std::process::Command::new("powershell");
+        swap_run.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &swap]);
+        #[cfg(windows)]
+        crate::win::console::no_window(&mut swap_run);
+        let out = swap_run.output().unwrap();
         let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         assert!(out.status.success() && log.contains("UPDATE FINISHED"), "{log}");
         assert_eq!(std::fs::read(target.join("bin\\failbrauwser.exe")).unwrap(), b"NEW-EXE");

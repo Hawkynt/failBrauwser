@@ -266,7 +266,12 @@ pub fn date_arg(id: &str) -> String {
 impl Cvs {
     /// A client call; CVS answers 1 for "there were differences", which is no failure here.
     fn client(&self, args: &[&str]) -> Result<Vec<u8>, String> {
-        let out = Command::new("cvs").current_dir(&self.root).args(args).env("LC_ALL", "C").env("CVS_RSH", "ssh").stdin(Stdio::null()).output().map_err(|e| format!("cvs could not be started: {e}"))?;
+        let mut c = Command::new("cvs");
+        c.current_dir(&self.root).args(args).env("LC_ALL", "C").env("CVS_RSH", "ssh").stdin(Stdio::null());
+        super::run::non_interactive(&mut c);
+        #[cfg(windows)]
+        crate::win::console::no_window(&mut c);
+        let out = c.output().map_err(|e| format!("cvs could not be started: {e}"))?;
         match out.status.code() {
             Some(0) | Some(1) => Ok(out.stdout),
             _ => Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),

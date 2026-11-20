@@ -660,7 +660,11 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         }
         "run" => {
             // run <shell command>: started, not waited for.
-            std::process::Command::new("sh").arg("-c").arg(arg).spawn().map_err(|e| e.to_string())?;
+            let mut c = std::process::Command::new("sh");
+            c.arg("-c").arg(arg);
+            #[cfg(windows)]
+            failbrauwser::win::console::no_window(&mut c);
+            c.spawn().map_err(|e| e.to_string())?;
         }
         "wait-window-count" => {
             // wait-window-count <n>: once the application has n windows, the steps go on in

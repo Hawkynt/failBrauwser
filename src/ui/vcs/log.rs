@@ -317,6 +317,13 @@ fn parse_day(s: &str) -> Option<i64> {
     glib::DateTime::from_local(y, m, d, 0, 0, 0.0).ok().map(|t| t.to_unix())
 }
 
+/// Which revision a reload of the list leaves selected, as an index into `hashes`; `None` is the top
+/// row shown — what a window with no selection takes, and what one whose revision has left the list
+/// falls back to.
+fn row_after_reload<T: AsRef<str>>(previous: Option<&str>, hashes: &[T]) -> Option<usize> {
+    previous.and_then(|p| hashes.iter().position(|h| h.as_ref() == p))
+}
+
 impl Log {
     fn load(self: &Rc<Self>) {
         let (wc, all) = (self.wc.clone(), self.all.is_active());
@@ -336,13 +343,33 @@ impl Log {
             },
             move |(commits, refs, actions, g)| {
                 let Some(l) = me.upgrade() else { return };
+                // The revision the reader was on, asked before the lists are swapped: every item of
+                // the window's menu acts at the selected revision, and a reload that took the top row
+                // instead silently aimed them at another commit (README: The windows).
+                let wanted = l.selected().first().map(|c| c.hash.clone());
                 *l.commits.borrow_mut() = commits;
                 *l.refs.borrow_mut() = refs;
                 *l.actions.borrow_mut() = actions;
                 *l.graph.borrow_mut() = g;
                 l.fill();
-                if let Some(first) = l.store.iter_first() {
-                    l.view.selection().select_iter(&first);
+                let hashes: Vec<String> = l.commits.borrow().iter().map(|c| c.hash.clone()).collect();
+                let want = row_after_reload(wanted.as_deref(), &hashes);
+                // Among the rows the filter lets through, which is the one to land on: a revision the
+                // filter hides is not kept, and the top row shown takes its place.
+                let (mut kept, mut top) = (None, None);
+                l.store.foreach(|m, _, it| {
+                    if top.is_none() {
+                        top = Some(it.clone());
+                    }
+                    let i: u32 = m.value(it, C_INDEX as i32).get().unwrap_or(u32::MAX);
+                    if want.is_some_and(|w| i == w as u32) {
+                        kept = Some(it.clone());
+                        return true;
+                    }
+                    false
+                });
+                if let Some(it) = kept.or(top) {
+                    l.view.selection().select_iter(&it);
                 }
             },
         );
@@ -609,6 +636,18 @@ fn find(title: &str) -> Option<Rc<Log>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reload of the list — the *All branches* tick, a search word, a date range — must leave the
+    /// revision the reader was on where it was: every item of the window's menu acts at the selected
+    /// revision, so a reload that jumps elsewhere silently aims them at another commit (README: The
+    /// windows). `None` is the top row shown, which is what a window with no selection takes.
+    #[test]
+    fn a_reload_keeps_the_revision_that_was_selected() {
+        let list = ["a1", "b2", "c3"];
+        assert_eq!(row_after_reload(Some("b2"), &list), Some(1), "the revision asked for is found again in the new list");
+        assert_eq!(row_after_reload(Some("gone"), &list), None, "a revision that has left the list gives its place to the top one");
+        assert_eq!(row_after_reload(None, &list), None, "nothing was selected, so the top revision takes it");
+    }
 
     #[test]
     fn labels_before_the_subject() {

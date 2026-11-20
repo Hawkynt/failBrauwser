@@ -61,6 +61,35 @@ fn hash_key(k: &impl Hash) -> String {
     format!("{:016x}", h.finish())
 }
 
+/// The extracted copy of `entry` below `dest`, once it is there as a file. The entry's name comes
+/// from the archive and is no place on disk: a name reaching out of `dest` (`..`, an absolute path,
+/// on Windows a drive or stream prefix) is refused, and so is one where nothing was written, so an
+/// application is only ever handed, and an edit only ever saved back from, a file of that folder.
+pub fn staged_copy(dest: &Path, entry: &str) -> Result<PathBuf> {
+    let path = below_dest(dest, entry)?;
+    match std::fs::symlink_metadata(&path) {
+        Ok(m) if m.is_file() => Ok(path),
+        _ => Err(ArchiveError::new("badentry", format!("“{entry}” was not extracted"))),
+    }
+}
+
+/// `entry` (`/`-separated, as the archive names it) below `dest`, or an error when it is no plain
+/// name below it.
+pub fn below_dest(dest: &Path, entry: &str) -> Result<PathBuf> {
+    let refused = || ArchiveError::new("badentry", format!("“{entry}” is not a name inside the archive's folder"));
+    let mut p = dest.to_path_buf();
+    for part in entry.split('/') {
+        // A colon is an ordinary character in a Linux file name (`12:30.jpg`); on Windows it starts
+        // a drive or a stream.
+        let windows_only = cfg!(windows) && (part.contains(':') || part.contains('\\'));
+        if part.is_empty() || part == "." || part == ".." || windows_only || Path::new(part).is_absolute() {
+            return Err(refused());
+        }
+        p.push(part);
+    }
+    Ok(p)
+}
+
 impl Vfs {
     pub fn new(helper: Helper, cache: PathBuf) -> Self {
         Vfs { helper, cache, state: Mutex::new(State::default()) }
@@ -297,6 +326,39 @@ pub fn runtime_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_extracted_copy_is_only_handed_out_from_inside_its_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/a.txt"), "x").unwrap();
+        std::fs::write(dir.path().join("top.txt"), "x").unwrap();
+        assert_eq!(staged_copy(dir.path(), "sub/a.txt").unwrap(), dir.path().join("sub/a.txt"));
+        assert_eq!(staged_copy(dir.path(), "top.txt").unwrap(), dir.path().join("top.txt"));
+        for name in ["../evil.txt", "sub/../top.txt", "..", ".", "", "/etc/passwd", "sub/", "sub//a.txt", "./top.txt"] {
+            assert!(staged_copy(dir.path(), name).is_err(), "{name:?} is no plain name inside the folder");
+        }
+        assert!(staged_copy(dir.path(), "sub/gone.txt").is_err(), "nothing was written there");
+        assert!(staged_copy(dir.path(), "sub").is_err(), "a folder is no file to open");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn names_with_colons_and_backslashes_are_ordinary_on_unix() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["12:30.jpg", "a\\b.txt", "C:x"] {
+            std::fs::write(dir.path().join(name), "x").unwrap();
+            assert_eq!(staged_copy(dir.path(), name).unwrap(), dir.path().join(name), "{name}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_link_in_the_folder_is_not_handed_out() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", dir.path().join("passwd")).unwrap();
+        assert!(staged_copy(dir.path(), "passwd").is_err(), "an archive's link could point anywhere");
+    }
 
     #[test]
     fn archive_extensions_are_stripped() {

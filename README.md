@@ -576,7 +576,11 @@ programs and installers, databases — still open with that program; the *Open a
 *Extract Here*, *Extract To…* and
 *Compress…* are in the context menu. Long archive operations show a progress bar with the
 bytes done. Formats the library can only read are shown read-only, and the status bar says
-why.
+why. A file inside an archive opens with its application, and *Open With* offers the
+applications for its type: the files chosen (several at once too) are extracted to a folder of
+their own below `$XDG_RUNTIME_DIR/failbrauwser/open` and the application is handed those copies;
+what it saves goes back into the archive. A name in the archive that points outside that folder
+(`../…`, `/…`) is never handed out.
 
 **Encrypted volumes:** TrueCrypt (4.3–7.1a) and VeraCrypt (1.0–2.1) container files
 (`.hc`, `.tc`; any other file through *Open as*) open the same way: the password is asked for once (a wrong
@@ -769,7 +773,10 @@ Project*, plus *Amend Last Commit* and *Commit & Push* where the tool can) and c
 what is ticked — unversioned files ticked are added first; *Log Messages* shows the history with
 the kinds of change of each revision, its branch and tag labels, the message and changed files of
 the revision selected, and the revision graph where the tool records parents (Git, Mercurial;
-Subversion's, CVS's and Visual Source Safe's history is one line); its right-click menu switches,
+Subversion's, CVS's and Visual Source Safe's history is one line). A reload of that list — the
+*All branches* tick, a search word, a date range — leaves the selection on the revision it was on,
+and takes the top revision only when nothing was selected or that revision has left the list,
+because every item of the window's menu acts at the selected revision. That menu switches,
 branches, tags, reverts or compares at a revision where the tool can. CVS records no changesets,
 so its log groups the file revisions that share author and message and lie within five minutes of
 each other into one entry, as `cvsps` does. A double click on a changed file opens its diff side by
@@ -777,7 +784,9 @@ side: rows the two sides share, the line number on each side, removed lines red 
 yellow as in TortoiseGitMerge, inside a changed pair the words that actually changed standing out,
 unchanged runs folded to three lines with the range they hide named, and *next change* / *previous
 change* walking the changes; nothing in that view is carried by colour alone. *Blame* shows each
-line with its revision, author and date. Every command runs in the *⟨Tool⟩ Command Progress*
+line with its revision, author and date: the revision as the client names it, cut to eight characters
+only where that name is longer, so a Subversion or CVS revision keeps its whole number, and left
+blank where the client names none. Every command runs in the *⟨Tool⟩ Command Progress*
 window, which shows what the client prints and ends in green *Success* or a red error quoting the
 client's own words, with *Push…* after a commit where the tool pushes. A command whose client would
 otherwise open an editor or a prompt is asked for the word it needs before anything runs (the commit
