@@ -157,9 +157,9 @@ against the same CRT and SDK (through `LIB`), without `/SOURCELINK` and debug sy
 What Wine cannot answer fails there and nowhere else: the recycle bin (`E_NOTIMPL`; the test named
 above never returns), WPD devices, WNet shares, `format.com`, `Z:` (Wine's drive for `/`), the hidden
 and system attributes on a Linux folder, a rename that changes only case, PowerShell (the update's
-swap script), `tests/git_repo.rs`, whose `sh` from Git for Windows starts no program under Wine, `tar`
-(one fixture of `tests/archive_helper.rs`) and AES in ECB mode, which Wine's `bcrypt` refuses
-(`ChainingModeECB`), so the encrypted volumes of the archive tests do not open there.
+swap script), `tests/git_repo.rs`, whose `sh` from Git for Windows starts no program under Wine, and `tar`
+(one fixture of `tests/archive_helper.rs`). The archive helper's ciphers are its own — Wine's `bcrypt`
+refuses ECB, which the encrypted volumes step through — so those volumes open under Wine as on Windows.
 The three Linux-only tests of the lib fail there as they do on Windows.
 
 ## Updating
