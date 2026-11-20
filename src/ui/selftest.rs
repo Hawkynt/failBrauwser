@@ -662,6 +662,14 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
             // run <shell command>: started, not waited for.
             std::process::Command::new("sh").arg("-c").arg(arg).spawn().map_err(|e| e.to_string())?;
         }
+        "wait-window-count" => {
+            // wait-window-count <n>: once the application has n windows, the steps go on in
+            // the newest (one opened from outside, through D-Bus).
+            let want: usize = arg.parse().map_err(|_| "bad number")?;
+            wait(r, move |r| Ok(r.app.windows().len() == want));
+            r.steps.push_front((r.current.0, "use-newest-window".into()));
+        }
+        "use-newest-window" => r.window = r.app.windows().last().cloned().ok_or("no window")?,
         "wait-file-text" => {
             // wait-file-text <path> = <text it contains>
             let (path, want) = arg.split_once(" = ").ok_or("usage: wait-file-text <path> = <text>")?;

@@ -494,11 +494,16 @@ mod tests {
     #[test]
     #[cfg(unix)] // the fuse folder naming is what this decodes
     fn smb_share_addresses_from_folder_names() {
-        let root = gvfs::fuse_root().join("smb-share:server=192.168.1.198,share=gamingcrypt-drive");
-        assert_eq!(share_uri(&root).as_deref(), Some("smb://192.168.1.198/gamingcrypt-drive"));
-        assert_eq!(share_uri(&gvfs::fuse_root().join("sftp:host=neon_whisper")).as_deref(), Some("sftp://neon_whisper/"));
-        assert_eq!(share_uri(&gvfs::fuse_root().join("sftp:host=pi.local,port=2222,user=me")).as_deref(), Some("sftp://me@pi.local:2222/"));
-        assert_eq!(share_uri(&gvfs::fuse_root().join("mtp:host=Pixel")), None);
+        // The folder names themselves: through `share_uri` a share mounted on this computer
+        // would be answered by GIO instead (with a slash at the end).
+        let uri = |dir: &str| uri_of_folder_name(dir);
+        assert_eq!(uri("smb-share:server=192.168.1.198,share=gamingcrypt-drive").as_deref(), Some("smb://192.168.1.198/gamingcrypt-drive"));
+        assert_eq!(uri("sftp:host=neon_whisper").as_deref(), Some("sftp://neon_whisper/"));
+        assert_eq!(uri("sftp:host=pi.local,port=2222,user=me").as_deref(), Some("sftp://me@pi.local:2222/"));
+        assert_eq!(uri("mtp:host=Pixel"), None);
+        // A folder of gvfsd-fuse that is no mount (any more) is still read by its name.
+        let gone = gvfs::fuse_root().join("smb-share:server=no-such-server.invalid,share=gone");
+        assert_eq!(share_uri(&gone).as_deref(), Some("smb://no-such-server.invalid/gone"));
     }
 
     #[test]

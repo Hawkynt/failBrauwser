@@ -40,8 +40,8 @@ const XML: &str = r#"<node>
 thread_local! {
     /// The running application, once its startup is done (main thread).
     static APP: RefCell<Option<Weak<AppCtx>>> = const { RefCell::new(None) };
-    /// Dialogs asked for before that.
-    static WAITING: RefCell<Vec<Call>> = const { RefCell::new(Vec::new()) };
+    /// Calls (dialogs, folders to show) that came before that.
+    static WAITING: RefCell<Vec<Box<dyn FnOnce(Option<Rc<AppCtx>>)>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// A dialog xdg-desktop-portal asks for.
@@ -87,6 +87,15 @@ pub fn start() {
                         let _ = lost.send(());
                     },
                 );
+                // "Show in folder" of other applications, answered the same way.
+                let _fm = gio::bus_own_name(
+                    gio::BusType::Session,
+                    super::filemanager::BUS_NAME,
+                    gio::BusNameOwnerFlags::NONE,
+                    |conn, _| super::filemanager::register(&conn),
+                    |_, _| {},
+                    |_, _| {},
+                );
                 glib::MainLoop::new(Some(&ctx), false).run();
             });
         });
@@ -101,7 +110,16 @@ pub fn start() {
 pub fn serve(app: &Rc<AppCtx>) {
     APP.with(|a| *a.borrow_mut() = Some(Rc::downgrade(app)));
     for call in WAITING.with(|w| std::mem::take(&mut *w.borrow_mut())) {
-        answer_or_wait(call);
+        call(Some(app.clone()));
+    }
+}
+
+/// Runs `f` with the application once its startup is done (`None` once it has gone; main
+/// thread).
+pub(super) fn with_app(f: impl FnOnce(Option<Rc<AppCtx>>) + 'static) {
+    match APP.with(|a| a.borrow().as_ref().map(Weak::upgrade)) {
+        None => WAITING.with(|w| w.borrow_mut().push(Box::new(f))),
+        Some(app) => f(app),
     }
 }
 
@@ -122,10 +140,7 @@ fn register(conn: &gio::DBusConnection) {
 }
 
 fn answer_or_wait(call: Call) {
-    match APP.with(|a| a.borrow().as_ref().map(Weak::upgrade)) {
-        None => WAITING.with(|w| w.borrow_mut().push(call)),
-        Some(app) => answer(app, call),
-    }
+    with_app(move |app| answer(app, call));
 }
 
 fn answer(app: Option<Rc<AppCtx>>, call: Call) {
