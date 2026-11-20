@@ -56,6 +56,8 @@ pub struct Sidebar {
     drive_rows: RefCell<Vec<(Volume, Option<Usage>)>>,
     /// Every volume, also those not shown (ejecting a drive unmounts all of it).
     all_volumes: RefCell<Vec<Volume>>,
+    /// The newest drive reading: an older one that answers late is not shown.
+    drives_generation: std::cell::Cell<u64>,
     tree: gtk::TreeView,
     store: gtk::TreeStore,
     tree_box: gtk::ScrolledWindow,
@@ -346,6 +348,7 @@ pub fn attach(w: &Rc<Window>) {
         column,
         drive_rows: RefCell::new(Vec::new()),
         all_volumes: RefCell::new(Vec::new()),
+        drives_generation: std::cell::Cell::new(0),
         tree,
         store,
         tree_box,
@@ -485,29 +488,47 @@ impl Sidebar {
         }
     }
 
-    /// Reads the drives again (in the background) and shows those holding the user's files.
+    /// Reads the drives again (in the background) and shows those holding the user's files:
+    /// this computer's at once, then again once the phones and network shares have answered.
     fn refresh_drives(self: &Rc<Self>) {
+        let generation = self.drives_generation.get() + 1;
+        self.drives_generation.set(generation);
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            let all = super::drives::gather().await;
-            let Some(sb) = weak.upgrade() else { return };
-            let vols: Vec<Volume> = all.iter().map(|(v, _)| v.clone()).collect();
-            let shown: Vec<(Volume, Option<Usage>)> = failbrauwser::drives::user_volumes(&vols, &glib::home_dir())
-                .into_iter()
-                .map(|v| {
-                    let u = all.iter().find(|(x, _)| x.device == v.device && x.label == v.label).and_then(|(_, u)| *u);
-                    (v, u)
-                })
-                .collect();
-            *sb.all_volumes.borrow_mut() = vols;
-            let mounts_before: Vec<PathBuf> = sb.drive_rows.borrow().iter().flat_map(|(v, _)| v.mount_points.clone()).collect();
-            let mounts_now: Vec<PathBuf> = shown.iter().flat_map(|(v, _)| v.mount_points.clone()).collect();
-            sb.show_drives(shown);
-            // The mounted volumes leave out what the drive list shows.
-            if mounts_before != mounts_now {
-                sb.rebuild();
+            let w = weak.clone();
+            let all = super::drives::gather_staged(move |quick| {
+                if let Some(sb) = w.upgrade().filter(|sb| sb.drives_generation.get() == generation) {
+                    sb.apply_drives(quick);
+                }
+            })
+            .await;
+            if let Some(sb) = weak.upgrade().filter(|sb| sb.drives_generation.get() == generation) {
+                sb.apply_drives(all);
             }
         });
+    }
+
+    fn apply_drives(&self, all: Vec<(Volume, Option<Usage>)>) {
+        let vols: Vec<Volume> = all.iter().map(|(v, _)| v.clone()).collect();
+        let shown: Vec<(Volume, Option<Usage>)> = failbrauwser::drives::user_volumes(&vols, &glib::home_dir())
+            .into_iter()
+            .map(|v| {
+                let u = all.iter().find(|(x, _)| x.device == v.device && x.label == v.label).and_then(|(_, u)| *u);
+                (v, u)
+            })
+            .collect();
+        // Nothing changed (the second reading often tells the same): the rows stay as they are.
+        if *self.drive_rows.borrow() == shown && *self.all_volumes.borrow() == vols {
+            return;
+        }
+        *self.all_volumes.borrow_mut() = vols;
+        let mounts_before: Vec<PathBuf> = self.drive_rows.borrow().iter().flat_map(|(v, _)| v.mount_points.clone()).collect();
+        let mounts_now: Vec<PathBuf> = shown.iter().flat_map(|(v, _)| v.mount_points.clone()).collect();
+        self.show_drives(shown);
+        // The mounted volumes leave out what the drive list shows.
+        if mounts_before != mounts_now {
+            self.rebuild();
+        }
     }
 
     fn show_drives(&self, drives: Vec<(Volume, Option<Usage>)>) {

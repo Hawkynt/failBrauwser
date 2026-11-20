@@ -27,6 +27,8 @@ pub struct DrivesPage {
     /// Volumes shown, in row order, with their fill levels.
     volumes: RefCell<Vec<Volume>>,
     usages: RefCell<Vec<Option<Usage>>>,
+    /// The newest reading: an older one that answers late is not shown.
+    generation: Cell<u64>,
     weak: RefCell<Weak<DrivesPage>>,
 }
 
@@ -245,8 +247,28 @@ fn set_busy(key: &str, on: bool) {
     changed();
 }
 
-/// Every volume and phone, with its fill level.
-pub async fn gather() -> Vec<(Volume, Option<Usage>)> {
+/// Every volume, phone and network share, with its fill level, in two steps. `first` gets at
+/// once what needs no other device: the computer's own drives with their fill levels, and the
+/// network shares with the fill level they told last. What is returned adds the phones and the fill levels the shares tell now, asked at the
+/// same time: an SMB server can take seconds, and the drives of this computer do not wait for it.
+pub async fn gather_staged(first: impl FnOnce(Vec<(Volume, Option<Usage>)>)) -> Vec<(Volume, Option<Usage>)> {
+    let ctx = glib::MainContext::default();
+    let local = gather_local().await;
+    let mut quick = local.clone();
+    quick.extend(super::shares::volumes_known());
+    first(quick);
+    let phones = ctx.spawn_local(super::phones::volumes());
+    let shares = ctx.spawn_local(super::shares::volumes());
+    let mut all = local;
+    // Phones next to the USB sticks (their fill levels asked of GVfs, not statvfs), and the
+    // network shares.
+    all.extend(phones.await.unwrap_or_default());
+    all.extend(shares.await.unwrap_or_default());
+    all
+}
+
+/// The computer's own drives (UDisks2, else the mount table), with their fill levels.
+async fn gather_local() -> Vec<(Volume, Option<Usage>)> {
     #[cfg(windows)]
     let vols = gio::spawn_blocking(failbrauwser::win::storage::volumes).await.unwrap_or_default();
     #[cfg(not(windows))]
@@ -263,10 +285,6 @@ pub async fn gather() -> Vec<(Volume, Option<Usage>)> {
     })
     .await
     .unwrap_or_default();
-    // Phones next to the USB sticks (their fill levels asked of GVfs, not statvfs), and the
-    // network shares.
-    with_usage.extend(super::phones::volumes().await);
-    with_usage.extend(super::shares::volumes().await);
     FAKES.with(|f| {
         for d in f.borrow().iter() {
             with_usage.extend(d.volumes().into_iter().map(|v| {
@@ -319,6 +337,7 @@ pub fn attach(w: &Window, pane: &Rc<Pane>) {
         window: Rc::downgrade(&w.me()),
         shown: Cell::new(false),
         volumes: RefCell::new(Vec::new()),
+        generation: Cell::new(0),
         usages: RefCell::new(Vec::new()),
         weak: RefCell::new(Weak::new()),
     });
@@ -521,12 +540,23 @@ impl DrivesPage {
         self.weak.borrow().upgrade().expect("page alive")
     }
 
-    /// Reads the volume list from UDisks2 (or the mount table) and redraws.
+    /// Reads the volume list from UDisks2 (or the mount table) and redraws: this computer's
+    /// drives at once, again once the phones and network shares have answered.
     pub fn refresh(&self) {
         let me = self.me();
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
         glib::spawn_future_local(async move {
-            let vols = gather().await;
-            me.rebuild(vols);
+            let first = me.clone();
+            let vols = gather_staged(move |quick| {
+                if first.generation.get() == generation {
+                    first.rebuild(quick);
+                }
+            })
+            .await;
+            if me.generation.get() == generation {
+                me.rebuild(vols);
+            }
         });
     }
 
