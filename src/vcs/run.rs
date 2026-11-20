@@ -33,14 +33,34 @@ pub fn call(tool: Tool, dir: &Path, argv: &[impl AsRef<std::ffi::OsStr>]) -> Ans
     ask(tool.cli(), dir, argv)
 }
 
+/// How each of the five clients is kept from answering on its own: on a terminal, in a window of its
+/// own, or through a pager standing between its words and the pipe reading them. Git Credential
+/// Manager opens a credential window on a push, `svn` reads a passphrase straight off the terminal,
+/// `less` swallows a log — on either platform. `ui::vcs::progress` puts this program's own askpass
+/// answers on top of the table, so a question comes to our windows instead of a helper's.
+pub const NON_INTERACTIVE: [(&str, &str); 7] = [
+    ("GIT_TERMINAL_PROMPT", "0"),
+    ("GIT_PAGER", ""),
+    ("PAGER", ""),
+    ("HGPLAIN", "1"),
+    ("GCM_INTERACTIVE", "never"),
+    ("SVN_INTERACTIVE", "false"),
+    ("SSH_ASKPASS", ""),
+];
+
+/// Puts that environment on one command; the locale each caller wants stays with the caller, because
+/// the machine-parsed reads want `C` and the window that shows the words wants UTF-8.
+pub fn non_interactive(c: &mut Command) {
+    c.envs(NON_INTERACTIVE);
+}
+
 /// The same, for a program named directly: the shape of the answer does not depend on which tool
 /// a scenario is out to talk to.
 pub fn ask(program: &str, dir: &Path, argv: &[impl AsRef<std::ffi::OsStr>]) -> Answer {
     let mut command = Command::new(program);
     command.current_dir(dir).args(argv).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    // The environment the clients read: a locale of its own for the machine-readable output, and
-    // no pager standing between us and the answer.
-    command.env("LC_ALL", "C").env("LANG", "C").env("PAGER", "").env("GIT_PAGER", "").env("HGPLAIN", "1").env("GIT_TERMINAL_PROMPT", "0").env("SVN_INTERACTIVE", "false").env("SSH_ASKPASS", "").env("GCM_INTERACTIVE", "never");
+    command.env("LC_ALL", "C").env("LANG", "C");
+    non_interactive(&mut command);
     // Every client here is a console program: without this each Repository command would bring up
     // a black window, since this program has no console for them to share.
     #[cfg(windows)]
@@ -153,18 +173,38 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    /// A client left to itself answers somewhere the window never asked: on the terminal, in a
+    /// helper's own window, or into a pager. The table names each way the five clients do that, and a
+    /// key must not appear twice, because the second entry silently wins.
+    #[test]
+    fn the_client_environment_leaves_nothing_to_answer_on_its_own() {
+        let mut keys: Vec<&str> = NON_INTERACTIVE.iter().map(|(k, _)| *k).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), NON_INTERACTIVE.len(), "a key appears twice in the table");
+        for want in ["GIT_TERMINAL_PROMPT", "GIT_PAGER", "PAGER", "HGPLAIN", "GCM_INTERACTIVE", "SVN_INTERACTIVE", "SSH_ASKPASS"] {
+            assert!(NON_INTERACTIVE.iter().any(|(k, _)| *k == want), "{want} is how a client prompts or pages on its own");
+        }
+    }
+
     /// A repository `git` made here, or none where no git client runs.
     fn git_fixture() -> Option<(tempfile::TempDir, std::path::PathBuf)> {
-        let probe = Command::new("git").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status();
-        if !probe.is_ok_and(|s| s.success()) {
+        let mut probe = Command::new("git");
+        probe.arg("--version").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        #[cfg(windows)]
+        crate::win::console::no_window(&mut probe);
+        if !probe.status().is_ok_and(|s| s.success()) {
             eprintln!("no git client on this machine, skipping the real-client scenarios");
             return None;
         }
         let d = tempfile::tempdir().unwrap();
         let dir = d.path().to_path_buf();
         let run = |args: &[&str]| {
-            let status = Command::new("git").current_dir(&dir).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status().expect("git could not run");
-            assert!(status.success(), "git {args:?} did not answer");
+            let mut c = Command::new("git");
+            c.current_dir(&dir).args(args).stdout(Stdio::null()).stderr(Stdio::null());
+            #[cfg(windows)]
+            crate::win::console::no_window(&mut c);
+            assert!(c.status().expect("git could not run").success(), "git {args:?} did not answer");
         };
         run(&["init", "-q"]);
         Some((d, dir))

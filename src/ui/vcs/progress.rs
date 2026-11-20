@@ -105,7 +105,14 @@ pub fn execute(dir: &Path, cmds: Vec<Cmd>, slot: Arc<Mutex<Option<Child>>>) -> a
 /// The environment the commands run in: no terminal prompts; passwords and passphrases
 /// are asked for in a window of ours.
 pub fn prepare(c: &mut std::process::Command) {
-    c.env("GIT_TERMINAL_PROMPT", "0").env("GIT_LITERAL_PATHSPECS", "1").env("HGPLAIN", "1").env("LC_ALL", "C.UTF-8").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    c.env("GIT_LITERAL_PATHSPECS", "1").env("LC_ALL", "C.UTF-8").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // The same table the reads use, so a commit or a push cannot answer on a terminal, page itself,
+    // or raise a credential window of its own; the askpass names below point the questions here.
+    failbrauwser::vcs::run::non_interactive(c);
+    // Every command this window runs is a console client and this program is windowed: without the
+    // flag a commit, a merge or a push brings up its own black window for as long as it runs.
+    #[cfg(windows)]
+    failbrauwser::win::console::no_window(c);
     if let Ok(exe) = std::env::current_exe() {
         c.env("GIT_ASKPASS", &exe).env("SSH_ASKPASS", &exe).env("SSH_ASKPASS_REQUIRE", "force").env(super::askpass::ENV, "1");
     }
