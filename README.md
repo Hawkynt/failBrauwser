@@ -138,7 +138,7 @@ See [docs/WINDOWS.md](docs/WINDOWS.md) for the full picture of how the two syste
 *Help → Check for Updates* says whether GitHub has a newer release and installs either the
 newest **release** — its ready-built package (`failbrauwser-<version>-<arch>-linux.tar.gz`,
 installed with `install.sh --prebuilt`; on Windows `failbrauwser-<version>-x86_64-windows.zip`,
-whose files replace the install folder while the program runs) — or builds the current
+whose files replace the install folder once every copy of it has closed) — or builds the current
 **source** (needs what a build needs, below; Linux only, since it runs `install.sh`). Both install into the same place with the options of the last install (kept in
 `~/.config/failbrauwser/install-options`); the download, source included, is deleted when it is
 done, and failBrauwser restarts as the new version. The window shows the installer's output
@@ -159,6 +159,27 @@ build takes about 1½ minutes on 28 cores, an update of the program's own code a
 seconds, and one that changed nothing a second. A git checkout builds into its own `target`
 as before. A copy installed for everyone (`--system`) is updated from a terminal. `scripts/package.sh` and
 `winpack\package.ps1` make the release packages.
+
+**Updating with more than one copy open:** an update closes them all, and it asks rather than
+reaches in. Each running copy keeps a record of what it was showing — every window with its folder,
+its tabs, which tab stood in front and which entry was selected — in `failbrauwser\sessions\<process
+id>` below the folder this program keeps its per-user state in (`~/.local/share/failbrauwser` on
+Linux, `%LOCALAPPDATA%\failbrauwser` on Windows, and it survives an update because the update only
+touches the install folder). Asked to close, a copy writes that record once more, cleans up what it
+staged for itself, and closes by itself, which is why a window that was waiting for an answer closes
+as if cancelled and a job that was running is left in the state *Resuming an interrupted operation*
+describes. The ask is an ask: a copy that does not close in the time given is named by its process id
+and the update stops there with nothing replaced, because nothing here ends a process it did not
+start, and a copy held open by a modal dialog or a job says so in its own window instead of being
+killed. Only when the last record is gone does the swap run — a script that belongs to no window, on
+Windows as on Linux, since it outlives the program whose files it replaces — and the new version is
+started with those records handed to it, so every window comes back where it was. A remembered folder
+that no longer exists (an unplugged stick, a removed folder) opens at the nearest folder that does and
+says what it could not open. A record whose process no longer runs and whose windows nobody restored
+is a leftover, and the next start clears it; a record that lies about itself restores nothing and is
+reported, never obeyed. The single-file launcher obeys the same rule where it only refused: it asks
+the copies it finds running, waits for them, and installs only once nothing holds the folder; a copy
+that stays open leaves the refusal standing and names the process holding it.
 
 ### Requirements
 

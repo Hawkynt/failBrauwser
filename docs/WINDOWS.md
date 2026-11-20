@@ -131,11 +131,17 @@ The folder stays build output; cargo ignores it.
 
 *Help → Check for Updates* on Windows installs the newest release's ready-built
 `failbrauwser-<version>-x86_64-windows.zip` (the same name formula `package.ps1` produces).
-The running program file is renamed aside — Windows allows renaming a running image, not
-overwriting it — the fresh `bin`/`lib`/`share` contents are copied in, the old file deleted
-and the new program started. The *build from source* channel is Linux-only there (it runs
-`install.sh`); a copy installed machine-wide shows the manual route instead
-(`winpack\install.ps1`).
+Every running copy is asked to close and to write down its windows and tabs first (README:
+*Updating with more than one copy open*), and the files are replaced only once nothing in the
+install folder is open: the fresh `bin`/`lib`/`share` contents are copied in, the program file
+that was there is deleted, and the new program is started with the remembered windows handed to
+it. Renaming the image aside — Windows allows renaming a running image, not overwriting it —
+is kept only as what it is, a way past a copy that would not close, and the waiting before the
+swap is bounded: a copy still holding the folder stops the update by name instead of being
+killed. The swap script is detached on Windows as `setsid` detaches it on Linux, because the
+program that started it is one of the files being replaced. The *build from source* channel is
+Linux-only there (it runs `install.sh`); a copy installed machine-wide shows the manual route
+instead (`winpack\install.ps1`).
 
 ## What is where
 
