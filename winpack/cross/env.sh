@@ -10,6 +10,8 @@ export FB_WINCROSS
 _fb_x=$FB_WINCROSS/xwin _fb_r=$FB_WINCROSS/sysroot
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
 export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=lld-link
+# lld-link finds the CRT and SDK libraries through LIB as link.exe does (the archive helper's link uses it).
+export LIB="$_fb_x/crt/lib/x86_64;$_fb_x/sdk/lib/um/x86_64;$_fb_x/sdk/lib/ucrt/x86_64"
 export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS="-Lnative=$_fb_x/crt/lib/x86_64 -Lnative=$_fb_x/sdk/lib/um/x86_64 -Lnative=$_fb_x/sdk/lib/ucrt/x86_64 -Lnative=$_fb_r/ucrt64/lib"
 export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine
 # C parts of dependencies: clang in MSVC mode against the same CRT and SDK headers.

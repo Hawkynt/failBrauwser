@@ -139,6 +139,7 @@ The same MSVC target builds on Linux, and its programs and test binaries run und
 winpack/cross/setup.sh                                  # once, and after bootstrap-lock.txt changes
 . winpack/cross/env.sh
 cargo build --target x86_64-pc-windows-msvc             # target/x86_64-pc-windows-msvc/debug
+winpack/cross/build-helper.sh                           # target/helper/fb-archive.exe
 cargo test --target x86_64-pc-windows-msvc --lib -- --skip ops::delete::tests::trashing_a_local_file_lands_in_the_recycle_bin
 ```
 
@@ -149,12 +150,16 @@ accepts their license for you), the files `winpack/bootstrap-lock.txt` pins, tak
 `genimports.ps1`, with `llvm-dlltool`), a Wine prefix with a loader cache written for that sysroot,
 and MinGit's `git.exe`. `winpack/sysroot` becomes a link to that sysroot. `env.sh` sets cargo to link
 with `lld-link`, compile C with `clang-cl`, embed the icon with `llvm-rc` (`FB_RC`) and run the test
-binaries with `wine`. The archive helper is not built: NativeAOT does not compile for another system.
+binaries with `wine`. `build-helper.sh` publishes the archive helper for `win-x64` with NativeAOT, whose
+cross-system refusal `DisableUnsupportedError` lifts: `ilc` emits the Windows objects and `lld-link` links them
+against the same CRT and SDK (through `LIB`), without `/SOURCELINK` and debug symbols, which it cannot take.
 
 What Wine cannot answer fails there and nowhere else: the recycle bin (`E_NOTIMPL`; the test named
 above never returns), WPD devices, WNet shares, `format.com`, `Z:` (Wine's drive for `/`), the hidden
 and system attributes on a Linux folder, a rename that changes only case, PowerShell (the update's
-swap script) and `tests/git_repo.rs`, whose `sh` from Git for Windows starts no program under Wine.
+swap script), `tests/git_repo.rs`, whose `sh` from Git for Windows starts no program under Wine, `tar`
+(one fixture of `tests/archive_helper.rs`) and AES in ECB mode, which Wine's `bcrypt` refuses
+(`ChainingModeECB`), so the encrypted volumes of the archive tests do not open there.
 The three Linux-only tests of the lib fail there as they do on Windows.
 
 ## Updating
