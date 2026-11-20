@@ -170,6 +170,16 @@ pub struct BlameLine {
     pub text: String,
 }
 
+impl BlameLine {
+    /// The revision for the *Blame* commit column (README: Version control): eight characters
+    /// where the client's name is longer, its whole name where it is shorter — Subversion counts
+    /// `3` and CVS `1.2` — and nothing where the client names none. `get` rather than an index,
+    /// so that a short name cannot end the window in a panic.
+    pub fn short(&self) -> &str {
+        self.hash.get(..8).unwrap_or(&self.hash)
+    }
+}
+
 /// One line of a side-by-side diff: what the left (old) and right (new) side show.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffRow {
@@ -612,5 +622,36 @@ mod fold_tests {
     fn a_file_without_changes_folds_to_one_row() {
         let (a, _) = text(10, &[]);
         assert_eq!(fold_same(&side_by_side(&a, &a), 3), [Shown::Fold { rows: 0..10, old: (1, 10), new: (1, 10) }]);
+    }
+}
+
+#[cfg(test)]
+mod revision_tests {
+    use super::BlameLine;
+
+    fn line(hash: &str) -> BlameLine {
+        BlameLine { hash: hash.into(), author: "fixture".into(), time: 0, summary: String::new(), line: 1, text: String::new() }
+    }
+
+    #[test]
+    fn a_subversion_or_cvs_revision_shows_its_whole_number() {
+        assert_eq!(line("3").short(), "3");
+        assert_eq!(line("1.2").short(), "1.2");
+    }
+
+    #[test]
+    fn a_long_revision_shows_its_first_eight_characters() {
+        assert_eq!(line("0e2ab1c4f5d6e7a8b9c0d1e2f3a4b5c6d7e8f901").short(), "0e2ab1c4");
+    }
+
+    #[test]
+    fn a_line_the_client_gives_no_revision_shows_nothing() {
+        assert_eq!(line("").short(), "");
+    }
+
+    #[test]
+    fn an_annotated_cvs_line_carries_its_branch_number_into_the_column() {
+        let lines = super::super::cvs::parse_annotate("1.1          (fixture  14-Nov-26): alpha\n1.2          (fixture  14-Nov-26): beta changed\n");
+        assert_eq!(lines.iter().map(|l| l.short()).collect::<Vec<_>>(), ["1.1", "1.2"]);
     }
 }

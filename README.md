@@ -777,7 +777,9 @@ side: rows the two sides share, the line number on each side, removed lines red 
 yellow as in TortoiseGitMerge, inside a changed pair the words that actually changed standing out,
 unchanged runs folded to three lines with the range they hide named, and *next change* / *previous
 change* walking the changes; nothing in that view is carried by colour alone. *Blame* shows each
-line with its revision, author and date. Every command runs in the *⟨Tool⟩ Command Progress*
+line with its revision, author and date: the revision as the client names it, cut to eight characters
+only where that name is longer, so a Subversion or CVS revision keeps its whole number, and left
+blank where the client names none. Every command runs in the *⟨Tool⟩ Command Progress*
 window, which shows what the client prints and ends in green *Success* or a red error quoting the
 client's own words, with *Push…* after a commit where the tool pushes. A command whose client would
 otherwise open an editor or a prompt is asked for the word it needs before anything runs (the commit
