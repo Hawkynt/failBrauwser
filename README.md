@@ -133,6 +133,8 @@ bounds it.
 Artifactory's mirror of `repo.msys2.org`; point it at any reachable MSYS2 tree — and
 `winpack\genimports.ps1` makes its MSVC import libraries; `winpack\build.ps1 -Release` is the
 plain build without packaging. Uninstalling is deleting that folder and the Start Menu entry.
+On Linux, `winpack/cross/setup.sh` and `winpack/cross/env.sh` build the same Windows program and
+run its tests under Wine (docs/WINDOWS.md: *Building on Linux, testing under Wine*).
 See [docs/WINDOWS.md](docs/WINDOWS.md) for the full picture of how the two systems line up.
 
 ### Updating
