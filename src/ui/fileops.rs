@@ -360,13 +360,23 @@ fn rename_selection(w: &Window) {
     ask_rename(w, item, initial);
 }
 
+/// The icon a file list shows for `item`, for the header of a question about it.
+fn item_icon(item: &Item) -> gtk::gio::Icon {
+    match item {
+        Item::Fs(e) | Item::Trash(_, e) | Item::Found(e, _) => util::icon_for_entry(e),
+        _ if item.is_dir_like() => util::folder_icon(),
+        _ => util::icon_for_type(&item.content_type()),
+    }
+}
+
 /// Asks for the new name of `item`, starting from `initial`; a name that is taken asks
 /// whether to overwrite, choose another name (back here) or leave it.
 fn ask_rename(w: &Window, item: Item, initial: String) {
     let old = item.display_name();
     let weak = Rc::downgrade(&w.me());
     let title = format!("Rename “{old}”");
-    util::ask_text(&w.win, &title, "New name:", &initial, "_Rename", !item.is_dir_like(), move |new| {
+    let heading = util::Heading { icon: item_icon(&item), text: old.clone() };
+    util::ask_text(&w.win, &title, Some(heading), "_New name:", &initial, "_Rename", !item.is_dir_like(), move |new| {
         let Some(w) = weak.upgrade() else { return };
         if new == old {
             return;
@@ -481,8 +491,11 @@ fn create_named(w: &Window, title: &str, default: &str, folder: bool) {
         default.to_string()
     };
     let weak = Rc::downgrade(&w.me());
-    let label = if folder { "Folder name:" } else { "File name:" };
-    util::ask_text(&w.win, title, label, &initial, "C_reate", !folder, move |name| {
+    let label = if folder { "_Folder name:" } else { "_File name:" };
+    // What is made, and where: the new item's icon and the folder it goes into.
+    let icon = if folder { util::folder_icon() } else { util::icon_for_type("text/plain") };
+    let heading = util::Heading { icon, text: format!("In “{}”", loc.title()) };
+    util::ask_text(&w.win, title, Some(heading), label, &initial, "C_reate", !folder, move |name| {
         let Some(w) = weak.upgrade() else { return };
         if !util::valid_file_name(&name) {
             util::show_error(&w.win, "Invalid name", "A name cannot be empty or contain “/”.");

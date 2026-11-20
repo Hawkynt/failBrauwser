@@ -263,14 +263,17 @@ fn label_texts(w: &gtk::Widget) -> Vec<String> {
     out
 }
 
-/// A visible message dialog whose text contains `text`.
+/// A visible dialog whose message, title or any of its texts contains `text`.
 #[allow(deprecated)]
-fn find_dialog(text: &str) -> Option<gtk::MessageDialog> {
-    gtk::Window::list_toplevels()
-        .into_iter()
-        .filter_map(|w| w.downcast::<gtk::MessageDialog>().ok())
-        .filter(|d| d.is_visible())
-        .find(|d| d.text().is_some_and(|t| t.contains(text)) || d.secondary_text().is_some_and(|t| t.contains(text)))
+fn find_dialog(text: &str) -> Option<gtk::Dialog> {
+    let dialogs: Vec<gtk::Dialog> = gtk::Window::list_toplevels().into_iter().filter_map(|w| w.downcast::<gtk::Dialog>().ok()).filter(|d| d.is_visible()).collect();
+    let said = |d: &gtk::Dialog| match d.downcast_ref::<gtk::MessageDialog>() {
+        Some(m) => m.text().is_some_and(|t| t.contains(text)) || m.secondary_text().is_some_and(|t| t.contains(text)),
+        None => false,
+    };
+    let titled = |d: &gtk::Dialog| d.title().is_some_and(|t| t.contains(text));
+    let shows = |d: &gtk::Dialog| label_texts(d.upcast_ref()).iter().any(|t| t.contains(text));
+    dialogs.iter().find(|d| said(d)).or_else(|| dialogs.iter().find(|d| titled(d))).or_else(|| dialogs.iter().find(|d| shows(d))).cloned()
 }
 
 /// Path-text equality that ignores separator spelling: scenario lines keep `$T/…`

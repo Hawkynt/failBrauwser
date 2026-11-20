@@ -737,7 +737,7 @@ impl Sidebar {
                 add(&menu, "_Rename…", true, Box::new(move || {
                     let Some(sb) = me.upgrade() else { return };
                     let Some(w) = sb.window.upgrade() else { return };
-                    util::ask_text(&w.win, "Rename Entry", "Name in the side panel (empty for the default):", &current, "_Rename", false, move |name| {
+                    util::ask_text(&w.win, "Rename Entry", None, "_Name in the side panel (empty for the default):", &current, "_Rename", false, move |name| {
                         edit_shortcuts(|s| s.rename(index, &name));
                     });
                 }));

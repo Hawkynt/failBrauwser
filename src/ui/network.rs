@@ -752,7 +752,8 @@ async fn list_shares(parent: &gtk::Window, host: &str) -> Result<Vec<Share>, Str
         Probe::Locked => {
             let (tx, rx) = async_channel::unbounded();
             let guess = std::env::var("USERNAME").unwrap_or_default();
-            util::ask_text(parent, "Sign In", &format!("User name for “{host}”:"), &guess, "Continue", false, move |u| {
+            let heading = util::Heading { icon: gio::ThemedIcon::from_names(&["network-server", "network-workgroup"]).upcast(), text: host.to_string() };
+            util::ask_text(parent, "Sign In", Some(heading), "_User name:", &guess, "_Continue", false, move |u| {
                 let _ = tx.send_blocking(u);
             });
             let Ok(user) = rx.recv().await else { return Err(String::new()) };

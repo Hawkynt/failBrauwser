@@ -362,11 +362,61 @@ pub fn close_menu_on_presses_over(menu: &gtk::Menu, main: &impl IsA<gtk::Widget>
     });
 }
 
+/// What a text question shows above its field: the icon and name of what it is about, as the
+/// Properties window's header shows them.
+pub struct Heading {
+    pub icon: gio::Icon,
+    pub text: String,
+}
+
+/// The window of a question answered with a line of text, built like the Properties window: a
+/// window of its own with the title in its title bar, the heading (when there is one) at the top
+/// with its icon, the field in a labelled row, and the buttons at the bottom right.
+fn entry_dialog(parent: &impl IsA<gtk::Window>, title: &str, heading: Option<&Heading>, label: &str, entry: &gtk::Entry, ok_label: &str) -> gtk::Dialog {
+    let d = gtk::Dialog::with_buttons(
+        Some(title),
+        Some(parent),
+        gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+        &[("_Cancel", gtk::ResponseType::Cancel), (ok_label, gtk::ResponseType::Ok)],
+    );
+    d.set_resizable(false);
+    d.set_default_response(gtk::ResponseType::Ok);
+    let area = d.content_area();
+    area.set_border_width(12);
+    area.set_spacing(12);
+    if let Some(h) = heading {
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        header.pack_start(&gtk::Image::from_gicon(&h.icon, gtk::IconSize::Dialog), false, false, 0);
+        let name = gtk::Label::new(None);
+        name.set_markup(&format!("<big><b>{}</b></big>", glib::markup_escape_text(&h.text)));
+        name.set_xalign(0.0);
+        name.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        name.set_max_width_chars(48);
+        header.pack_start(&name, true, true, 0);
+        area.pack_start(&header, false, false, 0);
+    }
+    let row = gtk::Grid::new();
+    row.set_column_spacing(12);
+    let l = gtk::Label::with_mnemonic(label);
+    l.set_xalign(1.0);
+    l.style_context().add_class("dim-label");
+    l.set_mnemonic_widget(Some(entry));
+    entry.set_hexpand(true);
+    entry.set_activates_default(true);
+    row.attach(&l, 0, 0, 1, 1);
+    row.attach(entry, 1, 0, 1, 1);
+    area.pack_start(&row, false, false, 0);
+    d.show_all();
+    entry.grab_focus();
+    d
+}
+
 /// Asks for a line of text (new folder name, rename, …). `select_stem` pre-selects the name
 /// without its extension, as file managers do for renames.
 pub fn ask_text(
     parent: &impl IsA<gtk::Window>,
     title: &str,
+    heading: Option<Heading>,
     label: &str,
     initial: &str,
     ok_label: &str,
@@ -379,33 +429,15 @@ pub fn ask_text(
             return;
         }
     }
-    // Attached to the window like the other questions, not a window of its own.
-    let d = gtk::MessageDialog::new(
-        Some(parent),
-        gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
-        gtk::MessageType::Question,
-        gtk::ButtonsType::None,
-        title,
-    );
-    d.set_secondary_text(Some(label));
-    d.add_button("_Cancel", gtk::ResponseType::Cancel);
-    d.add_button(ok_label, gtk::ResponseType::Ok);
-    d.set_default_response(gtk::ResponseType::Ok);
     let entry = gtk::Entry::new();
     entry.set_text(initial);
-    entry.set_activates_default(true);
     entry.set_width_chars(40);
-    entry.set_margin_top(6);
-    if let Ok(area) = d.message_area().downcast::<gtk::Box>() {
-        area.pack_start(&entry, false, false, 0);
-    }
-    d.show_all();
+    let d = entry_dialog(parent, title, heading.as_ref(), label, &entry, ok_label);
     let stem = if select_stem {
         initial.char_indices().filter(|(i, c)| *c == '.' && *i > 0).map(|(i, _)| i).next().map(|i| initial[..i].chars().count() as i32)
     } else {
         None
     };
-    entry.grab_focus();
     entry.select_region(0, stem.unwrap_or(-1));
     // Closing the dialog answers once more (as a delete event).
     let answered = std::cell::Cell::new(false);
@@ -424,8 +456,8 @@ pub fn ask_text(
 }
 
 /// Asks for a password (hidden input). `on_ok` gets the non-empty answer, `on_cancel` answers a
-/// prompt the user refused (cancelled, closed, or unlocked with an empty field). A message dialog,
-/// so a UI script can see the ask and drive it: its primary text is the label.
+/// prompt the user refused (cancelled, closed, or unlocked with an empty field). Built like the
+/// other text questions; `label` names what the password is for.
 pub fn ask_secret_answered(parent: &impl IsA<gtk::Window>, title: &str, label: &str, on_ok: impl Fn(String) + 'static, on_cancel: impl Fn() + 'static) {
     if super::selftest::active() {
         if let Some(t) = super::selftest::scripted_text() {
@@ -433,27 +465,13 @@ pub fn ask_secret_answered(parent: &impl IsA<gtk::Window>, title: &str, label: &
             return;
         }
     }
-    let d = gtk::MessageDialog::new(
-        Some(parent),
-        gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
-        gtk::MessageType::Question,
-        gtk::ButtonsType::None,
-        title,
-    );
-    d.set_secondary_text(Some(label));
-    d.add_button("_Cancel", gtk::ResponseType::Cancel);
-    d.add_button("_Unlock", gtk::ResponseType::Ok);
-    d.set_default_response(gtk::ResponseType::Ok);
     let entry = gtk::Entry::new();
     entry.set_visibility(false);
     entry.set_input_purpose(gtk::InputPurpose::Password);
-    entry.set_activates_default(true);
     entry.set_width_chars(32);
-    if let Ok(area) = d.message_area().downcast::<gtk::Box>() {
-        area.pack_start(&entry, false, false, 0);
-    }
-    d.show_all();
-    entry.grab_focus();
+    let heading = Heading { icon: gio::ThemedIcon::from_names(&["dialog-password", "channel-secure-symbolic"]).upcast(), text: label.trim_end_matches(':').to_string() };
+    let field = if label.to_lowercase().contains("passphrase") { "Pass_phrase:" } else { "_Password:" };
+    let d = entry_dialog(parent, title, Some(&heading), field, &entry, "_Unlock");
     let answered = std::cell::Cell::new(false);
     d.connect_response(move |d, resp| {
         if answered.replace(true) {

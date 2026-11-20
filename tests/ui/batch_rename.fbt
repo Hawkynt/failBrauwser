@@ -6,6 +6,8 @@ select IMG_0001.JPG | IMG_0002.JPG | IMG_0003.JPG
 action win.rename
 wait-dialog Rename 3 Items
 expect-batch-status No name changes yet
+# Built like the Properties window: a titled window with the selection's count at the top.
+expect-dialog-label Rename 3 Items : 3 items
 batch-set batch-template = Urlaub {n:03}{ext}
 batch-set batch-case = lower
 expect-batch-preview IMG_0001.JPG -> urlaub 001.jpg | IMG_0002.JPG -> urlaub 002.jpg | IMG_0003.JPG -> urlaub 003.jpg
