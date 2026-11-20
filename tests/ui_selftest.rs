@@ -373,6 +373,23 @@ fn file_chooser_through_xdg_desktop_portal() {
     });
 }
 
+/// Other applications' "show in folder" (Firefox's downloads, Chromium, Thunderbird), asked
+/// over D-Bus as they ask it.
+#[test]
+#[cfg(unix)]
+fn other_applications_show_files_in_their_folder() {
+    if !have("gdbus") {
+        eprintln!("gdbus missing, skipping");
+        return;
+    }
+    run("show_in_folder.fbt", |t| {
+        std::fs::create_dir_all(t.join("dl")).unwrap();
+        for f in ["a.pdf", "b.zip", "c.txt"] {
+            std::fs::write(t.join("dl").join(f), "x").unwrap();
+        }
+    });
+}
+
 #[test]
 fn gtk3_applications_get_failbrauwsers_dialogs() {
     if !Path::new("/usr/lib/xdg-desktop-portal").exists() && !Path::new("/usr/libexec/xdg-desktop-portal").exists() {

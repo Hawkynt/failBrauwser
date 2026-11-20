@@ -77,6 +77,7 @@ LIB_DIR="$PREFIX/lib/failbrauwser"
 SHARE="$PREFIX/share"
 AUTOSTART_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/failbrauwser.desktop"
 PORTAL_NAME=org.freedesktop.impl.portal.desktop.failbrauwser
+FM_NAME=org.freedesktop.FileManager1
 PORTAL_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/xdg-desktop-portal/portals.conf"
 PORTAL_LINE="org.freedesktop.impl.portal.FileChooser=failbrauwser"
 PORTAL_MARK="# Written by failBrauwser's install.sh"
@@ -246,6 +247,7 @@ if [ "$UNINSTALL" = 1 ]; then
     $SUDO rmdir "$LIB_DIR" 2>/dev/null || true
     rm -f "$AUTOSTART_FILE"
     $SUDO rm -f "$SHARE/xdg-desktop-portal/portals/failbrauwser.portal" "$SHARE/dbus-1/services/$PORTAL_NAME.service"
+    $SUDO rm -f "$SHARE/dbus-1/services/$FM_NAME.service"
     portal_conf_remove
     restart_portal
     refresh_caches
@@ -463,6 +465,10 @@ else
     $SUDO rm -f "$LIB_DIR/$MODULE_NAME"
     gtk_module_env_remove
 fi
+
+say "Answering other applications' \"show in folder\" (org.freedesktop.FileManager1)"
+$SUDO install -Dm644 "$HERE/data/$FM_NAME.service" "$SHARE/dbus-1/services/$FM_NAME.service"
+$SUDO sed -i "s|^Exec=failbrauwser|Exec=$BIN_DIR/failbrauwser|" "$SHARE/dbus-1/services/$FM_NAME.service"
 
 if [ "$MAKE_DEFAULT" = 1 ]; then
     say "Making failBrauwser the default file manager"

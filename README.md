@@ -540,6 +540,15 @@ A session that starts applications itself without reading `environment.d` passes
 in its start script. `FAILBRAUWSER_NO_CHOOSER=1` keeps GTK's dialog for one application;
 `--no-file-chooser` and `--uninstall` take the module away again.
 
+**Show in folder:** applications that show a file in its folder — Firefox's downloads (the
+folder icon), Chromium-based browsers, Thunderbird's attachments, Telegram, VS Code — ask the
+session's file manager over D-Bus (`org.freedesktop.FileManager1`), and failBrauwser answers:
+*ShowItems* opens the file's folder with the file selected (a window per folder, several files
+of one folder selected together), *ShowFolders* opens the folders as tabs of one window, and
+*ShowItemProperties* opens the file's folder and its *Properties*. `install.sh` installs the
+D-Bus service file (`dbus-1/services/org.freedesktop.FileManager1.service`), so a call starts
+failBrauwser in the background when it is not running; `--uninstall` removes it.
+
 **Checksums:** *Properties* of a file has *Calculate MD5 and SHA-256* (read once for both,
 with progress) and *Compare with Clipboard*, which finds an MD5 or SHA-256 in the copied text
 (also a `sha256sum` line or `sha256:…`) and says whether it is this file's.

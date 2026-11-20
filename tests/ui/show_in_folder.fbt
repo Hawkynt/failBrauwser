@@ -1,0 +1,23 @@
+# Show in folder for other applications (README: Show in folder): what Firefox's downloads,
+# Chromium and others call on org.freedesktop.FileManager1. $T/dl holds a.pdf, b.zip and c.txt.
+open $T
+
+# ShowItems: the file's folder in a window of its own, the files named selected.
+run gdbus call --session --dest org.freedesktop.FileManager1 --object-path /org/freedesktop/FileManager1 --method org.freedesktop.FileManager1.ShowItems "['file://$T/dl/a.pdf', 'file://$T/dl/c.txt']" ""
+wait-window-count 2
+wait-location $T/dl
+expect-selection a.pdf | c.txt
+
+# ShowFolders: the folder itself.
+run gdbus call --session --dest org.freedesktop.FileManager1 --object-path /org/freedesktop/FileManager1 --method org.freedesktop.FileManager1.ShowFolders "['file://$T/dl']" ""
+wait-window-count 3
+wait-location $T/dl
+expect-selection
+
+# ShowItemProperties: the folder with the file selected, and its properties.
+run gdbus call --session --dest org.freedesktop.FileManager1 --object-path /org/freedesktop/FileManager1 --method org.freedesktop.FileManager1.ShowItemProperties "['file://$T/dl/b.zip']" ""
+wait-window-count 4
+wait-location $T/dl
+expect-selection b.zip
+wait-properties-text b.zip
+properties-button Close
