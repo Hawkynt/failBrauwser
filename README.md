@@ -576,7 +576,11 @@ programs and installers, databases — still open with that program; the *Open a
 *Extract Here*, *Extract To…* and
 *Compress…* are in the context menu. Long archive operations show a progress bar with the
 bytes done. Formats the library can only read are shown read-only, and the status bar says
-why.
+why. A file inside an archive opens with its application, and *Open With* offers the
+applications for its type: the files chosen (several at once too) are extracted to a folder of
+their own below `$XDG_RUNTIME_DIR/failbrauwser/open` and the application is handed those copies;
+what it saves goes back into the archive. A name in the archive that points outside that folder
+(`../…`, `/…`) is never handed out.
 
 **Encrypted volumes:** TrueCrypt (4.3–7.1a) and VeraCrypt (1.0–2.1) container files
 (`.hc`, `.tc`; any other file through *Open as*) open the same way: the password is asked for once (a wrong

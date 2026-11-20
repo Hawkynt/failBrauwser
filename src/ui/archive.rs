@@ -9,7 +9,7 @@ use super::model::Item;
 use super::pane::Pane;
 use super::util;
 use super::window::Window;
-use failbrauwser::archive::vfs::Vfs;
+use failbrauwser::archive::vfs::{self, Vfs};
 use failbrauwser::archive::{ArchiveError, is_browsable_name};
 use failbrauwser::location::{ArchiveLoc, Location};
 use failbrauwser::ops::copy::{self, Mode};
@@ -153,34 +153,76 @@ thread_local! {
 }
 
 pub fn open_entry(w: &Window, item: &Item) {
-    let (Item::Archive(node), Location::Archive(loc)) = (item, w.current_location()) else { return };
-    if node.is_dir {
-        return;
+    stage_entries(w, std::slice::from_ref(item), Rc::new(|w, staged| {
+        let Some((loc, entry, path)) = staged.into_iter().next() else { return };
+        util::open_with_default(w.win.upcast_ref(), &path);
+        watch_opened(w, loc, entry, path);
+    }));
+}
+
+/// *Open With ▸ an application* inside an archive: the application is handed extracted copies,
+/// since no other program can read a path that runs through an archive.
+pub fn open_with(w: &Window, app: &gio::AppInfo, items: &[Item]) {
+    let app = app.clone();
+    stage_entries(w, items, Rc::new(move |w, staged| {
+        let files: Vec<gio::File> = staged.iter().map(|(_, _, p)| gio::File::for_path(p)).collect();
+        util::launch_with(w.win.upcast_ref(), &app, &files);
+        watch_all(w, staged);
+    }));
+}
+
+/// *Open With ▸ Other Application…* inside an archive: the chooser comes up once the copies stand
+/// on disk, so the application it starts gets them.
+pub fn open_with_other(w: &Window, items: &[Item]) {
+    stage_entries(w, items, Rc::new(|w, staged| {
+        let files: Vec<gio::File> = staged.iter().map(|(_, _, p)| gio::File::for_path(p)).collect();
+        util::choose_application(w.win.upcast_ref(), &files);
+        watch_all(w, staged);
+    }));
+}
+
+/// Every copy handed to an application is watched, so a saved edit goes back into the archive.
+fn watch_all(w: &Rc<Window>, staged: Staged) {
+    for (loc, entry, path) in staged {
+        watch_opened(w, loc, entry, path);
     }
-    let entry = node.path.clone();
-    let watched_entry = entry.clone();
-    let retry_item = item.clone();
-    let loc2 = loc.clone();
+}
+
+/// Extracted entries: the archive, the entry's name in it, and its copy on disk.
+type Staged = Vec<(ArchiveLoc, String, PathBuf)>;
+
+/// Extracts the files among `items` (folders are left out) into a new folder of their own below
+/// `$XDG_RUNTIME_DIR/failbrauwser/open` and hands their copies to `then`. The copies stay when
+/// failBrauwser ends: the application may still have them open, with edits not saved back yet.
+fn stage_entries(w: &Window, items: &[Item], then: Rc<dyn Fn(&Rc<Window>, Staged)>) {
+    let Location::Archive(loc) = w.current_location() else { return };
+    let asked: Vec<(String, String)> = items.iter().filter_map(|i| match i { Item::Archive(n) if !n.is_dir => Some((n.path.clone(), n.name.clone())), _ => None }).collect();
+    let Some((_, first_name)) = asked.first() else { return };
+    let title = if asked.len() == 1 { format!("Opening “{first_name}”") } else { format!("Opening {} files", asked.len()) };
+    let entries: Vec<String> = asked.into_iter().map(|(p, _)| p).collect();
+    let retry_items: Vec<Item> = items.to_vec();
+    let (loc2, entries2) = (loc.clone(), entries.clone());
     let weak = Rc::downgrade(&w.me());
-    let title = format!("Opening “{}”", node.name);
     w.app.jobs.start(
         w.win.upcast_ref(),
         title,
         move |ctx| {
             let v = Vfs::global();
             let dir = v.scratch_dir("open").map_err(io)?;
-            tracked(ctx, || v.extract(&loc2, std::slice::from_ref(&entry), &dir)).map_err(io_at(&loc2))
+            tracked(ctx, || v.extract(&loc2, &entries2, &dir)).map_err(io_at(&loc2))?;
+            // Where the archive says it wrote them is no proof: each copy has to be a file inside
+            // that folder.
+            entries2.iter().map(|e| vfs::staged_copy(&dir, e)).collect::<Result<Vec<_>, _>>().map_err(io)
         },
         move |outcome| {
             if let (Some(w), Some(pl)) = (weak.upgrade(), password_failure(outcome)) {
-                let (item, wrong) = (retry_item.clone(), Vfs::global().has_password(&pl));
-                ask_and_retry(&w, pl, wrong, move |w| open_entry(w, &item));
+                let (items, wrong, then) = (retry_items.clone(), Vfs::global().has_password(&pl), then.clone());
+                ask_and_retry(&w, pl, wrong, move |w| stage_entries(w, &items, then.clone()));
                 return;
             }
             let (Some(w), Outcome::Done(paths)) = (weak.upgrade(), outcome) else { return };
-            let Some(path) = paths.first().cloned() else { return };
-            util::open_with_default(w.win.upcast_ref(), &path);
-            watch_opened(&w, loc, watched_entry, path);
+            let staged: Staged = entries.iter().cloned().zip(paths.iter().cloned()).map(|(e, p)| (loc.clone(), e, p)).collect();
+            then(&w, staged);
         },
     );
 }

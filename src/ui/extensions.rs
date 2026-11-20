@@ -360,7 +360,7 @@ fn open_as_menu(items: &[Item]) -> Option<gio::Menu> {
 
 /// Applications registered for the selection's type, plus "Other Application…".
 pub fn open_with_menu(items: &[Item]) -> Option<gio::Menu> {
-    let first = items.iter().find(|i| i.path().is_some() && !i.is_dir_like())?;
+    let first = items.iter().find(|i| !i.is_dir_like() && (i.path().is_some() || matches!(i, Item::Archive(_))))?;
     let ct = first.content_type();
     let sub = gio::Menu::new();
     let apps = gio::AppInfo::recommended_for_type(&ct);

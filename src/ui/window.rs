@@ -513,7 +513,14 @@ impl Window {
             }
         });
         self.add_action("open-with-other", |w| {
-            let files: Vec<gio::File> = w.current_pane().selected_items().iter().filter_map(|i| i.path().map(gio::File::for_path)).collect();
+            let items = w.current_pane().selected_items();
+            // Inside an archive the files are extracted first: the application is given real
+            // files, never an address only failBrauwser understands.
+            if items.iter().any(|i| matches!(i, Item::Archive(_))) {
+                super::archive::open_with_other(w, &items);
+                return;
+            }
+            let files: Vec<gio::File> = items.iter().filter_map(|i| i.path().map(gio::File::for_path)).collect();
             util::choose_application(w.win.upcast_ref(), &files);
         });
         let a = gio::SimpleAction::new("open-with", Some(glib::VariantTy::STRING));
@@ -521,7 +528,12 @@ impl Window {
         a.connect_activate(move |_, v| {
             let (Some(w), Some(id)) = (weak.upgrade(), v.and_then(|v| v.get::<String>())) else { return };
             let Some(app) = gio::AppInfo::all().into_iter().find(|a| a.id().as_deref() == Some(id.as_str())) else { return };
-            let files: Vec<gio::File> = w.current_pane().selected_items().iter().filter_map(|i| i.path().map(gio::File::for_path)).collect();
+            let items = w.current_pane().selected_items();
+            if items.iter().any(|i| matches!(i, Item::Archive(_))) {
+                super::archive::open_with(&w, &app, &items);
+                return;
+            }
+            let files: Vec<gio::File> = items.iter().filter_map(|i| i.path().map(gio::File::for_path)).collect();
             util::launch_with(w.win.upcast_ref(), &app, &files);
         });
         self.win.add_action(&a);
