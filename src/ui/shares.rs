@@ -52,23 +52,63 @@ pub async fn volumes() -> Vec<(failbrauwser::drives::Volume, Option<failbrauwser
     Vec::new()
 }
 
-/// The mounted network shares as drives, with their fill level where the server tells it.
+/// The same at once (none on Windows, see `volumes`).
+#[cfg(windows)]
+pub fn volumes_known() -> Vec<(failbrauwser::drives::Volume, Option<failbrauwser::drives::Usage>)> {
+    Vec::new()
+}
+
+#[cfg(unix)]
+thread_local! {
+    /// The fill level each share told last, by address: shown at once the next time, while
+    /// the server is asked again (an SMB server can take seconds to answer).
+    static KNOWN_USAGE: RefCell<std::collections::HashMap<String, failbrauwser::drives::Usage>> = RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(unix)]
+fn share_volume(uri: String, path: PathBuf, usage: Option<failbrauwser::drives::Usage>) -> failbrauwser::drives::Volume {
+    failbrauwser::drives::Volume {
+        device: uri.clone(),
+        share_uri: uri,
+        size: usage.map_or(0, |u| u.total),
+        mount_points: vec![path],
+        mountable: true,
+        ejectable: true,
+        rotation_rate: -1,
+        ..Default::default()
+    }
+}
+
+/// The mounted network shares as drives at once, nothing asked of a server: with the fill
+/// level each told last, none for one not asked yet.
+#[cfg(unix)]
+pub fn volumes_known() -> Vec<(failbrauwser::drives::Volume, Option<failbrauwser::drives::Usage>)> {
+    mounted_shares()
+        .into_iter()
+        .map(|(uri, path, _)| {
+            let usage = KNOWN_USAGE.with(|k| k.borrow().get(&uri).copied());
+            (share_volume(uri, path, usage), usage)
+        })
+        .collect()
+}
+
+/// The mounted network shares as drives, with their fill level where the server tells it; all
+/// servers are asked at the same time.
 #[cfg(unix)]
 pub async fn volumes() -> Vec<(failbrauwser::drives::Volume, Option<failbrauwser::drives::Usage>)> {
+    let ctx = glib::MainContext::default();
+    let asks: Vec<_> = mounted_shares()
+        .into_iter()
+        .map(|(uri, path, m)| (uri, path, ctx.spawn_local(async move { super::phones::fs_usage(&m.root()).await })))
+        .collect();
     let mut out = Vec::new();
-    for (uri, path, m) in mounted_shares() {
-        let usage = super::phones::fs_usage(&m.root()).await;
-        let v = failbrauwser::drives::Volume {
-            device: uri.clone(),
-            share_uri: uri,
-            size: usage.map_or(0, |u| u.total),
-            mount_points: vec![path],
-            mountable: true,
-            ejectable: true,
-            rotation_rate: -1,
-            ..Default::default()
-        };
-        out.push((v, usage));
+    for (uri, path, ask) in asks {
+        let usage = ask.await.ok().flatten();
+        KNOWN_USAGE.with(|k| match usage {
+            Some(u) => k.borrow_mut().insert(uri.clone(), u),
+            None => k.borrow_mut().remove(&uri),
+        });
+        out.push((share_volume(uri, path, usage), usage));
     }
     out
 }
