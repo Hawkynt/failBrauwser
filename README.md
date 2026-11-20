@@ -42,7 +42,8 @@ A fast, native GTK 3 file manager for Linux and Windows, in the spirit of Thunar
   results streaming in.
 - **Copy jobs you control:** a progress window with a speed chart in the window manager's
   theme, the time and items left; pause and resume, copies to the same drive wait in a queue instead
-  of fighting each other, and optional read-back verification.
+  of fighting each other, optional read-back verification, and a copy or move cut off by a crash or
+  an update going on exactly where it stopped.
 - **Custom actions** from Thunar (`uca.xml`) in the right-click menu, and *Open Terminal Here*.
 - **Version control the TortoiseGit way, for Git, Mercurial, Subversion, CVS and Visual
   Source Safe.** Overlay icons on the files and folders of working copies (a green tick, a red
@@ -688,6 +689,33 @@ elsewhere in the colors of the GTK theme. Each job has a pause and a cancel butt
 already being written to waits in a queue and starts when the first one is done. With
 *Edit → Verify Copies* every copied file is flushed to the device, dropped from the cache and
 read back to compare it with the source.
+
+**Resuming an interrupted operation:** a copy or a move writes down what it is doing as it goes —
+the plan it made, and one line for every file it finished — into `failbrauwser\jobs` below the same
+per-user state folder the window records of *Updating with more than one copy open* live in, each
+line holding that file's source, its destination, its size and its times. Every file is written
+under a name of its own beside the one it will get, and renamed into place only once its last byte
+is there, so a half-written file never stands where a finished one should and a finished one is
+never written twice. The bytes already paid for are not paid again: a file the record says is done
+is skipped, and the one that was cut off is written again from its start. failBrauwser looks for
+such a record when it starts. A record whose process no longer runs is checked against the disk
+first — the source still there with the size and the times it wrote down, still the same file, and
+the destination still the folder it was going into — and when it matches, the job goes on exactly
+where it stopped: the same progress window, the same speed chart and the same numbers, pausable and
+cancellable as before. *Undo* then takes away every file that job put in the destination, the ones
+copied before the break included; a resumed move says plainly which files it cannot take back
+because their sources had already moved over, instead of pretending to undo what it cannot. When the
+disk no longer says what the record was told — a source edited, renamed or gone, a destination
+folder deleted or now somewhere else, the same name standing for a different file — nothing is
+touched and the reason is said, because continuing from a guess could destroy what someone else
+changed in the meantime. A job cancelled on purpose is not resumed: cancelling was the decision, and
+a record left by an instance that was killed or crashed is the only thing that resumes. Two copies
+starting at once cannot work through one record, since the one that works through it renames the
+record to its own process id before reading it. That record is read under the same bounds as any
+file this program did not write: one that lies about itself resumes nothing, is reported, and is
+dropped. A delete, a move to the trash, an extract and a compress are outside this — they either
+happened or they did not, and a half-done delete is refused rather than half-undone; what resumes is
+a copy or a move of files.
 
 **Custom actions:** actions you made in Thunar (*Edit → Configure custom actions*, stored in
 `~/.config/Thunar/uca.xml`) appear in the right-click menu, filtered by file patterns and
