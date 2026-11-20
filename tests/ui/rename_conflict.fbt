@@ -5,6 +5,9 @@ expect-rows 6
 select x.txt
 action win.rename
 wait-dialog Rename “x.txt”
+# Built like the Properties window: the file's name at the top, the field in a labelled row.
+expect-dialog-label Rename “x.txt” : x.txt
+expect-dialog-label Rename “x.txt” : New name:
 dialog-entry Rename “x.txt” = y.txt
 dialog-button Rename “x.txt” : Rename
 wait-dialog already exists

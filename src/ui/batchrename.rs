@@ -20,7 +20,7 @@ const COL_NEW: u32 = 1;
 const COL_PROBLEM: u32 = 2;
 
 struct Dialog {
-    dialog: gtk::MessageDialog,
+    dialog: gtk::Dialog,
     find: gtk::Entry,
     replace: gtk::Entry,
     regex: gtk::CheckButton,
@@ -56,24 +56,32 @@ pub fn show(w: &Window, items: Vec<Item>) {
         });
     }
 
-    let dialog = gtk::MessageDialog::new(
+    // Built like the Properties window: a window of its own with the title in its title bar, the
+    // selection's icon and count at the top, labelled rows, and the buttons at the bottom right.
+    let dialog = gtk::Dialog::with_buttons(
+        Some(&format!("Rename {} Items", files.len())),
         Some(&w.win),
         gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
-        gtk::MessageType::Other,
-        gtk::ButtonsType::None,
-        &format!("Rename {} Items", files.len()),
+        &[("_Cancel", gtk::ResponseType::Cancel), ("_Rename", gtk::ResponseType::Ok)],
     );
-    dialog.add_button("_Cancel", gtk::ResponseType::Cancel);
-    dialog.add_button("_Rename", gtk::ResponseType::Ok);
     dialog.set_default_response(gtk::ResponseType::Ok);
+    let area = dialog.content_area();
+    area.set_border_width(12);
+    area.set_spacing(12);
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    header.pack_start(&gtk::Image::from_icon_name(Some("edit-select-all"), gtk::IconSize::Dialog), false, false, 0);
+    let heading = gtk::Label::new(None);
+    heading.set_markup(&format!("<big><b>{} items</b></big>", files.len()));
+    heading.set_xalign(0.0);
+    header.pack_start(&heading, true, true, 0);
 
     let grid = gtk::Grid::new();
     grid.set_row_spacing(6);
-    grid.set_column_spacing(8);
-    grid.set_margin_top(6);
+    grid.set_column_spacing(12);
     let label = |text: &str| {
         let l = gtk::Label::with_mnemonic(text);
         l.set_xalign(1.0);
+        l.style_context().add_class("dim-label");
         l
     };
     let entry = |name: &str, text: &str| {
@@ -151,11 +159,10 @@ pub fn show(w: &Window, items: Vec<Item>) {
     status.set_xalign(0.0);
     status.set_widget_name("batch-status");
 
-    if let Ok(area) = dialog.message_area().downcast::<gtk::Box>() {
-        area.pack_start(&grid, false, false, 0);
-        area.pack_start(&scroll, true, true, 0);
-        area.pack_start(&status, false, false, 0);
-    }
+    area.pack_start(&header, false, false, 0);
+    area.pack_start(&grid, false, false, 0);
+    area.pack_start(&scroll, true, true, 0);
+    area.pack_start(&status, false, false, 0);
 
     let d = Rc::new(Dialog { dialog: dialog.clone(), find, replace, regex, ignore_case, template, start, case, store, status, files, taken, ready: RefCell::new(None) });
     let update = {
@@ -320,11 +327,11 @@ pub fn preview_rows() -> Vec<String> {
 
 /// The open batch rename dialog (tests).
 #[allow(deprecated)]
-pub fn open_dialog() -> Option<gtk::MessageDialog> {
+pub fn open_dialog() -> Option<gtk::Dialog> {
     gtk::Window::list_toplevels()
         .into_iter()
-        .filter_map(|w| w.downcast::<gtk::MessageDialog>().ok())
-        .find(|d| d.is_visible() && d.text().is_some_and(|t| t.starts_with("Rename ") && t.ends_with(" Items")))
+        .filter_map(|w| w.downcast::<gtk::Dialog>().ok())
+        .find(|d| d.is_visible() && d.title().is_some_and(|t| t.starts_with("Rename ") && t.ends_with(" Items")))
 }
 
 fn find_tree(w: &gtk::Widget) -> Option<gtk::TreeView> {
