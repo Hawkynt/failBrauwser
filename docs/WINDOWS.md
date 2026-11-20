@@ -143,7 +143,7 @@ and the new program started. The *build from source* channel is Linux-only there
 |---|---|---|
 | System calls under copy/delete/trash | `osprim` errno predicates | same file, Win32 codes through `raw_os_error` |
 | Drives, mount state | UDisks2 / GVfs | `win::storage` (drive types, geometry, SSD/HDD), WNet for shares |
-| Volume name, format, device icon (README: *Drives*) | UDisks2 `Filesystem` and `Format` methods, `mkfs.<type>`, `e2label` and friends | `SetVolumeLabelW`, `format.com` run by an elevated copy of this program, the icon read back through `SHGetFileInfoW`, and those four files read back by this program itself for its own drive rows |
+| Volume name, format, device icon (README: *Drives*) | UDisks2 `Filesystem` and `Format` methods, `mkfs.<type>`, `e2label` and friends | `SetVolumeLabelW`, `format.com` run by an elevated copy of this program, the icon read back through `SHGetFileInfoW`, and those four files read back by this program itself for its own drive rows, within the bounds *Device icons* names |
 | Trash | freedesktop `$Trashdir` | Recycle Bin through `IFileOperation` (`win::recyclebin`) |
 | Network folders | GVfs `smb://` | real UNC paths via WNet — the whole engine works on them |
 | Servers (SFTP/FTP) | system tools | in-app VFS (`src/remote_fs/`, russh/suppaftp) — browsable like archives, not mapped drives |
@@ -366,9 +366,19 @@ and the new program started. The *build from source* channel is Linux-only there
   `autorun.inf` lends this program neither a name nor a picture. The pinned name wins ahead of the volume's own
   label, ahead of the mount point's name and ahead of the image file a mounted image is called by, because it is
   the volume's own statement about itself. The picture's bytes reach the row through the ICO loader this payload
-  ships (`Pixbuf::from_read`), and a file that will not decode leaves the themed drive icon in place. The
-  scenario `device_shown.fbt`, run as `a_device_shows_what_its_own_files_name`, pins that reading over a stand-in
-  stick whose folder holds the four files this module wrote. Those two verbs are reached now: *Create device icon* and *Remove device
+  ships (`Pixbuf::from_read`), and a file that will not decode leaves the themed drive icon in place. What that
+  reading is given is bounded by this module and not by the file: `icon::marked_text` reads one of the two text
+  names no further than 64 KiB and answers nothing past it — the listing and `remove`/`name_pins` alike, so a
+  planted giant is neither read nor called one of ours — `pin_worth_shown` refuses a pinned name that is empty,
+  longer than 255 characters, or carrying a control character or a directional override, and
+  `picture_can_be_shown`/`picture_bytes` ask `ico::pictures_are_ones_a_file_can_hold` whether an icon file's own
+  directory and image headers agree and stay inside the file and name no image past 256 pixels, within an 8 MiB
+  bound, reading headers only and reading the bytes through the very handle the answer came from. A named picture
+  failing that answer is skipped for the next one the marked file names, and none leaves the themed icon; each
+  answer falls back on its own. The scenario `device_shown.fbt`, run as
+  `a_device_shows_what_its_own_files_name`, pins that reading over a stand-in stick whose folder holds the four
+  files this module wrote, and over a second one whose two picture files hold nonsense: it is still named by its
+  pinned name and draws no picture, and *Remove device icon* takes its names away the same way. Those two verbs are reached now: *Create device icon* and *Remove device
   icon* stand on a drive's row menu and on its properties window — shut, with the act's own reason on their
   tooltip, wherever a volume names no folder or is read-only — and the format window carries the *Write a
   device icon* box with the *Device shape* dropdown beside the words this machine reported. The scenario
@@ -878,3 +888,95 @@ volume's properties header all ask.
   than refused; no instance the user was running was ended, and the prefix still holds the image of the previous
   install with its own stamp. What the installed image shows for `F:` — whether it names it `Removable` or
   `Removable Disk` — therefore stays unmeasured until that install happens.
+
+## Measured on 2026-11-20 for the two things the user asked after that (M16.8)
+
+The report first: *the files stand on `F:` and nothing shows*. Measured rather than assumed, because the reading
+had been proved on that volume the day before:
+
+- **Which image the windows run.** Three instances were up — pid 24036 (since 19.11 15:29:57), pid 24128 (since
+  19.11 11:34:37) and pid 32324 (**started 20.11 06:08:37**, a fresh window of the same old image) — all three
+  from `%LOCALAPPDATA%\Programs\failbrauwser\bin\failbrauwser.exe`, whose bytes are
+  `69CB5952A5B91B64…`, 15 047 680 long, stamped 19.11 10:35:38: the image of the **previous** install. The tree's
+  own build is `240272FCF72D1644…`, 15 093 248 long. Nothing had reached the prefix, because the install had
+  never been started for the M16.7 build.
+- **What each image answers for the real stick.** One `.fbt` (`action win.drives`, `wait-drive Removable Disk`,
+  `expect-drive-picture Removable Disk : DevIcon.fil`) driven through `tests\ui\harness.ps1` against the live
+  machine, once per binary, work folders `A:\wpdscratch\fb20real\t` and `\ti` (space-free, as that section of
+  this file requires), scratch script and folders deleted afterwards. The tree's build: **SELFTEST OK** — the
+  picture is read from `F:\DevIcon.fil`, and it reaches pixels. The installed image:
+  `SELFTEST FAIL (line 5): expect-drive-picture Removable Disk : DevIcon.fil: unknown command` — that verb is
+  not in it at all, which is the proof of the stale prefix rather than of a broken reading.
+- **A caution this machine cannot clear.** Line 4 (`wait-drive Removable Disk`) answered green **in both**
+  binaries: for an unlabelled removable drive `win::storage` supplies the Explorer-style name
+  `Removable Disk` (the fallback at `src\win\storage.rs:52` and `:65`), and this stick's pin reads exactly
+  `Removable Disk` — so on `F:` the pinned name and the machine's fallback are the same string, and no scenario
+  on this host can tell them apart by that name alone. The picture is what tells them apart, and it is what the
+  report said was missing.
+
+The ask that followed: *a broken file or image must not hack the process — undecodable, too large, or an ini/inf
+doing strange things, and we stick to the default.* The bound, now held by the module rather than by luck, is in
+the README paragraph this section's predecessor named; the numbers come from the artifacts of a real create
+(219 and 300 bytes of text, 408 966 bytes each for the two icon files, largest image 256 pixels), each bound set
+generously above its own measure: **64 KiB** of text, **8 MiB** and **256 pixels** of picture, **255 characters**
+of pinned name. Reading stops at the bound instead of reading up to it, so a file's length decides no time and no
+memory here; `pictures_are_ones_a_file_can_hold` reads only the directory and each image's own header — a header
+naming more pixels than an icon directory can name, an entry placing or counting its image outside the file, an
+image count with no room in the file, a cursor file, and a zero count are each refused — and `picture_bytes`
+reads the bytes through the same open handle the answer came from, so a file cannot change shape between the two.
+A pinned name that is empty, absurdly long, or carrying a control character or a **directional override**
+(U+202A…U+202E, U+2066…U+2069: a control that would make a row read backwards from what it says) pins nothing,
+and `named_here` now also refuses a picture name carrying a control character, ending in a dot, or longer than a
+path component. Each answer falls back on its own: a nonsense name costs the name alone, a nonsense picture the
+picture alone, and a named picture that fails the probe is replaced by the next one that same file names.
+
+- **Red first, for the intended reason.** Seven new assertions on the pre-implementation tree, six of them
+  behaviour reds using only the API that tree already had: `a name out of a file no reader of ours would finish
+  was shown: "64GB USB"`; `a name longer than a path component was shown as a volume's name: "xxxx…"`;
+  `a name carrying a control character was obeyed` (left `Some("Dev\u{1}Icon.fil")`);
+  `a picture that is no icon was drawn anyway`; `an image header naming pixels no icon directory can name was
+  drawn as a volume's picture`; `a text file past the bound was deleted as one of ours`. The 26 existing
+  `fsformat::icon::tests` stayed green beside them, so the red was the new claim and not a broken fixture.
+- **The bounds, green.** `fsformat::icon::` and `fsformat::ico::` together: **40 passed, 0 failed**. The probe
+  accepts the honest one-image file and refuses the four lies in the same test, and the real twelve-image file
+  this writer produces is accepted through `picture_named`, which is what keeps the guard from breaking the
+  program's own icons.
+- **The gates of this tree.** `fsformat::` and `drives::` together **125 passed, 0 failed**. The full lib
+  target, run twice: **423 passed / 4 failed** and **422 passed / 5 failed** — the three recorded Linux-only
+  assertions every time, plus extras that **change between runs** (`the_installed_tool_s_answer_stays_inside_the_table`
+  and `a_client_still_reading_when_the_instance_ends_is_ended_there` in the first run,
+  `querying_and_listing_agree_on_the_fixture` in the second), each of which answers **green when run alone**
+  (0.24 s for the first two, 0.48 s for the third). This section records those three as **load-sensitive under
+  the parallel lib run**, a class the file has named before for `big_listings.fbt`; nothing in this change
+  touches a repository client, the Recycle Bin or the format table. `helper_lifetime` 2, `source_rules` 3,
+  `win_startup` 2, all green in one batch. `cargo clippy --release --lib --bins` names **168** warnings
+  (50 lib + 118 bin) with **0** in `src\fsformat\icon.rs`, `src\fsformat\ico.rs`, `src\ui\icons.rs` and the
+  lines this step touched of `src\ui\selftest.rs`: the paragraph above recorded **170**, so the same command was
+  run against the pre-implementation tree (`1f13bfe`, unpacked with `git archive` into `C:\fbhead`, built with
+  this checkout's sysroot, deleted afterwards) and it answers **50 + 118** too — the recorded 170 belongs to the
+  older toolchain, and this change adds no finding. One finding the new code did introduce along the way
+  (`op_ref` on a slice comparison) was fixed before the commit. `--bin failbrauwser` rebuilt with no warning.
+- **The whole UI target, serial: 52 passed, 2 failed in 245.51 s**, the clipboard answering at the start of the
+  run (`Set-Clipboard`/`Get-Clipboard` round-tripping `fbprobe`) — which is the good condition this file names,
+  and `share_without_change_notices` answered green this time. The two failures are exactly the two this section
+  has named for as long as it has existed: `custom_actions` and `encrypted_drive_with_lvm_inside`.
+- **The scenario grown, and what it now proves.** `a_device_shows_what_its_own_files_name` green in 4.52 s with a
+  **third** stand-in stick whose pair of ours stands complete while `std::fs::write` puts a sentence of nonsense
+  over its `folder.ico` and `DevIcon.fil`: the row is named by the pinned `Broken Stick With A Rotten Picture`
+  — drives page and side panel both — and `expect-drive-picture … : none` says **nothing was read and nothing is
+  drawn**, which is a tightened verb: `none` now requires `picture_file` to be absent, not merely an undecoded
+  file. The scenario ends by taking that stick's icon away too, and the run's check read both fixture folders:
+  none of the four names, none of the four staged names, and no mark of ours left on either folder.
+- **Real volume, hardened build.** The same `.fbt` against the rebuilt binary over the live drives page answered
+  **SELFTEST OK** again: the probe changes nothing about what a real device icon shows.
+- **Not verified here, and said so.** No test hands a crafted decompression bomb to the installed payload's
+  loader — deliberately doing that is the fault this change exists to prevent, and it is answered at the header
+  probe instead, which never allocates the picture; the loader's own behaviour with a lying container stays
+  unmeasured on purpose. The side panel's and the properties header's *pixels* stay unasserted (no scenario reads
+  a `gtk::Image` off a row), as does the whole Linux half, and coverage, mutation and branch gates stay
+  unavailable. The **install is still pending**: the three instances above hold
+  `bin\failbrauwser.exe`, `winpack\install.ps1` copies into the prefix in place (`Copy-Item -Force`) and needs a
+  package from `winpack\out`, which holds the **previous** build's zip and launcher — so starting it against a
+  running instance risks a half-copied prefix, and it was not started. No instance the user was running was
+  ended. Until the user closes those windows and `winpack\package.ps1` plus `install.ps1` have run, the installed
+  image shows no pinned name and no drawn picture for any volume.
