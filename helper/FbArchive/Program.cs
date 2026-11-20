@@ -57,7 +57,13 @@ public static class Program {
           case "quit": quit = true; break;
           case "formats": Commands.Formats(w); break;
           case "probe": Commands.Probe(w, Str(req, "path")); break;
+          case "list" when Levels(req) is { } levels:
+            Commands.ListNested(w, Str(req, "archive"), OptStr(req, "format"), levels, OptStr(req, "password"));
+            break;
           case "list": Commands.List(w, Str(req, "archive"), OptStr(req, "password"), OptStr(req, "format")); break;
+          case "extract" when Levels(req) is { } levels:
+            Commands.ExtractNested(w, Str(req, "archive"), OptStr(req, "format"), levels, Str(req, "dest"), OptStrArray(req, "entries"), OptStr(req, "password"));
+            break;
           case "extract":
             Commands.Extract(Str(req, "archive"), Str(req, "dest"), OptStrArray(req, "entries"), OptStr(req, "password"), OptStr(req, "format"));
             break;
@@ -108,6 +114,13 @@ public static class Program {
       specific = sp.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString()! : p.Value.ToString());
     return new CreateSettings(OptStr(s, "method"), Int("level"), Long("dict_size"), Long("solid_size"), Int("threads") ?? 1,
       Bool("force_compress"), Bool("encrypt_names"), OptStr(s, "zip_encryption"), specific);
+  }
+
+  /// <summary>The archives inside the archive a request names ("nested": [{"entry", "password"}],
+  /// outermost first), when it names any.</summary>
+  private static List<Level>? Levels(JsonElement req) {
+    if (!req.TryGetProperty("nested", out var el) || el.ValueKind != JsonValueKind.Array || el.GetArrayLength() == 0) return null;
+    return el.EnumerateArray().Select(l => new Level(Str(l, "entry"), OptStr(l, "password"))).ToList();
   }
 
   private static List<AddItem> Items(JsonElement req) {

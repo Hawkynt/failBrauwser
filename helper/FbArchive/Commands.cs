@@ -204,6 +204,10 @@ public static class Commands {
     w.WriteBoolean("writable", force == null && parts == null && IsWritable(format, archive));
     if (force != null) w.WriteString("readonly_reason", NotEditable.GetValueOrDefault(format.ToString(), "a chosen Open-as container opens read-only"));
     else if ((parts != null ? SplitSet.ReadOnlyReason : ReadOnlyReason(format, archive)) is { } why) w.WriteString("readonly_reason", why);
+    WriteEntries(w, entries);
+  }
+
+  private static void WriteEntries(Utf8JsonWriter w, List<ArchiveEntry> entries) {
     w.WriteStartArray("entries");
     foreach (var e in entries) {
       w.WriteStartObject();
@@ -222,6 +226,72 @@ public static class Commands {
       w.WriteEndObject();
     }
     w.WriteEndArray();
+  }
+
+  // ── Archives inside archives ────────────────────────────────────────
+
+  /// <summary>Lists the archive <paramref name="levels"/> lead to inside <paramref name="archive"/>,
+  /// read where it is (see <see cref="Nested"/>).</summary>
+  public static void ListNested(Utf8JsonWriter w, string archive, string? force, IReadOnlyList<Level> levels, string? password) {
+    using var noTemp = NoTempFiles.Scope();
+    using var n = Nested.Open(archive, force, levels);
+    var entries = ListOpened(n, password);
+    w.WriteNumber("nested_levels", levels.Count);
+    w.WriteString("format", n.Format.ToString());
+    var why = n.ReadOnlyReason ?? NotEditable.GetValueOrDefault(n.Format.ToString()) ?? (IsWritable(n.Format) ? null : $"{n.Format} archives cannot be changed.");
+    w.WriteBoolean("writable", why == null);
+    if (why != null) w.WriteString("readonly_reason", why);
+    WriteEntries(w, entries);
+  }
+
+  /// <summary>Extracts from the archive <paramref name="levels"/> lead to, read where it is: only
+  /// what was asked for is written, and only into <paramref name="dest"/>.</summary>
+  public static void ExtractNested(Utf8JsonWriter w, string archive, string? force, IReadOnlyList<Level> levels, string dest, string[]? names, string? password) {
+    Directory.CreateDirectory(dest);
+    using var noTemp = NoTempFiles.Scope();
+    using var n = Nested.Open(archive, force, levels);
+    var all = ListOpened(n, password);
+    var before = Progress.BytesBelow(dest);
+    string[]? raw = null;
+    if (names != null) {
+      var wanted = names.Select(Normalize).ToArray();
+      raw = all.Where(e => wanted.Any(x => IsAtOrBelow(Normalize(e.Name), x))).Select(e => e.Name).ToArray();
+      if (raw.Length == 0) throw new FileNotFoundException($"No such entry in archive: {string.Join(", ", names)}");
+      foreach (var e in all.Where(e => e.IsDirectory && wanted.Any(x => IsAtOrBelow(Normalize(e.Name), x))))
+        Directory.CreateDirectory(Path.Combine(dest, Normalize(e.Name)));
+    }
+    var size = all.Where(e => !e.IsDirectory && (raw == null || raw.Contains(e.Name))).Sum(e => e.OriginalSize);
+    Progress.Current?.Phase("extracting", size, () => Progress.BytesBelow(dest) - before);
+    if (FormatRegistry.GetArchiveOps(n.Format.ToString()) is { } ops) {
+      n.Stream.Position = 0;
+      ops.Extract(n.Stream, dest, password, raw);
+    } else {
+      // A compressed single file: its one entry, decompressed straight into the destination.
+      var only = all.Single();
+      var streamOps = FormatRegistry.GetStreamOps(n.Format.ToString()) ?? throw new NotSupportedException($"Cannot extract format: {n.Format}");
+      n.Stream.Position = 0;
+      using var output = File.Create(Path.Combine(dest, Normalize(only.Name)));
+      streamOps.Decompress(n.Stream, output);
+    }
+    if (names == null)
+      foreach (var e in all.Where(e => e.IsDirectory || e.Name.EndsWith('/')))
+        if (Normalize(e.Name) is { Length: > 0 } dir && !dir.Split('/').Any(p => p is ".." or "."))
+          Directory.CreateDirectory(Path.Combine(dest, dir));
+    w.WriteNumber("nested_levels", levels.Count);
+  }
+
+  private static List<ArchiveEntry> ListOpened(Nested n, string? password) {
+    n.Stream.Position = 0;
+    if (FormatRegistry.GetArchiveOps(n.Format.ToString()) is { } ops)
+      return ops.List(n.Stream, password)
+        .Select(e => new ArchiveEntry(e.Index, e.Name, e.OriginalSize, e.CompressedSize, e.Method, e.IsDirectory, e.IsEncrypted, e.LastModified))
+        .ToList();
+    if (FormatDetector.IsStreamFormat(n.Format)) {
+      // Shown as its one file, named as the file without its compression suffix.
+      var stem = Path.GetFileNameWithoutExtension(n.Name);
+      return [new(0, stem.Length > 0 ? stem : n.Name, n.Stream.Length, n.Stream.Length, n.Format.ToString(), false, false, null)];
+    }
+    throw new NotSupportedException($"Cannot list format: {n.Format}");
   }
 
   // ── Reading ─────────────────────────────────────────────────────────

@@ -36,14 +36,16 @@ pub struct Archive {
 }
 
 type NestedKey = (PathBuf, Vec<String>);
-/// A listing is keyed by the file it was read from *and* the kind it was read as: the same bytes
-/// answered by the detected reader and by a chosen one are two different answers (M14 *Open as*).
-type ListingKey = (PathBuf, Option<String>);
+/// A listing is keyed by the file on disk, the archives inside it that lead to the one listed, and
+/// the kind the file was read as: the same bytes answered by the detected reader and by a chosen
+/// one are two different answers (M14 *Open as*).
+type ListingKey = (PathBuf, Vec<String>, Option<String>);
 
 #[derive(Default)]
 struct State {
     listings: HashMap<ListingKey, (Stamp, Arc<Archive>)>,
-    /// Nested archive → (its extracted copy, the container's stamp when extracted).
+    /// Nested archive → (its working copy, the container's stamp when it was made). Only an edit
+    /// makes one, and it is removed again once the edit is written back.
     nested: HashMap<NestedKey, (PathBuf, Stamp)>,
     /// Per archive (nested ones have their own), for this session only.
     passwords: HashMap<NestedKey, String>,
@@ -132,8 +134,26 @@ impl Vfs {
         st.passwords.get(&loc.archive_key()).or_else(|| st.passwords.get(&(loc.file.clone(), Vec::new()))).cloned()
     }
 
-    /// The file on disk holding the innermost archive of `loc` (extracting nested ones).
-    pub fn backing(&self, loc: &ArchiveLoc) -> Result<PathBuf> {
+    /// The levels leading from the file on disk to the archive `loc` shows, each with the password
+    /// of the archive holding it, as the helper reads them in place.
+    fn levels(&self, loc: &ArchiveLoc) -> Vec<(String, Option<String>)> {
+        (1..=loc.nested.len())
+            .map(|depth| {
+                let holder = ArchiveLoc { file: loc.file.clone(), nested: loc.nested[..depth - 1].to_vec(), inner: String::new(), force: None };
+                (loc.nested[depth - 1].clone(), self.password_for(&holder))
+            })
+            .collect()
+    }
+
+    /// The kind the file on disk is read as, when one was chosen.
+    fn force(loc: &ArchiveLoc) -> Option<&str> {
+        loc.force.as_deref()
+    }
+
+    /// A working copy of the innermost archive of `loc` to change, extracting nested ones: only an
+    /// edit needs one, and only an archive whose every container can be changed and holds no
+    /// password gets that far (the helper answers the others read-only). Reading never makes one.
+    fn working_copy(&self, loc: &ArchiveLoc) -> Result<PathBuf> {
         let mut path = loc.file.clone();
         for depth in 1..=loc.nested.len() {
             let container = ArchiveLoc { file: loc.file.clone(), nested: loc.nested[..depth - 1].to_vec(), inner: String::new(), force: None };
@@ -169,24 +189,28 @@ impl Vfs {
 
     /// Where a location's listing belongs in the cache: the file it was read from, and the kind
     /// it was read as whenever the file on disk itself is what gets read.
-    fn listing_key(loc: &ArchiveLoc, backing: &Path) -> ListingKey {
-        (backing.to_path_buf(), if loc.nested.is_empty() { loc.force.clone() } else { None })
+    fn listing_key(loc: &ArchiveLoc) -> ListingKey {
+        (loc.file.clone(), loc.nested.clone(), loc.force.clone())
     }
 
-    /// The listing of the innermost archive of `loc`.
+    /// The listing of the innermost archive of `loc`. An archive inside an archive is read where it
+    /// is (decrypted block by block inside an encrypted volume): nothing is extracted to list it.
     pub fn archive(&self, loc: &ArchiveLoc) -> Result<Arc<Archive>> {
-        let backing = self.backing(loc)?;
-        let st = stamp(&backing)?;
-        let key = Self::listing_key(loc, &backing);
+        let st = stamp(&loc.file)?;
+        let key = Self::listing_key(loc);
         if let Some((s, a)) = self.state.lock().unwrap().listings.get(&key) {
             if *s == st {
                 return Ok(a.clone());
             }
         }
         let pw = self.password_for(loc);
-        let listing = match key.1.as_deref() {
-            Some(kind) => self.helper.list_as(&backing, kind, pw.as_deref())?,
-            None => self.helper.list(&backing, pw.as_deref())?,
+        let listing = if !loc.nested.is_empty() {
+            self.helper.list_nested(&loc.file, Self::force(loc), &self.levels(loc), pw.as_deref())?
+        } else {
+            match loc.force.as_deref() {
+                Some(kind) => self.helper.list_as(&loc.file, kind, pw.as_deref())?,
+                None => self.helper.list(&loc.file, pw.as_deref())?,
+            }
         };
         let archive = Arc::new(Archive { tree: ArchiveTree::build(&listing.entries), format: listing.format, writable: listing.writable, readonly_reason: listing.readonly_reason });
         self.state.lock().unwrap().listings.insert(key, (st, archive.clone()));
@@ -196,12 +220,7 @@ impl Vfs {
     /// The cached listing, without any I/O beyond a stat (for the UI thread).
     pub fn cached(&self, loc: &ArchiveLoc) -> Option<Arc<Archive>> {
         let st = self.state.lock().unwrap();
-        let backing = if loc.nested.is_empty() {
-            loc.file.clone()
-        } else {
-            st.nested.get(&(loc.file.clone(), loc.nested.clone()))?.0.clone()
-        };
-        let (_, a) = st.listings.get(&Self::listing_key(loc, &backing))?;
+        let (_, a) = st.listings.get(&Self::listing_key(loc))?;
         Some(a.clone())
     }
 
@@ -211,7 +230,7 @@ impl Vfs {
             let child_key: NestedKey = (loc.file.clone(), loc.nested[..depth].to_vec());
             let child = self.state.lock().unwrap().nested.get(&child_key).map(|x| x.0.clone()).ok_or_else(|| ArchiveError::new("error", "nested archive vanished"))?;
             let parent_loc = ArchiveLoc { file: loc.file.clone(), nested: loc.nested[..depth - 1].to_vec(), inner: String::new(), force: None };
-            let parent = self.backing(&parent_loc)?;
+            let parent = self.working_copy(&parent_loc)?;
             let pw = self.password_for(&parent_loc);
             self.helper.add(&parent, &[(child, loc.nested[depth - 1].clone())], pw.as_deref())?;
             // Our copy is what the container now holds: no need to extract it again.
@@ -224,13 +243,34 @@ impl Vfs {
     }
 
     fn edit(&self, loc: &ArchiveLoc, f: impl FnOnce(&Helper, &Path, Option<&str>) -> Result<()>) -> Result<()> {
-        let backing = self.backing(loc)?;
         let a = self.archive(loc)?;
         if !a.writable {
-            return Err(ArchiveError::new("unsupported", format!("{} archives cannot be changed.", a.format)));
+            return Err(ArchiveError::new("unsupported", a.readonly_reason.clone().unwrap_or_else(|| format!("{} archives cannot be changed.", a.format))));
         }
-        f(&self.helper, &backing, self.password_for(loc).as_deref())?;
-        self.write_back(loc)
+        let backing = self.working_copy(loc)?;
+        let done = f(&self.helper, &backing, self.password_for(loc).as_deref()).and_then(|()| self.write_back(loc));
+        self.drop_working_copies(loc);
+        done
+    }
+
+    /// Removes what earlier versions left in the cache: they extracted every archive inside an
+    /// archive there to read it, an encrypted volume's decrypted contents included. Run at start,
+    /// before this instance makes a working copy of its own.
+    pub fn remove_leftover_copies(&self) -> bool {
+        let dir = self.cache.join("nested");
+        dir.exists() && std::fs::remove_dir_all(&dir).is_ok()
+    }
+
+    /// Removes the working copies an edit of `loc` made: what they held is back in its container.
+    fn drop_working_copies(&self, loc: &ArchiveLoc) {
+        let mut st = self.state.lock().unwrap();
+        for depth in 1..=loc.nested.len() {
+            if let Some((copy, _)) = st.nested.remove(&(loc.file.clone(), loc.nested[..depth].to_vec())) {
+                if let Some(dir) = copy.ancestors().find(|d| d.parent() == Some(self.cache.join("nested").as_path())) {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+            }
+        }
     }
 
     /// Adds files or folders from disk; names are full paths inside the archive.
@@ -254,13 +294,21 @@ impl Vfs {
     /// Extracts entries (full paths) below `dest`, keeping their paths inside the archive.
     /// Returns where each requested entry ended up.
     pub fn extract(&self, loc: &ArchiveLoc, entries: &[String], dest: &Path) -> Result<Vec<PathBuf>> {
-        let backing = self.backing(loc)?;
-        let pw = self.password_for(loc);
-        match loc.force.as_deref().filter(|_| loc.nested.is_empty()) {
-            Some(kind) => self.helper.extract_as(&backing, Some(entries), dest, kind, pw.as_deref())?,
-            None => self.helper.extract(&backing, Some(entries), dest, pw.as_deref())?,
-        }
+        self.extract_into(loc, Some(entries), dest)?;
         Ok(entries.iter().map(|e| dest.join(e)).collect())
+    }
+
+    /// Extracts `entries` (everything for `None`) of the archive `loc` shows below `dest`, reading an
+    /// archive inside an archive where it is.
+    fn extract_into(&self, loc: &ArchiveLoc, entries: Option<&[String]>, dest: &Path) -> Result<()> {
+        let pw = self.password_for(loc);
+        if !loc.nested.is_empty() {
+            return self.helper.extract_nested(&loc.file, Self::force(loc), &self.levels(loc), entries, dest, pw.as_deref());
+        }
+        match loc.force.as_deref() {
+            Some(kind) => self.helper.extract_as(&loc.file, entries, dest, kind, pw.as_deref()),
+            None => self.helper.extract(&loc.file, entries, dest, pw.as_deref()),
+        }
     }
 
     /// Extracts everything into `dest_dir`: directly when the archive holds a single top
@@ -271,8 +319,6 @@ impl Vfs {
         let tops = a.tree.children("").unwrap_or_default();
         let name = loc.nested.last().map(|n| n.rsplit('/').next().unwrap_or(n).to_string()).unwrap_or_else(|| loc.file.file_name().unwrap_or_default().to_string_lossy().into_owned());
         let stem = strip_archive_extension(&name);
-        let backing = self.backing(loc)?;
-        let pw = self.password_for(loc);
         // Everything goes into a folder that did not exist before; a failed extraction (a
         // wrong password, say) removes it again, so a retry does not land in "name (2)".
         let (target, extract_into) = if tops.len() == 1 && std::fs::symlink_metadata(dest_dir.join(&tops[0].name)).is_err() {
@@ -286,10 +332,7 @@ impl Vfs {
             std::fs::create_dir_all(&folder).map_err(io_err)?;
             (folder.clone(), folder)
         };
-        let opened = match loc.force.as_deref().filter(|_| loc.nested.is_empty()) {
-            Some(kind) => self.helper.extract_as(&backing, None, &extract_into, kind, pw.as_deref()),
-            None => self.helper.extract(&backing, None, &extract_into, pw.as_deref()),
-        };
+        let opened = self.extract_into(loc, None, &extract_into);
         if let Err(e) = opened {
             if target.is_dir() {
                 let _ = std::fs::remove_dir_all(&target);
