@@ -585,7 +585,8 @@ what it saves goes back into the archive. A name in the archive that points outs
 **Encrypted volumes:** TrueCrypt (4.3–7.1a) and VeraCrypt (1.0–2.1) container files
 (`.hc`, `.tc`; any other file through *Open as*) open the same way: the password is asked for once (a wrong
 one asks again), and the FAT, exFAT, NTFS or ext4 volume inside is browsed and its files
-extracted like anywhere else. The whole volume shows as read-only — creating, resizing or
+extracted like anywhere else. The volume is decrypted only as it is read, inside the container:
+its contents are never written anywhere, and only a file you open or extract leaves it. The whole volume shows as read-only — creating, resizing or
 re-keying a volume stays with the VeraCrypt program — and keyfiles and hidden volumes are
 not supported.
 
@@ -923,8 +924,19 @@ so plain browsing never carries the .NET runtime. It also ends as soon as the fa
 instance that started it is gone, however that instance ends — normal exit, a killed process
 or a request still running: the program names its own process id as `--parent` when it starts
 the helper, and the helper waits for that process and quits. No `fb-archive` is left behind
-once the last window closes. Nested archives are extracted into
-`$XDG_RUNTIME_DIR/failbrauwser`, edited there and written back into their containers.
+once the last window closes.
+
+An archive inside an archive is read where it is, never written out: the helper opens each level
+as a stream inside the one holding it (`helper/FbArchive/Nested.cs`). An encrypted volume is
+decrypted block by block as it is read, a filesystem image's file is read through its own
+clusters, and only a compressed entry, which can be read front to back alone, is held in memory
+(up to a quarter of the free memory). While it reads, its temporary folder points where no folder
+can be made, so a reader that could only hand an entry out by unpacking it fails instead, and the
+archive inside is not opened (*Extract* it to open it). Only an edit of an archive inside an
+archive needs a working copy in `$XDG_RUNTIME_DIR/failbrauwser/nested`, and it is removed as soon
+as the edit is written back; inside an encrypted volume or a password-protected archive, archives
+open read-only, so no decrypted copy is ever made. Copies earlier versions left there are removed
+when failBrauwser starts.
 
 ### Changes to CompressionWorkbench
 

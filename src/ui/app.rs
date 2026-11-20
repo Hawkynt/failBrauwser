@@ -240,6 +240,9 @@ pub fn run() -> glib::ExitCode {
         actx.apply_daemon();
         // What a crashed or killed run left behind (off the UI thread: it may be on a share).
         std::thread::spawn(|| {
+            if failbrauwser::archive::vfs::Vfs::global().remove_leftover_copies() {
+                eprintln!("failbrauwser: removed the copies of nested archives an earlier version left");
+            }
             for p in failbrauwser::ops::staging::clean_stale() {
                 eprintln!("failbrauwser: removed leftover temporary folder {}", p.display());
             }

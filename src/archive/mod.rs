@@ -40,6 +40,25 @@ fn path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
+fn nested_request(req: Value, format: Option<&str>, nested: &[(String, Option<String>)], password: Option<&str>) -> Value {
+    let mut req = with_password(req, password);
+    if let Some(f) = format {
+        req["format"] = json!(f);
+    }
+    req["nested"] = Value::Array(nested.iter().map(|(entry, pw)| json!({"entry": entry, "password": pw})).collect());
+    req
+}
+
+/// A helper that does not know nested levels answers for the outer archive instead: refused, so
+/// nothing is shown or extracted from the wrong place.
+fn check_nested(v: &Value, nested: &[(String, Option<String>)]) -> Result<()> {
+    if v["nested_levels"].as_u64() == Some(nested.len() as u64) {
+        Ok(())
+    } else {
+        Err(ArchiveError::new("helper", "The archive helper is too old to read archives inside archives; install failBrauwser again."))
+    }
+}
+
 fn with_password(mut req: Value, password: Option<&str>) -> Value {
     if let Some(pw) = password {
         req["password"] = json!(pw);
@@ -86,6 +105,26 @@ impl Helper {
     pub fn list_as(&self, archive: &Path, format: &str, password: Option<&str>) -> Result<Listing> {
         let v = self.request(with_password(json!({"cmd": "list", "archive": path_str(archive), "format": format}), password))?;
         Ok(parse_listing(&v))
+    }
+
+    /// Lists the archive `nested` leads to inside `archive` (outermost first, each with the password
+    /// of the archive holding it), read where it is: no level is written out (helper `Nested`).
+    /// `format` is the kind the file on disk is read as, when one was chosen.
+    pub fn list_nested(&self, archive: &Path, format: Option<&str>, nested: &[(String, Option<String>)], password: Option<&str>) -> Result<Listing> {
+        let v = self.request(nested_request(json!({"cmd": "list", "archive": path_str(archive)}), format, nested, password))?;
+        check_nested(&v, nested)?;
+        Ok(parse_listing(&v))
+    }
+
+    /// Extracts from the archive `nested` leads to (see [`Helper::list_nested`]); only what is asked
+    /// for is written, and only below `dest`.
+    pub fn extract_nested(&self, archive: &Path, format: Option<&str>, nested: &[(String, Option<String>)], entries: Option<&[String]>, dest: &Path, password: Option<&str>) -> Result<()> {
+        let mut req = nested_request(json!({"cmd": "extract", "archive": path_str(archive), "dest": path_str(dest)}), format, nested, password);
+        if let Some(e) = entries {
+            req["entries"] = json!(e);
+        }
+        let v = self.request(req)?;
+        check_nested(&v, nested)
     }
 
     /// Is this file something the helper can open as a folder?

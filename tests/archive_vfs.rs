@@ -295,3 +295,142 @@ fn failed_extraction_leaves_nothing_behind() {
     // A single file lands as itself, not in "f (2).txt".
     assert_eq!(v.extract_all(&loc, &dest).unwrap(), dest.join("f.txt"));
 }
+
+// ── Archives inside archives are read where they are ──
+
+/// Every file below `dir`, for showing that reading left nothing behind.
+fn files_below(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                stack.push(e.path());
+            } else {
+                out.push(e.path());
+            }
+        }
+    }
+    out
+}
+
+/// The decrypted volume of a VeraCrypt container is browsed and its files extracted without the
+/// volume ever being written anywhere: only the file asked for reaches the destination.
+#[test]
+fn an_encrypted_volume_is_read_inside_its_container_and_never_written_out() {
+    let d = tempfile::tempdir().unwrap();
+    let cache = d.path().join("cache");
+    let Some(v) = vfs(&cache) else { return };
+    let container = d.path().join("secret.hc");
+    fs::copy(volume_fixture("test.sha256.hc"), &container).unwrap();
+    let root = ArchiveLoc::root(container);
+    v.set_password(&root, "test");
+    assert_eq!(names(&v, &root, ""), vec!["metadata.ini", "volume.img"]);
+
+    let volume = root.enter_nested("volume.img");
+    let a = v.archive(&volume).unwrap();
+    assert_eq!(a.format, "Fat", "the decrypted volume's filesystem is read");
+    assert!(!a.writable, "inside an encrypted container nothing is changed");
+    assert!(a.readonly_reason.as_deref().unwrap_or_default().contains("encrypted"), "{:?}", a.readonly_reason);
+    assert!(names(&v, &volume, "").contains(&"System Volume Information".to_string()));
+
+    let out = d.path().join("out");
+    let got = v.extract(&volume, &["System Volume Information/WPSettings.dat".into()], &out).unwrap();
+    assert_eq!(fs::metadata(&got[0]).unwrap().len(), 12, "the file inside the volume, decrypted");
+    assert_eq!(files_below(&out), vec![got[0].clone()], "only the file asked for is written");
+    assert_eq!(files_below(&cache), Vec::<std::path::PathBuf>::new(), "nothing of the volume is written to the cache");
+    assert_eq!(files_below(d.path()).len(), 2, "the container and the one extracted file, nothing else");
+
+    // Editing is refused with the reason, before anything is written.
+    fs::write(d.path().join("x.txt"), "x").unwrap();
+    assert!(v.add(&volume, &[(d.path().join("x.txt"), "x.txt".into())]).is_err());
+    assert_eq!(files_below(&cache), Vec::<std::path::PathBuf>::new());
+}
+
+/// Browsing and extracting from an archive inside an archive writes nothing but what was asked for.
+#[test]
+fn reading_a_nested_archive_leaves_nothing_in_the_cache() {
+    let d = tempfile::tempdir().unwrap();
+    let cache = d.path().join("cache");
+    let Some(v) = vfs(&cache) else { return };
+    let outer = nested_fixture(d.path(), &v);
+    let inner = outer.enter_nested("docs/inner.tar.gz");
+    assert_eq!(names(&v, &inner, "notes"), vec!["a.txt"]);
+    let out = d.path().join("out");
+    v.extract(&inner, &["notes/a.txt".into()], &out).unwrap();
+    v.extract_all(&inner, &d.path().join("all")).unwrap();
+    assert_eq!(fs::read_to_string(d.path().join("all/notes/a.txt")).unwrap(), "inner text");
+    assert_eq!(files_below(&cache), Vec::<std::path::PathBuf>::new());
+}
+
+/// An edit of an archive inside an archive needs a working copy; it is gone once the edit is in.
+#[test]
+fn an_edit_of_a_nested_archive_leaves_no_working_copy() {
+    let d = tempfile::tempdir().unwrap();
+    let cache = d.path().join("cache");
+    let Some(v) = vfs(&cache) else { return };
+    let outer = nested_fixture(d.path(), &v);
+    let inner = outer.enter_nested("docs/inner.tar.gz");
+    fs::write(d.path().join("new.txt"), "added deep").unwrap();
+    v.add(&inner, &[(d.path().join("new.txt"), "notes/new.txt".into())]).unwrap();
+    assert_eq!(names(&v, &inner, "notes"), vec!["a.txt", "new.txt"], "the edit is seen at once");
+    assert_eq!(files_below(&cache), Vec::<std::path::PathBuf>::new());
+}
+
+/// Inside a password-protected archive, an archive is only read: changing it would need its
+/// decrypted copy on disk.
+#[test]
+fn an_archive_inside_a_password_protected_one_opens_read_only() {
+    let d = tempfile::tempdir().unwrap();
+    let cache = d.path().join("cache");
+    let Some(v) = vfs(&cache) else { return };
+    fs::write(d.path().join("a.txt"), "inner").unwrap();
+    let inner = d.path().join("inner.zip");
+    v.helper().add(&inner, &[(d.path().join("a.txt"), "a.txt".into())], None).unwrap();
+    let outer = d.path().join("locked.zip");
+    v.helper().add(&outer, &[(inner, "inner.zip".into())], Some("pw")).unwrap();
+    let root = ArchiveLoc::root(outer);
+    v.set_password(&root, "pw");
+    let nested = root.enter_nested("inner.zip");
+    assert_eq!(names(&v, &nested, ""), vec!["a.txt"]);
+    let a = v.archive(&nested).unwrap();
+    assert!(!a.writable);
+    assert!(a.readonly_reason.as_deref().unwrap_or_default().contains("password"), "{:?}", a.readonly_reason);
+    assert!(v.mkdir(&nested, "new").is_err());
+    assert_eq!(files_below(&cache), Vec::<std::path::PathBuf>::new());
+}
+
+/// A container whose reader can only hand out an entry by unpacking it refuses to open the archive
+/// inside, saying so, rather than writing that archive to a temporary folder.
+#[test]
+fn an_archive_that_could_only_be_read_by_unpacking_it_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let cache = d.path().join("cache");
+    let Some(v) = vfs(&cache) else { return };
+    fs::write(d.path().join("a.txt"), "inner").unwrap();
+    let inner = d.path().join("inner.zip");
+    v.helper().add(&inner, &[(d.path().join("a.txt"), "a.txt".into())], None).unwrap();
+    let outer = d.path().join("outer.shar");
+    v.helper().add(&outer, &[(inner, "inner.zip".into())], None).unwrap();
+    let root = ArchiveLoc::root(outer);
+    assert_eq!(names(&v, &root, ""), vec!["inner.zip"]);
+    let err = v.archive(&root.enter_nested("inner.zip")).unwrap_err();
+    assert!(err.message.contains("without unpacking"), "{err}");
+    assert_eq!(files_below(&cache), Vec::<std::path::PathBuf>::new());
+}
+
+/// What earlier versions extracted to read nested archives is removed.
+#[test]
+fn copies_earlier_versions_left_are_removed() {
+    let d = tempfile::tempdir().unwrap();
+    let cache = d.path().join("cache");
+    let Some(v) = vfs(&cache) else { return };
+    assert!(!v.remove_leftover_copies(), "nothing to remove");
+    fs::create_dir_all(cache.join("nested/64abd58eef7bf1a2")).unwrap();
+    fs::write(cache.join("nested/64abd58eef7bf1a2/volume.img"), "decrypted").unwrap();
+    fs::create_dir_all(cache.join("open")).unwrap();
+    assert!(v.remove_leftover_copies());
+    assert!(!cache.join("nested").exists());
+    assert!(cache.join("open").exists(), "copies handed to applications are not touched");
+}
