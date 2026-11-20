@@ -769,7 +769,10 @@ Project*, plus *Amend Last Commit* and *Commit & Push* where the tool can) and c
 what is ticked — unversioned files ticked are added first; *Log Messages* shows the history with
 the kinds of change of each revision, its branch and tag labels, the message and changed files of
 the revision selected, and the revision graph where the tool records parents (Git, Mercurial;
-Subversion's, CVS's and Visual Source Safe's history is one line); its right-click menu switches,
+Subversion's, CVS's and Visual Source Safe's history is one line). A reload of that list — the
+*All branches* tick, a search word, a date range — leaves the selection on the revision it was on,
+and takes the top revision only when nothing was selected or that revision has left the list,
+because every item of the window's menu acts at the selected revision. That menu switches,
 branches, tags, reverts or compares at a revision where the tool can. CVS records no changesets,
 so its log groups the file revisions that share author and message and lie within five minutes of
 each other into one entry, as `cvsps` does. A double click on a changed file opens its diff side by
