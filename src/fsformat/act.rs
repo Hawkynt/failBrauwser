@@ -10,7 +10,9 @@
 //! was half-written must not be cut short because some window of ours closed (docs\TOOL-STARTS.md), so
 //! that one start goes through no funnel at all — only through the hidden-window rule.
 
-use super::{FormatOption, FileSystem, NamePlan, Shape, Target, Value, accepted, carried_name, format_argv, holds_our_own_image, icon, name_plan, refusal, tool_file_systems};
+#[cfg(any(windows, test))]
+use super::{Target, format_argv};
+use super::{FormatOption, FileSystem, NamePlan, Shape, Value, accepted, carried_name, holds_our_own_image, icon, name_plan, refusal, tool_file_systems};
 use crate::drives::Volume;
 use std::path::{Path, PathBuf};
 
@@ -452,6 +454,7 @@ fn fs_of_mkfs(program: &str) -> Option<FileSystem> {
 
 /// Whether the text is a bare drive letter with its colon and nothing else, as the format command names
 /// its volume.
+#[cfg(any(windows, test))]
 fn is_drive_letter(text: &str) -> bool {
     let bytes = text.as_bytes();
     bytes.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
@@ -899,7 +902,9 @@ mod tests {
     #[test]
     fn the_privileged_rename_carries_what_the_pin_of_the_name_needs() {
         let v = Volume { device: "F:\\".into(), fs_type: "exFAT".into(), drive_name: "Samsung Flash Drive".into(), drive_size: 64_157_253_632, ..Default::default() };
-        assert_eq!(admin_rename_arguments(&v, FileSystem::ExFat, "Samsung 64 GB", "Samsung 64"), ["F:\\", "Samsung 64", "exFAT", "F:\\", "Samsung 64 GB", "Samsung Flash Drive"]);
+        // A drive letter is a folder only where Windows answers it (`root_of`); elsewhere it names none.
+        let folder = if cfg!(windows) { "F:\\" } else { "" };
+        assert_eq!(admin_rename_arguments(&v, FileSystem::ExFat, "Samsung 64 GB", "Samsung 64"), ["F:\\", "Samsung 64", "exFAT", folder, "Samsung 64 GB", "Samsung Flash Drive"]);
         let nameless = Volume { device: "/dev/fake-Photos".into(), fs_type: "FAT32".into(), ..Default::default() };
         assert_eq!(admin_rename_arguments(&nameless, FileSystem::Fat32, "Samsung 64 GB", "SAMSUNG 64"), ["/dev/fake-Photos", "SAMSUNG 64", "FAT32", "", "Samsung 64 GB", ""], "a volume naming no folder says so with an empty folder");
     }

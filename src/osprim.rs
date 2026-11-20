@@ -217,6 +217,7 @@ pub fn attribute_names_of(attributes: u32) -> Vec<&'static str> {
 pub const READONLY: u32 = 1;
 pub const HIDDEN: u32 = 2;
 pub const SYSTEM: u32 = 4;
+#[cfg(windows)]
 const THESE_BITS: u32 = READONLY | HIDDEN | SYSTEM;
 
 /// The propagatable file attributes of a source: Windows answers the HIDDEN/SYSTEM/
