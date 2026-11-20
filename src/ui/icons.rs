@@ -61,12 +61,15 @@ pub fn row_image(model: &gtk::TreeModel, iter: &gtk::TreeIter, size: i32) -> Opt
 }
 
 /// The picture a volume names for itself: the image file its own marked files point at, decoded and scaled to
-/// the pixels `size` draws at (README: *Device icons*). Nothing where it names none, where the file cannot be
-/// read, or where its bytes do not decode — and then the themed icon of its kind stands, so a damaged file
-/// costs a row its picture and never its place in the listing.
+/// the pixels `size` draws at (README: *Device icons*). Nothing where it names none, where the file is no icon
+/// file or bigger than one ever is, where its bytes do not decode, or where the decoder answers more pixels than
+/// an icon file can name — and then the themed icon of its kind stands, so a damaged file costs a row its picture
+/// and never its place in the listing. The bytes come from the lib's own bounded reader, so nothing here ever
+/// hands the loader a file it would have to hold whole in memory or a header that would have to be drawn.
 pub fn volume_picture(v: &failbrauwser::drives::Volume, size: gtk::IconSize) -> Option<Pixbuf> {
-    let bytes = std::fs::read(v.picture_file.as_ref()? ).ok()?;
+    let bytes = failbrauwser::fsformat::icon::picture_bytes(v.picture_file.as_ref()?)?;
     let picture = Pixbuf::from_read(std::io::Cursor::new(bytes)).ok()?;
+    if picture.width() > failbrauwser::fsformat::ico::LARGEST as i32 || picture.height() > failbrauwser::fsformat::ico::LARGEST as i32 { return None; }
     // The surface names its icon size; the pixels behind that name are the theme's answer, which is what keeps
     // this picture the same height as the drive icons drawn beside it.
     Some(super::thumbnails::fit(&picture, size.lookup().map_or(48, |(w, _)| w)))

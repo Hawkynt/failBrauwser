@@ -8,13 +8,21 @@
 //! marked file names is deleted, which is what keeps somebody else's `autorun.inf` intact. The same reading
 //! answers what those files *say* — [`shown`] names the volume by the long name a marked file pins and gives
 //! it the picture that file names — so a volume is listed as its own files describe it (README: *Device
-//! icons*), and a file without the section of ours still says nothing at all.
+//! icons*), and a file without the section of ours still says nothing at all. What that reading is given has a
+//! bound, and it is a bound of this module rather than a hope about the file: a text file longer than the two of
+//! ours ever are is not read at all — by the listing or by the removal that reads the same names — a pinned name
+//! no row could show pins nothing, and a picture that is no icon file, or that lies about where its own images
+//! sit or how large they are, names nothing. Reading stops at those bounds, so neither the size nor the shape of
+//! a file in somebody's volume root decides how much memory or time goes into a row, and no decoder is handed a
+//! container whose header names pixels no icon holds. Each answer falls back on its own: a nonsense name costs a
+//! volume its pinned name alone, and a nonsense picture its picture alone.
 //!
 //! The attributes — the two bits a file is hidden and system by, and the root's own mark that makes the
 //! shell read `desktop.ini` at all — belong to this machine, so the tests that speak of them speak of it.
 
 use super::{NamePlan, Shape, art, ico, decimal_size, vendor_token};
 use crate::osprim;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
 /// The four files one device icon consists of.
@@ -28,6 +36,20 @@ pub const SECTION: &str = "failBrauwser";
 const MARK_KEY: &str = "deviceicon";
 const IMAGE_KEY: &str = "image";
 const ROOT_KEY: &str = "rootmarked";
+
+/// How far a text file of ours is read at all. Measured 2026-11-19 on a real volume, the two of them are 219 and
+/// 300 bytes; anything past this bound is no file this feature wrote, carries no marker this feature obeys, and
+/// is not read by the listing or by the removal that reads the same two names — so neither the reading nor the
+/// taking-away spends time or memory on the length of a file somebody else left in a volume root.
+const TEXT_LIMIT: u64 = 64 * 1024;
+
+/// How far a picture file is read at all: the two icon files of one written device icon measure 408 966 bytes
+/// each, and a named picture past this bound names nothing this listing draws.
+const PICTURE_LIMIT: u64 = 8 * 1024 * 1024;
+
+/// The longest a pinned name can be: one component of a path is never longer than this many characters, and a
+/// file naming more pins nothing rather than filling a row with what no volume is called.
+const PIN_LIMIT: usize = 255;
 
 /// What a create wrote, and whether marking the root came from here.
 pub struct Written {
@@ -221,12 +243,77 @@ pub fn marked(text: &str) -> bool {
     keys(text, SECTION).iter().any(|(key, value)| key == MARK_KEY && value == "1")
 }
 
+/// The file opened to be read as far as `limit` bytes at most: an ordinary file of that size or smaller, and
+/// nothing otherwise — a folder, a device, or a file somebody made enormous says nothing to this feature, and
+/// nothing of it is read to find that out.
+fn open_within(path: &Path, limit: u64) -> Option<(std::fs::File, u64)> {
+    let file = std::fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() > limit { return None; }
+    Some((file, meta.len()))
+}
+
+/// The text of one of the two names of ours, read no further than [`TEXT_LIMIT`] and answered only where it
+/// carries the section of ours. Nobody's file is read past that bound, and a file past it carries no marker this
+/// feature obeys — which is what keeps a planted giant of a text file out of the listing and out of *Remove
+/// device icon* alike, rather than merely out of one of the two.
+fn marked_text(root: &Path, name: &str) -> Option<String> {
+    let (mut file, len) = open_within(&root.join(name), TEXT_LIMIT)?;
+    let mut bytes = Vec::with_capacity(len as usize);
+    file.by_ref().take(TEXT_LIMIT + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > TEXT_LIMIT { return None; } // the file grew while it was being read
+    let text = decode(&bytes);
+    marked(&text).then_some(text)
+}
+
+/// Whether the picture a marked file names can be shown at all: an icon file honest about its own images, within
+/// [`PICTURE_LIMIT`] bytes and with every image of it within the size such a directory names (README: *Device
+/// icons*). Only what [`super::ico`] needs to answer that is read, so the size of the file costs the answer
+/// nothing, and bytes that are no icon — a half-written file, an archive's own, an invented one — name no
+/// picture and never reach a decoder.
+pub fn picture_can_be_shown(path: &Path) -> bool {
+    let (mut file, len) = match open_within(path, PICTURE_LIMIT) {
+        Some(opened) => opened,
+        None => return false,
+    };
+    super::ico::pictures_are_ones_a_file_can_hold(&mut file, len)
+}
+
+/// The bytes of such a picture, read through the very file the answer above was read from, so a file cannot take
+/// a different shape between the answer and the read. Nothing where that answer is no, and never more than
+/// [`PICTURE_LIMIT`] bytes however long the file has become meanwhile.
+pub fn picture_bytes(path: &Path) -> Option<Vec<u8>> {
+    let (mut file, len) = open_within(path, PICTURE_LIMIT)?;
+    if !super::ico::pictures_are_ones_a_file_can_hold(&mut file, len) { return None; }
+    file.rewind().ok()?;
+    let mut bytes = Vec::with_capacity(len as usize);
+    file.take(PICTURE_LIMIT + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= PICTURE_LIMIT).then_some(bytes)
+}
+
+/// The name a file pins, when a row can show it: not empty, no longer than [`PIN_LIMIT`] characters, and carrying
+/// neither a control character nor a directional override — the latter would let a file make a row read back
+/// from what it says, which is how a name that was never earned looks like one that was. Nothing otherwise, and
+/// the volume keeps the name the machine gives it.
+fn pin_worth_shown(value: &str) -> Option<String> {
+    let pin = value.trim().trim_matches('"').trim();
+    if pin.is_empty() || pin.chars().count() > PIN_LIMIT { return None; }
+    pin.chars().all(|c| !c.is_control() && !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')).then(|| pin.to_string())
+}
+
 /// The plain file name one key points at, read the way the shell's own readers spell it: without the index
-/// suffix behind a comma and without quotes around it. A name that is empty, walks out of the root, or hides
-/// behind a dot is no name this module obeys, whatever a damaged file says about it.
+/// suffix behind a comma and without quotes around it. A name that is empty, walks out of the root, hides behind
+/// a dot, ends at one, carries a character no path can hold, or is longer than one component of a path ever is,
+/// is no name this module obeys, whatever a damaged file says about it.
 fn named_here(value: &str) -> Option<String> {
     let name = value.split(',').next().unwrap_or_default().trim().trim_matches('"').to_string();
-    (!name.is_empty() && !name.contains(['/', '\\']) && !name.starts_with('.')).then_some(name)
+    (!name.is_empty()
+        && !name.contains(['/', '\\'])
+        && !name.starts_with('.')
+        && !name.ends_with('.')
+        && name.len() <= PIN_LIMIT
+        && !name.chars().any(char::is_control))
+        .then_some(name)
 }
 
 /// The plain file names one marked text file points at, in the order its keys name them.
@@ -332,7 +419,7 @@ fn value(text: &str, section: &str, key: &str) -> Option<String> {
 /// value, because those words describe the device and not the volume's name. Removal of a pair that names no
 /// picture goes through [`remove`], which obeys nothing but the section of ours.
 pub fn name_pins(root: &Path, model: &str, name: &NamePlan) -> Result<Pins, Failure> {
-    let ours: Vec<(String, String)> = [AUTORUN, DESKTOP].into_iter().filter_map(|file| std::fs::read(root.join(file)).ok().map(|body| (file, decode(&body)))).filter(|(_, text)| marked(text)).map(|(file, text)| (file.to_string(), text)).collect();
+    let ours: Vec<(String, String)> = [AUTORUN, DESKTOP].into_iter().filter_map(|file| marked_text(root, file).map(|text| (file.to_string(), text))).collect();
     let picture = ours.iter().flat_map(|(_, text)| named_files(text)).any(|file| file.eq_ignore_ascii_case(FOLDER_ICON) && root.join(file).is_file());
     let said = |section: &str, key: &str| ours.iter().find_map(|(_, text)| value(text, section, key));
     let marked_root = said(SECTION, ROOT_KEY).map(|said| said == "1").unwrap_or_else(|| mark_root(root));
@@ -368,9 +455,7 @@ pub fn remove(root: &Path) -> Result<Removed, Failure> {
     let mut named: Vec<String> = Vec::new();
     let mut unmark = false;
     for name in [AUTORUN, DESKTOP] {
-        let Ok(bytes) = std::fs::read(root.join(name)) else { continue };
-        let text = decode(&bytes);
-        if !marked(&text) { continue; }
+        let Some(text) = marked_text(root, name) else { continue };
         marked_files.push(name.to_string());
         unmark |= keys(&text, SECTION).iter().any(|(key, value)| key == ROOT_KEY && value == "1");
         for file in named_files(&text) {
@@ -416,12 +501,13 @@ pub struct Shown {
 
 /// The picture one marked text file names, in the order worth asking: the image our own section names, which
 /// is the one this module wrote, then the folder's own picture the shell's key names. A picture that does not
-/// stand names nothing, so a file somebody took away costs a picture and not the listing.
+/// stand, or that stands as something no icon file is, names nothing — so a file somebody took away, or wrote
+/// over with nonsense, costs a picture and not the listing, and the next picture that same file names is asked.
 fn picture_named(text: &str, root: &Path) -> Option<PathBuf> {
     for (section, key) in [(SECTION, IMAGE_KEY), (".shellclassinfo", "iconresource"), ("autorun", "icon")] {
         let Some(name) = value(text, section, key).as_deref().and_then(named_here) else { continue };
         let path = root.join(name);
-        if path.is_file() { return Some(path); }
+        if picture_can_be_shown(&path) { return Some(path); }
     }
     None
 }
@@ -430,14 +516,15 @@ fn picture_named(text: &str, root: &Path) -> Option<PathBuf> {
 /// `autorun.inf` or `desktop.ini` of somebody else keeps its bytes for *Remove device icon* to keep and lends
 /// this listing neither a name nor a picture, so a drive cannot rename itself into something it was never
 /// named by a file an archive or another program left in its root. The name pinned is asked of the file the
-/// shell renders a pinned name from, `desktop.ini`; the picture of the file named above.
+/// shell renders a pinned name from, `desktop.ini`; the picture of the file named above. Neither answer is asked
+/// of a file past the bounds this module reads, and neither costs the other: what one of the two files cannot
+/// say, the machine says instead.
 pub fn shown(root: &Path) -> Shown {
     let mut out = Shown::default();
     for name in [DESKTOP, AUTORUN] {
-        let Ok(text) = std::fs::read(root.join(name)).map(|bytes| decode(&bytes)) else { continue };
-        if !marked(&text) { continue; }
+        let Some(text) = marked_text(root, name) else { continue };
         if out.pinned.is_empty() {
-            out.pinned = value(&text, ".shellclassinfo", "localizedresourcename").map(|pin| pin.trim().trim_matches('"').to_string()).unwrap_or_default();
+            out.pinned = value(&text, ".shellclassinfo", "localizedresourcename").and_then(|pin| pin_worth_shown(&pin)).unwrap_or_default();
         }
         if out.picture.is_none() { out.picture = picture_named(&text, root); }
     }
@@ -910,6 +997,133 @@ mod tests {
     fn a_root_holding_nothing_of_ours_is_read_as_saying_nothing() {
         let here = Root::fresh();
         assert_eq!(shown(here.path()), Shown::default(), "an empty root was read as naming something");
+    }
+
+    /// A text file past the size one of ours ever is says nothing at all: the two of ours on a real volume
+    /// measure 219 and 300 bytes, so 64 KiB of text is no file this feature wrote, whoever wrote it and
+    /// whatever marker stands inside it. The other answer of the same root is untouched — the second marked
+    /// file still names the picture — because each answer falls back on its own.
+    #[test]
+    fn a_text_file_past_the_size_one_of_ours_ever_is_says_nothing_at_all() {
+        let here = Root::fresh();
+        create_stick(here.path());
+        let mut body = text(here.path(), DESKTOP);
+        body.push_str(&format!("\r\n{}", "x".repeat(TEXT_LIMIT as usize))); // one text file of ours plus the bound
+        std::fs::write(here.path().join(DESKTOP), body).expect("a text file of a hundred times ours");
+        let said = shown(here.path());
+        assert!(said.pinned.is_empty(), "a name out of a file no reader of ours would finish was shown: {:?}", said.pinned);
+        assert_eq!(said.picture, Some(here.path().join(DEVICE_IMAGE)), "the picture the other marked file names went with a name this feature cannot read");
+    }
+
+    /// A pinned name is shown only where a row could show it: no longer than the longest component a path ever
+    /// holds, carrying no control character and no directional override that would make the row read as
+    /// something its name is not. The long name of ours beside them is shown, so the bound is what refuses here
+    /// and not the reading.
+    #[test]
+    fn a_pinned_name_no_row_could_show_pins_nothing() {
+        let here = Root::fresh();
+        create_stick(here.path());
+        let pin = |value: &str| {
+            std::fs::write(here.path().join(DESKTOP), format!("[.ShellClassInfo]\r\nLocalizedResourceName={value}\r\nIconResource=folder.ico,0\r\n[failBrauwser]\r\nDeviceIcon=1\r\nImage=DevIcon.fil\r\nRootMarked=0\r\n")).expect("a desktop.ini of this test's own");
+            shown(here.path())
+        };
+        let long = "x".repeat(PIN_LIMIT + 1); // one character past the longest component of a path
+        for (what, value) in [("a name longer than a path component", long.as_str()), ("a name carrying a control character", "USB\u{7}stick"), ("a name carrying a directional override", "stick\u{202E}gnus")] {
+            let said = pin(value);
+            assert!(said.pinned.is_empty(), "{what} was shown as a volume's name: {:?}", said.pinned);
+            assert_eq!(said.picture, Some(here.path().join(DEVICE_IMAGE)), "{what} took the picture of the same volume with it");
+        }
+        assert_eq!(pin("Samsung 64 GB Family Pictures").pinned, "Samsung 64 GB Family Pictures", "a name a row can show was refused with the nonsense beside it");
+    }
+
+    /// Bytes that are no icon at all lend no picture, whatever a damaged write or a planted file left standing
+    /// under a name a marked file names.
+    #[test]
+    fn a_picture_that_is_no_icon_at_all_lends_nothing_to_the_listing() {
+        let here = Root::fresh();
+        create_stick(here.path());
+        for name in [DEVICE_IMAGE, FOLDER_ICON] {
+            std::fs::write(here.path().join(name), "no icon: whatever a half-written act or an archive left").expect("a picture of nothing");
+        }
+        assert_eq!(shown(here.path()).picture, None, "a picture that is no icon was drawn anyway");
+    }
+
+    /// An icon file is believed only as far as its own directory and its own headers agree and stay inside it,
+    /// and only for images as large as such a directory can name: an entry reaching past the end of its file,
+    /// an image header naming more pixels than an icon holds, and an image count the file cannot hold are each a
+    /// file that names no picture. The honest spelling beside them is drawn, so the refusal is the lie's doing.
+    #[test]
+    fn a_picture_whose_own_entries_lie_about_its_size_or_its_place_lends_nothing() {
+        let here = Root::fresh();
+        create_stick(here.path());
+        std::fs::remove_file(here.path().join(FOLDER_ICON)).expect("the second picture out of the way");
+        // One image, its directory entry naming a 256 pixel side (spelled as zero) and a header naming another;
+        // the header stands at 22, which is where one entry leaves room for itself.
+        let one_image_icon = |header_side: i32, length: u32, place: u32| -> Vec<u8> {
+            let mut out: Vec<u8> = vec![0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 32, 0];
+            out.extend_from_slice(&length.to_le_bytes());
+            out.extend_from_slice(&place.to_le_bytes());
+            out.extend_from_slice(&40u32.to_le_bytes());
+            out.extend_from_slice(&header_side.to_le_bytes());
+            out.extend_from_slice(&(header_side * 2).to_le_bytes());
+            out.extend_from_slice(&[1, 0, 32, 0, 0, 0, 0, 0]);
+            out.resize(22 + 40, 0);
+            out
+        };
+        let lying = [
+            ("an image header naming pixels no icon directory can name", one_image_icon(4096, 40, 22)),
+            ("an entry placing its image past the end of its own file", one_image_icon(256, 40, 100_000)),
+            ("an entry counting more image than its file holds", one_image_icon(256, 100_000, 22)),
+            ("an image count the file has no room for", {
+                let mut bytes = one_image_icon(256, 40, 22);
+                bytes[4] = 9;
+                bytes
+            }),
+        ];
+        for (what, bytes) in &lying {
+            std::fs::write(here.path().join(DEVICE_IMAGE), bytes).expect("a picture that lies about itself");
+            assert_eq!(shown(here.path()).picture, None, "{what} was drawn as a volume's picture");
+        }
+        std::fs::write(here.path().join(DEVICE_IMAGE), one_image_icon(256, 40, 22)).expect("an honest picture");
+        assert_eq!(shown(here.path()).picture, Some(here.path().join(DEVICE_IMAGE)), "a file whose entries tell the truth was refused with the liars beside it");
+    }
+
+    /// A named picture longer than the largest one of ours ever is names no picture, and it is refused from its
+    /// own length: what stands past the bound is never read, and neither is the file handed to a reader at all.
+    #[test]
+    fn a_picture_larger_than_the_largest_one_of_ours_ever_is_names_no_picture() {
+        let here = Root::fresh();
+        create_stick(here.path());
+        std::fs::remove_file(here.path().join(FOLDER_ICON)).expect("the second picture out of the way");
+        let mut bytes = vec![0u8; PICTURE_LIMIT as usize + 1]; // the two icon files of ours measure a twentieth of this
+        bytes[..6].copy_from_slice(&[0, 0, 1, 0, 1, 0]); // an honest-looking header, which is not what refuses it
+        std::fs::write(here.path().join(DEVICE_IMAGE), &bytes).expect("a picture of eight megabytes and one more byte");
+        assert_eq!(shown(here.path()).picture, None, "a picture past the size bound was drawn as a volume's picture");
+        assert!(picture_bytes(&here.path().join(DEVICE_IMAGE)).is_none(), "the bytes of an oversized picture were read anyway");
+    }
+
+    /// A name for a picture file is obeyed only as a plain name: no control character in it, and no trailing
+    /// dot a Windows path reads as nothing.
+    #[test]
+    fn a_picture_name_carrying_anything_a_path_cannot_carry_names_no_picture() {
+        assert_eq!(named_here("DevIcon.fil").as_deref(), Some("DevIcon.fil"), "an ordinary name was refused");
+        assert_eq!(named_here("Dev\u{1}Icon.fil"), None, "a name carrying a control character was obeyed");
+        assert_eq!(named_here("folder.ico."), None, "a name ending in a dot was obeyed");
+    }
+
+    /// The bound holds the removal too: a text file this feature cannot read within its own bound is left to
+    /// whoever put it there, exactly as an unmarked one is, while the marked files it can read go as always.
+    #[test]
+    fn a_marker_past_the_bound_removal_can_read_is_left_to_whoever_wrote_it() {
+        let here = Root::fresh();
+        create_stick(here.path());
+        let mut body = text(here.path(), AUTORUN);
+        body.push_str(&format!("\r\n{}", "x".repeat(65_536)));
+        std::fs::write(here.path().join(AUTORUN), body).expect("a text file of a hundred times ours");
+        let gone = remove(here.path()).expect("the removal's answer");
+        assert!(here.path().join(AUTORUN).is_file(), "a text file past the bound was deleted as one of ours");
+        assert!(gone.kept.iter().any(|name| name == AUTORUN), "the kept files do not name what was left: {:?}", gone.kept);
+        assert!(!here.path().join(DESKTOP).is_file(), "the marked file removal can read was left standing too");
     }
 
     /// The picture this writer puts on a volume reaches pixels through the ICO loader this payload ships,

@@ -5,6 +5,7 @@
 # The stick of this run's own: its folder already holds those four files, written by this program's own writer
 # before the scenario starts, pinned against a file system whose own label holds eleven characters.
 fake-stick Samsung = $T/stick
+fake-stick Broken = $T/broken
 fake-stick Plain = $T/plain
 action win.drives
 # Where the volume names no folder — an unmounted stick has none — the machine's own answer stands: the label
@@ -20,6 +21,15 @@ wait-drive Samsung 64 GB Family Pictures
 expect-drive-picture Samsung 64 GB Family Pictures : DevIcon.fil
 # The side panel's own name for it is the same answer, because it is the volume's name and not a widget's.
 wait-side-drive Samsung 64 GB Family Pictures : $T/stick
+# The stick whose two picture files hold nonsense instead of an icon: it is still named by what its own files
+# pin, and it draws no picture at all. The nonsense costs the picture and nothing else, and it is answered from
+# what those files say about themselves — no reader is handed bytes that are no icon.
+side-drive-click Broken : Not mounted — click to mount
+wait-location $T/broken
+action win.drives
+wait-drive Broken Stick With A Rotten Picture
+expect-drive-picture Broken Stick With A Rotten Picture : none
+wait-side-drive Broken Stick With A Rotten Picture : $T/broken
 # A stick of the same run whose folder holds nothing of ours keeps the name the machine gave it and the themed
 # picture of its kind: nothing is read into it.
 wait-drive Plain
@@ -32,3 +42,10 @@ dialog-button taken away from : Close
 wait-drive Samsung
 expect-drive-picture Samsung : none
 wait-side-drive Samsung : $T/stick
+# Taking an icon away works the same way where the pictures are nonsense: the names of ours go, the folder is
+# left holding nothing of ours, and the volume reads as the label the machine carries.
+drives-menu Broken Stick With A Rotten Picture : Remove device icon
+wait-dialog taken away from
+dialog-button taken away from : Close
+wait-drive Broken
+expect-drive-picture Broken : none

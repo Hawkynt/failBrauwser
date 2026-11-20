@@ -672,7 +672,9 @@ fn renaming_and_formatting_a_volume() {
 fn a_device_shows_what_its_own_files_name() {
     // The four files of one device icon are staged by this program's own writer, into the folder the stand-in
     // stick mounts on, before the scenario starts: what the listing reads is the bytes a create actually
-    // leaves, pinned against a file system whose own label holds eleven characters.
+    // leaves, pinned against a file system whose own label holds eleven characters. A second stick holds the
+    // same pair with nonsense written over its two picture files, which is what the scenario shows the listing
+    // refuse to draw.
     run_checked(
         "device_shown.fbt",
         &[],
@@ -682,16 +684,28 @@ fn a_device_shows_what_its_own_files_name() {
             std::fs::create_dir_all(t.join("plain")).unwrap();
             let plan = failbrauwser::fsformat::name_plan(failbrauwser::fsformat::FileSystem::ExFat, "Samsung 64 GB Family Pictures").expect("a name exFAT is given");
             failbrauwser::fsformat::icon::create(&stick, failbrauwser::fsformat::Shape::UsbStick, "Samsung Flash Drive", 64_160_400_896, &plan).expect("the four files of one device icon");
+            // A second stand-in stick, its pair of ours standing and pinning a name, with nonsense written over
+            // the two picture files: the listing refuses the picture alone.
+            let broken = t.join("broken");
+            std::fs::create_dir_all(&broken).unwrap();
+            let rotten = failbrauwser::fsformat::name_plan(failbrauwser::fsformat::FileSystem::ExFat, "Broken Stick With A Rotten Picture").expect("a name exFAT is given");
+            failbrauwser::fsformat::icon::create(&broken, failbrauwser::fsformat::Shape::UsbStick, "Samsung Flash Drive", 64_160_400_896, &rotten).expect("the four files of the second device icon");
+            for name in ["folder.ico", "DevIcon.fil"] {
+                std::fs::write(broken.join(name), "no icon: what a half-written act or an archive leaves behind").expect("nonsense where a picture of ours stood");
+            }
         },
         |t| {
-            // The scenario's own removal took them away again: no file of the four, no staged name of ours, and
-            // the mark of ours off the folder itself (README: *Device icons*).
-            let stick = t.join("stick");
-            for name in ["autorun.inf", "desktop.ini", "folder.ico", "DevIcon.fil", "autorun.inf.fbtmp", "desktop.ini.fbtmp", "folder.ico.fbtmp", "DevIcon.fil.fbtmp"] {
-                assert!(!stick.join(name).exists(), "{name} is left in the folder whose device icon was taken away");
+            // The scenario's own removal took both sticks away again: no file of the four, no staged name of ours,
+            // and the mark of ours off the folders themselves (README: *Device icons*) — the folder whose pictures
+            // were nonsense included, since removal obeys the names a marked file carries and not their bytes.
+            for folder in ["stick", "broken"] {
+                let root = t.join(folder);
+                for name in ["autorun.inf", "desktop.ini", "folder.ico", "DevIcon.fil", "autorun.inf.fbtmp", "desktop.ini.fbtmp", "folder.ico.fbtmp", "DevIcon.fil.fbtmp"] {
+                    assert!(!root.join(name).exists(), "{name} is left in the folder whose device icon was taken away");
+                }
+                #[cfg(windows)]
+                assert_eq!(failbrauwser::osprim::attrs_of(&root) & failbrauwser::osprim::SYSTEM, 0, "the mark of ours stands on a folder its icon was taken off");
             }
-            #[cfg(windows)]
-            assert_eq!(failbrauwser::osprim::attrs_of(&stick) & failbrauwser::osprim::SYSTEM, 0, "the mark of ours stands on a folder its icon was taken off");
         },
     );
 }

@@ -135,6 +135,47 @@ fn payload(size: u32, depth: Depth, pixels: &[Pixel]) -> (Vec<u8>, usize) {
     (out, table.len())
 }
 
+/// Whether an icon file already open in `source` says something a reader can be given at all (README: *Device
+/// icons*): an icon file rather than a cursor one, at least one image, a directory the file has room for, every
+/// image placed behind that directory and inside the file, every image's own header standing where its entry
+/// says it does, and every image within [`LARGEST`] pixels — the picture's own header being the authority, so a
+/// directory naming a small image in front of a header naming an enormous one is refused rather than believed.
+/// Nothing beyond those headers is read, so the size of a picture file costs this answer nothing, and a file that
+/// lies about its own pixels never reaches a decoder that would allocate them.
+pub fn pictures_are_ones_a_file_can_hold<S: std::io::Read + std::io::Seek>(source: &mut S, len: u64) -> bool {
+    let mut head = [0u8; 6];
+    if source.read_exact(&mut head).is_err() || head[..4] != [0, 0, 1, 0] { return false; }
+    let count = usize::from(u16::from_le_bytes([head[4], head[5]]));
+    let room = 6 + 16 * count;
+    if count == 0 || room as u64 > len { return false; }
+    let mut directory = vec![0u8; 16 * count];
+    if source.read_exact(&mut directory).is_err() { return false; }
+    for i in 0..count {
+        let e = i * 16;
+        let (length, place) = (u32::from_le_bytes(directory[e + 8..][..4].try_into().unwrap()), u64::from(u32::from_le_bytes(directory[e + 12..][..4].try_into().unwrap())));
+        if place < room as u64 || place + u64::from(length) > len { return false; }
+        // The header of the image itself, which is what a decoder reads its pixels from: a device-independent
+        // bitmap names its width and height as words (the height counting the transparency mask twice), and a
+        // PNG — the other spelling an entry may hold — names them in its own header, past its signature.
+        let mut header = [0u8; 32];
+        if source.seek(std::io::SeekFrom::Start(place)).is_err() || source.read_exact(&mut header).is_err() { return false; }
+        let png = header[..8] == [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        let (wide, high) = if png {
+            (i64::from(u32::from_be_bytes(header[16..][..4].try_into().unwrap())), i64::from(u32::from_be_bytes(header[20..][..4].try_into().unwrap())))
+        } else {
+            if u32::from_le_bytes(header[..4].try_into().unwrap()) < 40 { return false; }
+            (i64::from(i32::from_le_bytes(header[4..][..4].try_into().unwrap())), i64::from(i32::from_le_bytes(header[8..][..4].try_into().unwrap())))
+        };
+        if wide <= 0 || high <= 0 { return false; }
+        // A bitmap's one-bit transparency mask is what makes its header name twice the picture's own rows; a PNG
+        // header names the picture alone, so halving its height would hide a picture twice the size of an icon.
+        // The arithmetic is wider than the words in the header, because a header naming the largest number it
+        // can name is exactly the file this answer exists to refuse.
+        if wide.max(if png { high } else { (high + 1) / 2 }) > i64::from(LARGEST) { return false; }
+    }
+    true
+}
+
 /// One image of the container: its size, its depth, the colours its header names, and its bytes.
 struct Written {
     size: u32,

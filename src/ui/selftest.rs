@@ -1485,14 +1485,19 @@ fn run_step(r: &mut Runner, step: &str) -> Result<(), String> {
         "expect-drive-picture" => {
             // expect-drive-picture <title> : <file name>|none — the picture this volume names for itself: the
             // image its own marked files point at, and whether those bytes reach pixels at all (README:
-            // *Device icons*). `none` is the answer for a volume that names none, which draws the themed icon.
+            // *Device icons*). `none` is the answer for a volume that names no picture at all — nothing read and
+            // nothing drawn — which is what a volume with nothing of ours, a folder that is not mounted, and a
+            // file no icon this program reads are all shown as.
             let (title, want) = arg.split_once(" : ").ok_or("usage: expect-drive-picture <title> : <file name>|none")?;
             let title = title.trim();
             let v = super::drives::shown_volumes(&w.current_pane()).into_iter().find(|v| v.title() == title).ok_or(format!("no drive {title:?}"))?;
             match want.trim() {
-                "none" => if super::icons::volume_picture(&v, gtk::IconSize::Dialog).is_some() {
-                    return Err(format!("{title} draws a picture of its own where its files name none"));
-                },
+                "none" => {
+                    if let Some(named) = v.picture_file.as_ref() { return Err(format!("{title} names {named:?} as its picture where its files should name none")); }
+                    if super::icons::volume_picture(&v, gtk::IconSize::Dialog).is_some() {
+                        return Err(format!("{title} draws a picture of its own where its files name none"));
+                    }
+                }
                 file => {
                     let named = v.picture_file.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     if named != file {
