@@ -58,7 +58,9 @@ its exit code passes through. Nothing is registered in the system, and no DLLs o
 sit next to the file itself. The copy is a plain `Copy-Item -Force` over the existing tree and
 `install.ps1` stops nothing: an instance that is running holds its own image, so it has to be
 closed before the install reaches that prefix — otherwise the one file the tree is named after is
-exactly the one that cannot be written.
+exactly the one that cannot be written. That script runs in a terminal and leaves the closing to
+the person running it; the launcher started from the desktop asks the running copies first, and the
+in-app update asks them too (README: *Updating with more than one copy open*).
 
 That unpack is all-or-nothing. The payload is staged in a folder inside the install folder and
 its files are moved into place only once every entry has been read, inflated and CRC-verified,
@@ -69,7 +71,9 @@ A launcher that cannot install says so where the person who started it will see 
 box naming the install folder and the reason when it was started with no console, and that same
 text in the terminal when a terminal started it; either way it exits 1 rather than pretending to
 have started. One boundary stays: a refresh needs every instance running from that folder closed
-first. Renaming a running program file aside is possible — that is how *Help → Check for Updates*
+first, and the launcher asks for that close the way an update does — bounded, an ask and never a
+kill, its refusal naming the process that still holds a file. Renaming a running program file aside
+is possible — that is how *Help → Check for Updates*
 swaps one from inside the app — and a launcher build that did it was measured here replacing all
 2,882 files of a folder under a running instance, starting a second instance and leaving its staging
 folder behind. The launcher therefore refuses instead: every file the payload would replace is tried
@@ -483,7 +487,9 @@ one) — 7 passed, 0 failed measured 2026-11-12; it is a separate crate, so they
 fresh folder in 6 s and refreshed a folder stamped with an older id in 10 s, in both cases with no
 staging folder left and the unpacked program reading subsystem 2, and against a folder an instance
 was running from it answered a window naming the folder and the system's reason within 3 s, the
-folder's 2,882 files reading identical afterwards. Run against a build with the writability check
+folder's 2,882 files reading identical afterwards. That measured answer is the one from before the
+ask: it refused without asking first, and the refusal named the system's reason rather than the
+process holding the file. Run against a build with the writability check
 left out, the same start replaced every one of those files under the running instance, started a
 second instance and left `.payload-staging` in the folder — the control that shows what the check
 prevents.

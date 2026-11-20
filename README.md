@@ -114,8 +114,9 @@ winpack\install.ps1 -Prefix D:\Apps\failBrauwser
 `package.ps1` also builds `failbrauwser-<version>-x86_64-windows.exe`: the whole application
 as one file — run it once and it unpacks itself into your Programs folder and starts; that
 single file is all that folder needs (see [docs/WINDOWS.md](docs/WINDOWS.md)). An unpack that
-cannot be applied — a running instance holding that folder's program file, say — leaves your
-installed copy untouched and says why in a window rather than doing nothing quietly.
+cannot be applied — a copy that stays open after being asked to close, still holding that folder's
+program file — leaves your installed copy untouched and says why in a window, naming the process that
+holds it, rather than doing nothing quietly.
 
 Starting failBrauwser on Windows never opens a console window: the program file is linked as
 a windowed program, so a double-click, the Start Menu entry and the single-file launcher each
@@ -1169,7 +1170,10 @@ the phone can be unplugged; tabs showing its files move to the Drives page first
 *Edit → Keep Running in Background* and *Edit → Smooth Writes to Slow Drives* switch off the
 daemon and the write pacing.
 
-`failbrauwser --quit` ends the background instance; `failbrauwser --help` lists the options.
+`failbrauwser --quit` asks every running copy to close — the background one included — each writing
+down the windows it had open first, the ask *Updating with more than one copy open* describes. It
+waits the same bounded time for them and says in the terminal how many closed, which is what
+`install.sh` leans on before it replaces the files; `failbrauwser --help` lists the options.
 
 ## How it is fast
 
