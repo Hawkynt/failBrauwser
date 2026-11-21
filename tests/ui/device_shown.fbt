@@ -14,6 +14,7 @@ wait-drive Samsung
 expect-drive-picture Samsung : none
 # Mounting is what gives the volume a folder to read. From there the name pinned in the two text files is the
 # name the volume is listed by, ahead of its label, and the picture the marked file names is what the row draws.
+wait-side-drive Samsung : Not mounted — click to mount
 side-drive-click Samsung : Not mounted — click to mount
 wait-location $T/stick
 action win.drives
@@ -24,6 +25,7 @@ wait-side-drive Samsung 64 GB Family Pictures : $T/stick
 # The stick whose two picture files hold nonsense instead of an icon: it is still named by what its own files
 # pin, and it draws no picture at all. The nonsense costs the picture and nothing else, and it is answered from
 # what those files say about themselves — no reader is handed bytes that are no icon.
+wait-side-drive Broken : Not mounted — click to mount
 side-drive-click Broken : Not mounted — click to mount
 wait-location $T/broken
 action win.drives
