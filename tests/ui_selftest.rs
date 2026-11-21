@@ -808,11 +808,13 @@ fn links_on_the_desktop() {
             let read = |name: &str| std::fs::read_to_string(t.join("Desktop").join(name)).unwrap();
             let music = read("Music.desktop");
             assert!(music.starts_with("[Desktop Entry]\n"), "{music}");
-            for line in ["Type=Link", "Name=Music", &format!("URL=file://{}/files/Music", t.display())] {
+            // A URL escapes what a path may hold (a space in the checkout's path, say), as the program's own writer does.
+            let music_url = format!("URL={}", failbrauwser::desktoplink::file_url(&t.join("files/Music")).expect("a path is a file URL"));
+            for line in ["Type=Link", "Name=Music", music_url.as_str()] {
                 assert!(music.lines().any(|l| l == line), "{line} missing in {music}");
             }
             assert!(read("notes.txt.desktop").contains("\nName=notes.txt\n"));
-            assert!(read("Projects.desktop").contains(&format!("\nURL=file://{}/projects\n", t.display())));
+            assert!(read("Projects.desktop").contains(&format!("\nURL={}\n", failbrauwser::desktoplink::file_url(&t.join("projects")).expect("a path is a file URL"))));
             assert!(read("Pixel 7 – SD card.desktop").contains("/phone/SD%20card\n"));
             let drives = read("Drives.desktop");
             assert!(drives.contains("\nType=Application\n") && drives.lines().any(|l| l.starts_with("Exec=") && l.ends_with(" drives:///")), "{drives}");
@@ -885,7 +887,7 @@ with zipfile.ZipFile("{w}/test.zip", "w") as z:
 for f; do
   case \"$f\" in */failbrauwser/open/fb-*/*) where=staged ;; *) where=elsewhere ;; esac
   [ -f \"$f\" ] || where=missing
-  printf '%s:%s:%s\\n' \"$(basename \"$f\")\" \"$(cat \"$f\")\" \"$where\" >> {got}
+  printf '%s:%s:%s\\n' \"$(basename \"$f\")\" \"$(cat \"$f\")\" \"$where\" >> '{got}'
   printf ' edited' >> \"$f\"
 done
 ",
@@ -897,7 +899,9 @@ done
         std::fs::create_dir_all(t.join("data/applications")).unwrap();
         std::fs::write(
             t.join("data/applications/fbtest-recorder.desktop"),
-            format!("[Desktop Entry]\nType=Application\nName=Recorder\nExec={} %F\nMimeType=text/plain;\n", recorder.display()),
+            // Quoted as the Desktop Entry specification asks of an argument holding a space, which a checkout
+            // path may: unquoted, GIO looks for the program at the first word and leaves the application out.
+            format!("[Desktop Entry]\nType=Application\nName=Recorder\nExec=\"{}\" %F\nMimeType=text/plain;\n", recorder.display()),
         )
         .unwrap();
         // GIO looks a folder's types up in its index (what update-desktop-database writes).
