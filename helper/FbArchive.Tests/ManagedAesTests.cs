@@ -5,7 +5,7 @@ namespace FbArchive.Tests;
 
 /// <summary>
 /// The vendored <see cref="AesBlockCipher"/> and <see cref="ManagedAes"/> (upstream CompressionWorkbench
-/// #946) against the known-answer vectors of FIPS-197 and SP 800-38A, and <see cref="ManagedAes"/> against
+/// #956) against the known-answer vectors of FIPS-197 and SP 800-38A, and <see cref="ManagedAes"/> against
 /// .NET's own AES (the operating system's) as the oracle for every mode, padding and length the library meets
 /// — through the one-shot methods, <see cref="CryptoStream"/> and the raw transform, failures included. The
 /// table engine against the AES-NI one is upstream's test: it needs the engine switch, which is internal.

@@ -44,17 +44,20 @@ Still local (candidates for upstream pull requests):
   hashes spans instead of allocating per round; a wrong passphrase is refused in seconds instead
   of minutes. Upstream's order (standard header, then hidden) is kept: standard candidates come
   first and the earliest header wins. Pinned by `helper/FbArchive.Tests/VeraCryptKdfTests.cs`.
-- (feat) AES and Triple DES of the library's own, from upstream pull request #946
-  (`feat/managed-aes`): `Compression.Core/Crypto/AesBlockCipher.cs` (AES-NI where the processor
+- (build) `Compression.Registry.Generator.csproj` pins Roslyn to 5.0.* and the analyzers to
+  3.11.0: the 5.3 analyzers do not load on the .NET 10.0.10x SDK compiler (CS9057), which the
+  Windows build uses
+
+Taken from upstream ahead of the next re-vendoring (this copy carries them on top of `ab61c59f`):
+
+- (feat) AES and Triple DES of the library's own, upstream pull request #946, in upstream's main since
+  batch #956 (`fdd37080`): `Compression.Core/Crypto/AesBlockCipher.cs` (AES-NI where the processor
   has it, tables otherwise), `ManagedAes.cs`, a drop-in `Aes`, and `TripleDes.cs`, all converted
   from Bouncy Castle C# (MIT — `THIRD-PARTY-NOTICE.BouncyCastle.txt`). Every `Aes.Create()` of this
   copy takes `ManagedAes`, and `TcBlockCipher` runs AES and Triple DES on them directly. Before,
   both came from the operating system, and Wine's refuses ECB, so no TrueCrypt/VeraCrypt volume
   opened in the Windows build there. Pinned by `helper/FbArchive.Tests/ManagedAesTests.cs` and
   `TripleDesTests.cs`.
-- (build) `Compression.Registry.Generator.csproj` pins Roslyn to 5.0.* and the analyzers to
-  3.11.0: the 5.3 analyzers do not load on the .NET 10.0.10x SDK compiler (CS9057), which the
-  Windows build uses
 
 Earlier changes, all taken over upstream by 2026-11-13 (in its own words and code):
 
